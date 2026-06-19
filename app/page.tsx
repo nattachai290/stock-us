@@ -1090,6 +1090,11 @@ export default function App() {
           const buyCount = filteredTx.filter(t=>t.kind==="buy").length;
           const splitCount = filteredTx.filter(t=>t.kind==="split").length;
 
+          const filteredHoldings = txFilterSymbol==="ALL" ? effectiveHoldings : effectiveHoldings.filter((h:any)=>h.symbol===txFilterSymbol);
+          const totalRealized = sellTx.reduce((s,t)=>s+(t.gain||0),0);
+          const totalUnrealized = filteredHoldings.reduce((s:number,h:any)=>s+(h.shares>0?(h.currentPrice-h.avgCost)*h.shares:0),0);
+          const totalPnL = totalRealized + totalUnrealized;
+
           const kindIcon = (k:string) => k==="buy"?"🛒":k==="sell"?"💰":"🔀";
           const kindColor = (k:string) => k==="buy"?"#86efac":k==="sell"?"#fbbf24":"#67e8f9";
           const kindLabel = (k:string) => k==="buy"?"ซื้อ":k==="sell"?"ขาย":"แตกพาร์";
@@ -1110,12 +1115,20 @@ export default function App() {
               {/* Summary */}
               <div style={{background:"#1a1d2e",borderRadius:10,padding:16,marginBottom:16,border:"1px solid #2d3748",display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                 <div style={{textAlign:"center"}}>
-                  <div style={{fontSize:11,color:"#718096",marginBottom:4}}>Total Realized P&L{txFilterSymbol!=="ALL"?` (${txFilterSymbol})`:""}</div>
-                  <div style={{fontSize:18,fontWeight:700,color:pc(sellTx.reduce((s,t)=>s+(t.gain||0),0))}}>{sellTx.reduce((s,t)=>s+(t.gain||0),0)>=0?"+":""}${sellTx.reduce((s,t)=>s+(t.gain||0),0).toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                  <div style={{fontSize:11,color:"#718096",marginBottom:4}}>Realized P&L{txFilterSymbol!=="ALL"?` (${txFilterSymbol})`:""}</div>
+                  <div style={{fontSize:16,fontWeight:700,color:pc(totalRealized)}}>{totalRealized>=0?"+":""}${totalRealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:11,color:"#718096",marginBottom:4}}>Unrealized P&L{txFilterSymbol!=="ALL"?` (${txFilterSymbol})`:""}</div>
+                  <div style={{fontSize:16,fontWeight:700,color:pc(totalUnrealized)}}>{totalUnrealized>=0?"+":""}${totalUnrealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:11,color:"#718096",marginBottom:4}}>Total P&L</div>
+                  <div style={{fontSize:16,fontWeight:700,color:pc(totalPnL)}}>{totalPnL>=0?"+":""}${totalPnL.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
                 </div>
                 <div style={{textAlign:"center"}}>
                   <div style={{fontSize:11,color:"#718096",marginBottom:4}}>Win Rate (ขาย)</div>
-                  <div style={{fontSize:18,fontWeight:700,color:"#e2e8f0"}}>{winRate.toFixed(0)}% <span style={{fontSize:11,color:"#718096"}}>({winCount}W/{lossCount}L)</span></div>
+                  <div style={{fontSize:16,fontWeight:700,color:"#e2e8f0"}}>{winRate.toFixed(0)}% <span style={{fontSize:11,color:"#718096"}}>({winCount}W/{lossCount}L)</span></div>
                 </div>
                 <div style={{textAlign:"center",gridColumn:"1/-1",display:"flex",justifyContent:"center",gap:20,paddingTop:6,borderTop:"1px solid #2d3748"}}>
                   <span style={{fontSize:12,color:"#86efac"}}>🛒 ซื้อ {buyCount} ครั้ง</span>
