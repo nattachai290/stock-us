@@ -80,7 +80,14 @@ function DateTimePicker24h({ value, onChange }: { value: string; onChange: (iso:
   const [open, setOpen] = useState(false);
   const [viewYear, setViewYear] = useState(y ? parseInt(y) : new Date().getFullYear());
   const [viewMonth, setViewMonth] = useState(m ? parseInt(m)-1 : new Date().getMonth()); // 0-indexed
+  const [textVal, setTextVal] = useState(d && m && y ? `${d}/${m}/${y} ${hh.padStart(2,"0")}:${mm.padStart(2,"0")}` : "");
   const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (d && m && y) setTextVal(`${d}/${m}/${y} ${hh.padStart(2,"0")}:${mm.padStart(2,"0")}`);
+    else setTextVal("");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
 
   useEffect(() => {
     const close = (e: MouseEvent) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false); };
@@ -90,6 +97,18 @@ function DateTimePicker24h({ value, onChange }: { value: string; onChange: (iso:
 
   const monthNames = ["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน","กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"];
   const dayNames = ["อา","จ","อ","พ","พฤ","ศ","ส"];
+
+  const handleTextChange = (v: string) => {
+    setTextVal(v);
+    const match = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})$/);
+    if (match) {
+      const [, dd, mo, yr, hr, mi] = match;
+      const iso = `${yr}-${mo.padStart(2,"0")}-${dd.padStart(2,"0")}T${hr.padStart(2,"0")}:${mi}`;
+      onChange(iso);
+      setViewYear(parseInt(yr));
+      setViewMonth(parseInt(mo)-1);
+    }
+  };
 
   const selectDate = (day: number) => {
     const dd = String(day).padStart(2,"0");
@@ -110,18 +129,27 @@ function DateTimePicker24h({ value, onChange }: { value: string; onChange: (iso:
   const today = new Date();
   const isToday = (day:number) => viewYear===today.getFullYear() && viewMonth===today.getMonth() && day===today.getDate();
 
-  const displayLabel = d && m && y ? `${d}/${m}/${y}  ${hh}:${mm}` : "เลือกวันเวลา";
-
   return (
     <div ref={wrapRef} style={{ position: "relative" }}>
-      <button onClick={()=>setOpen(!open)} type="button" style={{
-        width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
-        background: "#0f1117", border: "1px solid #4a5568", borderRadius: 6, padding: "10px 12px",
-        color: d ? "#e2e8f0" : "#718096", fontSize: 14, cursor: "pointer", boxSizing: "border-box"
-      }}>
-        <span>📅 {displayLabel}</span>
-        <span style={{color:"#67e8f9",fontSize:12}}>{open?"▲":"▼"}</span>
-      </button>
+      <div style={{ display:"flex", gap:6 }}>
+        <input
+          type="text"
+          value={textVal}
+          onChange={e=>handleTextChange(e.target.value)}
+          placeholder="DD/MM/YYYY HH:mm"
+          style={{
+            flex:1, background:"#0f1117", border:"1px solid #4a5568", borderRadius:6,
+            padding:"10px 12px", color:"#e2e8f0", fontSize:14, boxSizing:"border-box",
+            outline:"none", minWidth:0
+          }}
+        />
+        <button onClick={()=>setOpen(!open)} type="button" style={{
+          background:"#1a1d2e", border:"1px solid #4a5568", borderRadius:6,
+          padding:"10px 12px", color:"#67e8f9", fontSize:14, cursor:"pointer", flexShrink:0
+        }}>
+          📅{open?"▲":"▼"}
+        </button>
+      </div>
 
       {open && (
         <div style={{
@@ -308,6 +336,13 @@ export default function App() {
       listPortfolios(savedToken).then(setPortfolios).catch(() => {});
     }
   }, []);
+
+  // Lock body scroll when any modal is open
+  useEffect(() => {
+    const anyOpen = !!(editTxData || actionMenuId !== null || sellModalId !== null);
+    document.body.style.overflow = anyOpen ? "hidden" : "";
+    return () => { document.body.style.overflow = ""; };
+  }, [editTxData, actionMenuId, sellModalId]);
 
   // Refresh portfolio list when tab/window regains focus (catches new ports created elsewhere)
   useEffect(() => {
@@ -1161,7 +1196,7 @@ export default function App() {
       {/* EDIT TRANSACTION MODAL */}
       {editTxData && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16,overflowY:"auto"}} onClick={()=>setEditTxData(null)}>
-          <div style={{background:"#1a1d2e",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid #2d3748",maxHeight:"90vh",overflowY:"auto",boxSizing:"border-box"}} onClick={e=>e.stopPropagation()}>
+          <div style={{background:"#1a1d2e",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid #2d3748",boxSizing:"border-box"}} onClick={e=>e.stopPropagation()}>
             <div style={{fontSize:16,fontWeight:700,color:"#e2e8f0",marginBottom:4}}>
               ✏️ แก้ไข{editTxData.kind==="buy"?"การซื้อ":editTxData.kind==="sell"?"การขาย":"การแตกพาร์"} {editTxData.symbol}
             </div>
@@ -1316,7 +1351,7 @@ export default function App() {
         const netGainPct = h.avgCost>0 && qty>0 ? (netGain/(h.avgCost*qty)*100) : 0;
         return (
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16,overflowY:"auto"}} onClick={()=>setSellModalId(null)}>
-            <div style={{background:"#1a1d2e",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid #2d3748",maxHeight:"90vh",overflowY:"auto",overflowX:"hidden",boxSizing:"border-box"}} onClick={e=>e.stopPropagation()}>
+            <div style={{background:"#1a1d2e",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid #2d3748",boxSizing:"border-box"}} onClick={e=>e.stopPropagation()}>
               <div style={{fontSize:16,fontWeight:700,color:"#fbbf24",marginBottom:4}}>💰 ขาย {h.symbol}</div>
               <div style={{fontSize:12,color:"#718096",marginBottom:16}}>มีอยู่ {h.shares.toFixed(7)} หุ้น | ทุน ${h.avgCost.toFixed(4)}/หุ้น</div>
 
