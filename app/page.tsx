@@ -1137,6 +1137,39 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Per-stock P&L breakdown */}
+              {filteredHoldings.length>0 && (
+                <div style={{background:"#1a1d2e",borderRadius:10,padding:14,marginBottom:16,border:"1px solid #2d3748"}}>
+                  <div style={{fontSize:11,fontWeight:600,color:"#a0aec0",marginBottom:10,letterSpacing:"0.05em",textTransform:"uppercase"}}>P&L รายหุ้น</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                    {filteredHoldings.map((h:any)=>{
+                      const realized = (h.realizedHistory||[]).reduce((s:number,r:any)=>s+(r.gain||0),0);
+                      const unrealized = h.shares>0 ? (h.currentPrice-h.avgCost)*h.shares : 0;
+                      const total = realized+unrealized;
+                      return (
+                        <div key={h.symbol} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",background:"#0f1117",borderRadius:7,flexWrap:"wrap"}}>
+                          <span style={{fontWeight:700,color:"#7ee8a2",fontSize:13,minWidth:52}}>{h.symbol}</span>
+                          <div style={{display:"flex",gap:12,flex:1,justifyContent:"flex-end",flexWrap:"wrap"}}>
+                            <div style={{textAlign:"center",minWidth:72}}>
+                              <div style={{fontSize:10,color:"#718096"}}>Realized</div>
+                              <div style={{fontSize:12,fontWeight:600,color:pc(realized)}}>{realized>=0?"+":""}${realized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                            </div>
+                            <div style={{textAlign:"center",minWidth:72}}>
+                              <div style={{fontSize:10,color:"#718096"}}>Unrealized</div>
+                              <div style={{fontSize:12,fontWeight:600,color:pc(unrealized)}}>{unrealized>=0?"+":""}${unrealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                            </div>
+                            <div style={{textAlign:"center",minWidth:72,borderLeft:"1px solid #2d3748",paddingLeft:12}}>
+                              <div style={{fontSize:10,color:"#718096"}}>Total</div>
+                              <div style={{fontSize:12,fontWeight:700,color:pc(total)}}>{total>=0?"+":""}${total.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {filteredTx.length===0 ? (
                 <div style={{textAlign:"center",padding:"40px 20px",color:"#718096"}}>
                   <div style={{fontSize:36}}>📜</div>
