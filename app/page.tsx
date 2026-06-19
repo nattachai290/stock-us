@@ -1090,6 +1090,11 @@ export default function App() {
           const buyCount = filteredTx.filter(t=>t.kind==="buy").length;
           const splitCount = filteredTx.filter(t=>t.kind==="split").length;
 
+          const filteredHoldings = txFilterSymbol==="ALL" ? effectiveHoldings : effectiveHoldings.filter((h:any)=>h.symbol===txFilterSymbol);
+          const totalRealized = sellTx.reduce((s,t)=>s+(t.gain||0),0);
+          const totalUnrealized = filteredHoldings.reduce((s:number,h:any)=>s+(h.shares>0?(h.currentPrice-h.avgCost)*h.shares:0),0);
+          const totalPnL = totalRealized + totalUnrealized;
+
           const kindIcon = (k:string) => k==="buy"?"🛒":k==="sell"?"💰":"🔀";
           const kindColor = (k:string) => k==="buy"?"#86efac":k==="sell"?"#fbbf24":"#67e8f9";
           const kindLabel = (k:string) => k==="buy"?"ซื้อ":k==="sell"?"ขาย":"แตกพาร์";
@@ -1110,12 +1115,20 @@ export default function App() {
               {/* Summary */}
               <div style={{background:"#1a1d2e",borderRadius:10,padding:16,marginBottom:16,border:"1px solid #2d3748",display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                 <div style={{textAlign:"center"}}>
-                  <div style={{fontSize:11,color:"#718096",marginBottom:4}}>Total Realized P&L{txFilterSymbol!=="ALL"?` (${txFilterSymbol})`:""}</div>
-                  <div style={{fontSize:18,fontWeight:700,color:pc(sellTx.reduce((s,t)=>s+(t.gain||0),0))}}>{sellTx.reduce((s,t)=>s+(t.gain||0),0)>=0?"+":""}${sellTx.reduce((s,t)=>s+(t.gain||0),0).toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                  <div style={{fontSize:11,color:"#718096",marginBottom:4}}>Realized P&L{txFilterSymbol!=="ALL"?` (${txFilterSymbol})`:""}</div>
+                  <div style={{fontSize:16,fontWeight:700,color:pc(totalRealized)}}>{totalRealized>=0?"+":""}${totalRealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:11,color:"#718096",marginBottom:4}}>Unrealized P&L{txFilterSymbol!=="ALL"?` (${txFilterSymbol})`:""}</div>
+                  <div style={{fontSize:16,fontWeight:700,color:pc(totalUnrealized)}}>{totalUnrealized>=0?"+":""}${totalUnrealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:11,color:"#718096",marginBottom:4}}>Total P&L</div>
+                  <div style={{fontSize:16,fontWeight:700,color:pc(totalPnL)}}>{totalPnL>=0?"+":""}${totalPnL.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
                 </div>
                 <div style={{textAlign:"center"}}>
                   <div style={{fontSize:11,color:"#718096",marginBottom:4}}>Win Rate (ขาย)</div>
-                  <div style={{fontSize:18,fontWeight:700,color:"#e2e8f0"}}>{winRate.toFixed(0)}% <span style={{fontSize:11,color:"#718096"}}>({winCount}W/{lossCount}L)</span></div>
+                  <div style={{fontSize:16,fontWeight:700,color:"#e2e8f0"}}>{winRate.toFixed(0)}% <span style={{fontSize:11,color:"#718096"}}>({winCount}W/{lossCount}L)</span></div>
                 </div>
                 <div style={{textAlign:"center",gridColumn:"1/-1",display:"flex",justifyContent:"center",gap:20,paddingTop:6,borderTop:"1px solid #2d3748"}}>
                   <span style={{fontSize:12,color:"#86efac"}}>🛒 ซื้อ {buyCount} ครั้ง</span>
@@ -1123,6 +1136,39 @@ export default function App() {
                   <span style={{fontSize:12,color:"#67e8f9"}}>🔀 แตกพาร์ {splitCount} ครั้ง</span>
                 </div>
               </div>
+
+              {/* Per-stock P&L breakdown */}
+              {filteredHoldings.length>0 && (
+                <div style={{background:"#1a1d2e",borderRadius:10,padding:14,marginBottom:16,border:"1px solid #2d3748"}}>
+                  <div style={{fontSize:11,fontWeight:600,color:"#a0aec0",marginBottom:10,letterSpacing:"0.05em",textTransform:"uppercase"}}>P&L รายหุ้น</div>
+                  <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                    {filteredHoldings.map((h:any)=>{
+                      const realized = (h.realizedHistory||[]).reduce((s:number,r:any)=>s+(r.gain||0),0);
+                      const unrealized = h.shares>0 ? (h.currentPrice-h.avgCost)*h.shares : 0;
+                      const total = realized+unrealized;
+                      return (
+                        <div key={h.symbol} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",background:"#0f1117",borderRadius:7,flexWrap:"wrap"}}>
+                          <span style={{fontWeight:700,color:"#7ee8a2",fontSize:13,minWidth:52}}>{h.symbol}</span>
+                          <div style={{display:"flex",gap:12,flex:1,justifyContent:"flex-end",flexWrap:"wrap"}}>
+                            <div style={{textAlign:"center",minWidth:72}}>
+                              <div style={{fontSize:10,color:"#718096"}}>Realized</div>
+                              <div style={{fontSize:12,fontWeight:600,color:pc(realized)}}>{realized>=0?"+":""}${realized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                            </div>
+                            <div style={{textAlign:"center",minWidth:72}}>
+                              <div style={{fontSize:10,color:"#718096"}}>Unrealized</div>
+                              <div style={{fontSize:12,fontWeight:600,color:pc(unrealized)}}>{unrealized>=0?"+":""}${unrealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                            </div>
+                            <div style={{textAlign:"center",minWidth:72,borderLeft:"1px solid #2d3748",paddingLeft:12}}>
+                              <div style={{fontSize:10,color:"#718096"}}>Total</div>
+                              <div style={{fontSize:12,fontWeight:700,color:pc(total)}}>{total>=0?"+":""}${total.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {filteredTx.length===0 ? (
                 <div style={{textAlign:"center",padding:"40px 20px",color:"#718096"}}>
