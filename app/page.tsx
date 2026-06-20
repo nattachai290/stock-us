@@ -308,6 +308,7 @@ export default function App() {
   const [actionMenuId, setActionMenuId] = useState<number|null>(null);
   const [txFilterSymbol, setTxFilterSymbol] = useState("ALL");
   const [editTxData, setEditTxData] = useState<{symbol:string; kind:string; index:number; date:string; qty:string; price:string; commission:string; vat:string; secFee:string; tafFee:string; catFee:string; ratio:string}|null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const msg = (m: string, ms = 3000) => { setStatus(m); if (ms) setTimeout(() => setStatus(""), ms); };
 
@@ -859,23 +860,37 @@ export default function App() {
         ))}
       </div>
 
-      <div style={{padding:16,maxWidth:1100,margin:"0 auto"}}>
+      {/* Mobile hamburger FAB */}
+      <button className="hamburger-fab" onClick={()=>setSidebarOpen(o=>!o)} aria-label="เมนู">
+        {sidebarOpen?"✕":"☰"}
+      </button>
+      {sidebarOpen&&<div className="sidebar-overlay" onClick={()=>setSidebarOpen(false)}/>}
+
+      <div className="main-layout" style={{maxWidth:1320,margin:"0 auto"}}>
+
+        {/* ── Right action sidebar ── */}
+        <div className={`action-sidebar${sidebarOpen?" open":""}`}>
+          <button className="sidebar-close-btn" onClick={()=>setSidebarOpen(false)}>✕</button>
+          <div className="sidebar-section-label">ข้อมูล</div>
+          <button onClick={()=>{refreshPrices();setSidebarOpen(false);}} disabled={refreshing||!holdings.length} style={btn("#1e3a5f","#63b3ed",{opacity:refreshing?0.6:1})}>{refreshing?"⏳ ดึงราคา...":"🔄 อัพเดทราคา"}</button>
+          <button onClick={async()=>{setSaving(true);msg("Sync...",0);try{await saveData(holdings);}catch(e:any){msg("Sync ไม่ได้: "+e.message);}setSaving(false);setSidebarOpen(false);}} disabled={saving||!holdings.length||!token} style={btn("#1a3a2a","#7ee8a2",{opacity:(!token||saving||!holdings.length)?0.5:1})}>{saving?"⏳ Syncing...":"☁️ Sync → Drive"}</button>
+          <button onClick={()=>{setShowImport(v=>!v);setSidebarOpen(false);}} style={btn("#2d3748","#a0aec0")}>📥 Import CSV</button>
+          <button onClick={()=>{exportCSV();setSidebarOpen(false);}} style={btn("#2d3748","#a0aec0")}>📤 Export CSV</button>
+          <div className="sidebar-section-label">วิเคราะห์ด้วย AI</div>
+          <button onClick={()=>{copyForAnalysis();setSidebarOpen(false);}} disabled={!holdings.length} style={btn("#3d2a6b","#c084fc")}>📋 วิเคราะห์ Port</button>
+          <button onClick={()=>{copyMoversAnalysis();setSidebarOpen(false);}} disabled={moversCount===0} style={btn("#4a2800","#fb923c",{opacity:moversCount===0?0.4:1})}>⚡ ตัวผิดปกติ ({moversCount})</button>
+          <button onClick={()=>{copyAllocationAnalysis();setSidebarOpen(false);}} disabled={!holdings.length} style={btn("#1a3a4a","#67e8f9")}>🎯 จัดทัพ Port</button>
+          <button onClick={()=>{setShowAllocImport(v=>!v);setSidebarOpen(false);}} disabled={!holdings.length} style={btn("#1a3a1a","#86efac")}>📥 Paste Target % จาก Claude</button>
+          <button onClick={()=>{copyNewIdeas();setSidebarOpen(false);}} disabled={!holdings.length} style={btn("#1a2a3a","#93c5fd")}>💡 แนะนำหุ้นใหม่</button>
+          <div className="sidebar-section-label">อื่นๆ</div>
+          <button onClick={()=>{if(window.confirm(`ลบทั้งหมด ${holdings.length} รายการ?`)){setAndSave([]);setSidebarOpen(false);}}} disabled={!holdings.length} style={btn("#4a1515","#fc8181")}>🗑️ เคลียข้อมูลทั้งหมด</button>
+        </div>
+
+        <div className="content-area">
 
         {/* PORTFOLIO TAB */}
         {tab==="portfolio"&&(
           <div>
-            <div style={{marginBottom:12,display:"grid",gap:8,gridTemplateColumns:"1fr 1fr"}}>
-              <button onClick={refreshPrices} disabled={refreshing||!holdings.length} style={btn("#1e3a5f","#63b3ed",{opacity:refreshing?0.6:1,width:"100%",padding:"10px"})}>{refreshing?"⏳ ดึงราคา...":"🔄 อัพเดทราคา"}</button>
-              <button onClick={async()=>{setSaving(true);msg("Sync...",0);try{await saveData(holdings);}catch(e:any){msg("Sync ไม่ได้: "+e.message);}setSaving(false);}} disabled={saving||!holdings.length||!token} style={btn("#1a3a2a","#7ee8a2",{opacity:(!token||saving||!holdings.length)?0.5:1,width:"100%",padding:"10px"})}>{saving?"⏳ Syncing...":"☁️ Sync → Drive"}</button>
-              <button onClick={()=>setShowImport(!showImport)} style={btn("#2d3748","#a0aec0",{width:"100%",padding:"10px"})}>📥 Import CSV</button>
-              <button onClick={exportCSV} style={btn("#2d3748","#a0aec0",{width:"100%",padding:"10px"})}>📤 Export CSV</button>
-              <button onClick={copyForAnalysis} disabled={!holdings.length} style={btn("#3d2a6b","#c084fc",{gridColumn:"1/-1",width:"100%",padding:"10px"})}>📋 Copy → วิเคราะห์ใน Claude</button>
-              <button onClick={copyMoversAnalysis} disabled={moversCount===0} style={btn("#4a2800","#fb923c",{gridColumn:"1/-1",width:"100%",padding:"10px",opacity:moversCount===0?0.4:1})}>⚡ Copy → ตัวผิดปกติ ({moversCount})</button>
-              <button onClick={copyAllocationAnalysis} disabled={!holdings.length} style={btn("#1a3a4a","#67e8f9",{gridColumn:"1/-1",width:"100%",padding:"10px"})}>🎯 Copy → จัดทัพ Port</button>
-              <button onClick={()=>setShowAllocImport(!showAllocImport)} disabled={!holdings.length} style={btn("#1a3a1a","#86efac",{gridColumn:"1/-1",width:"100%",padding:"10px"})}>📥 Paste ผล Claude → ใส่ Target %</button>
-              <button onClick={copyNewIdeas} disabled={!holdings.length} style={btn("#1a2a3a","#93c5fd",{gridColumn:"1/-1",width:"100%",padding:"10px"})}>💡 Copy → แนะนำหุ้นใหม่ที่ไม่มีใน Port</button>
-              <button onClick={()=>{if(window.confirm(`ลบทั้งหมด ${holdings.length} รายการ?`))setAndSave([]);}} disabled={!holdings.length} style={btn("#4a1515","#fc8181",{gridColumn:"1/-1",width:"100%",padding:"10px"})}>🗑️ เคลียข้อมูลทั้งหมด</button>
-            </div>
 
             {showAllocImport&&(
               <div style={{background:"#1a1d2e",borderRadius:8,padding:16,marginBottom:12,border:"1px solid #2f6b4f"}}>
@@ -1233,7 +1248,8 @@ export default function App() {
             </div>
           </div>
         )}
-      </div>
+        </div>{/* content-area */}
+      </div>{/* main-layout */}
 
       {/* EDIT TRANSACTION MODAL */}
       {editTxData && (

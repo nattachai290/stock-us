@@ -1,3 +1,81 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { background: #0f1117; overflow-x: hidden; }
 body { background: #0f1117; color: #e2e8f0; font-family: 'Segoe UI', sans-serif; overflow-x: hidden; }
+
+/* ── Sidebar layout ── */
+.main-layout { display: flex; align-items: flex-start; }
+.content-area { flex: 1; min-width: 0; padding: 16px; }
+
+.action-sidebar {
+  width: 224px;
+  flex-shrink: 0;
+  padding: 14px 12px;
+  border-left: 1px solid #2d3748;
+  background: #141720;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  overflow-y: auto;
+}
+.action-sidebar button { width: 100% !important; padding: 9px 10px !important; font-size: 12px !important; text-align: left; }
+.sidebar-section-label { font-size: 10px; font-weight: 600; color: #4a5568; letter-spacing: .07em; text-transform: uppercase; margin-top: 6px; padding-bottom: 4px; border-bottom: 1px solid #1e2433; }
+
+.hamburger-fab { display: none; }
+.sidebar-overlay { display: none; }
+
+@media (max-width: 768px) {
+  .action-sidebar {
+    position: fixed;
+    right: 0;
+    top: 0;
+    height: 100dvh;
+    width: 272px;
+    z-index: 200;
+    transform: translateX(110%);
+    transition: transform 0.25s cubic-bezier(.4,0,.2,1);
+    border-left: 1px solid #4a5568;
+    padding-top: 64px;
+    max-height: 100dvh;
+  }
+  .action-sidebar.open { transform: translateX(0); }
+  .hamburger-fab {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+    bottom: 28px;
+    right: 20px;
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    background: #1e3a5f;
+    border: 2px solid #63b3ed44;
+    color: #63b3ed;
+    font-size: 22px;
+    cursor: pointer;
+    z-index: 300;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  }
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    z-index: 199;
+    backdrop-filter: blur(2px);
+  }
+  .sidebar-close-btn {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    background: none;
+    border: none;
+    color: #a0aec0;
+    font-size: 22px;
+    cursor: pointer;
+    padding: 4px 8px;
+  }
+}
