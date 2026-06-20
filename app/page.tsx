@@ -919,7 +919,7 @@ export default function App() {
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                   <thead>
                     <tr style={{color:"#cbd5e0",borderBottom:"1px solid #2d3748"}}>
-                      {["หลักทรัพย์","จำนวน*","ต้นทุน*","ราคา","วันนี้","P&L %","มูลค่า ($)","สัดส่วน / เป้า",""].map(h=>(
+                      {["หลักทรัพย์","จำนวน*","ต้นทุน*","ราคา","วันนี้","P&L %","Realized","Unrealized","มูลค่า ($)","สัดส่วน / เป้า",""].map(h=>(
                         <th key={h} style={{padding:"8px 8px",textAlign:h==="หลักทรัพย์"||h==="สัดส่วน / เป้า"?"left":h===""?"center":"right",fontWeight:600,whiteSpace:"nowrap"}}>{h}</th>
                       ))}
                     </tr>
@@ -927,6 +927,8 @@ export default function App() {
                   <tbody>
                     {[...effectiveHoldings].filter((h:any)=>h.shares>0.000001).sort((a,b)=>a.symbol.localeCompare(b.symbol)).map((h:any)=>{
                       const val=h.shares*h.currentPrice; const pp=h.avgCost>0?((h.currentPrice-h.avgCost)/h.avgCost*100):0;
+                      const realized=(h.realizedHistory||[]).reduce((s:number,r:any)=>s+(r.gain||0),0);
+                      const unrealized=h.shares>0?(h.currentPrice-h.avgCost)*h.shares:0;
                       const w=tv>0?(val/tv*100):0; const target=h.targetPct||0;
                       const over=target>0?w-target:0; const overAmt=over>0?(over/100*tv):0;
                       const barPct=target>0?Math.min(w/target*100,150):0;
@@ -951,6 +953,8 @@ export default function App() {
                             {h.changePct==null?"—":`${h.changePct>0?"+":""}${h.changePct}%`}
                           </td>
                           <td style={{padding:"8px 8px",textAlign:"right",color:pc(pp),fontWeight:600}}>{pp>=0?"+":""}{pp.toFixed(2)}%</td>
+                          <td style={{padding:"8px 8px",textAlign:"right",color:pc(realized),fontWeight:600,fontSize:11}}>{realized===0?"—":`${realized>=0?"+":""}$${realized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}`}</td>
+                          <td style={{padding:"8px 8px",textAlign:"right",color:pc(unrealized),fontWeight:600,fontSize:11}}>{unrealized===0?"—":`${unrealized>=0?"+":""}$${unrealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}`}</td>
                           <td style={{padding:"8px 8px",textAlign:"right"}}>
                             <div style={{color:"#e2e8f0"}}>${val.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
                             {h.avgCost>0&&val>0&&(()=>{const cost=h.shares*h.avgCost;const diff=val-cost;return <div style={{fontSize:10,color:diff>=0?"#7ee8a2":"#ff6b6b",fontWeight:600}}>{diff>=0?"+":""}{diff.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} ({pp>=0?"+":""}{pp.toFixed(2)}%)</div>;})()}
@@ -1160,39 +1164,6 @@ export default function App() {
                   <span style={{fontSize:12,color:"#67e8f9"}}>🔀 แตกพาร์ {splitCount} ครั้ง</span>
                 </div>
               </div>
-
-              {/* Per-stock P&L breakdown */}
-              {filteredHoldings.length>0 && (
-                <div style={{background:"#1a1d2e",borderRadius:10,padding:14,marginBottom:16,border:"1px solid #2d3748"}}>
-                  <div style={{fontSize:11,fontWeight:600,color:"#a0aec0",marginBottom:10,letterSpacing:"0.05em",textTransform:"uppercase"}}>P&L รายหุ้น</div>
-                  <div style={{display:"flex",flexDirection:"column",gap:4}}>
-                    {filteredHoldings.map((h:any)=>{
-                      const realized = (h.realizedHistory||[]).reduce((s:number,r:any)=>s+(r.gain||0),0);
-                      const unrealized = h.shares>0 ? (h.currentPrice-h.avgCost)*h.shares : 0;
-                      const total = realized+unrealized;
-                      return (
-                        <div key={h.symbol} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",background:"#0f1117",borderRadius:7,flexWrap:"wrap"}}>
-                          <span style={{fontWeight:700,color:"#7ee8a2",fontSize:13,minWidth:52}}>{h.symbol}</span>
-                          <div style={{display:"flex",gap:12,flex:1,justifyContent:"flex-end",flexWrap:"wrap"}}>
-                            <div style={{textAlign:"center",minWidth:72}}>
-                              <div style={{fontSize:10,color:"#718096"}}>Realized</div>
-                              <div style={{fontSize:12,fontWeight:600,color:pc(realized)}}>{realized>=0?"+":""}${realized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                            </div>
-                            <div style={{textAlign:"center",minWidth:72}}>
-                              <div style={{fontSize:10,color:"#718096"}}>Unrealized</div>
-                              <div style={{fontSize:12,fontWeight:600,color:pc(unrealized)}}>{unrealized>=0?"+":""}${unrealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                            </div>
-                            <div style={{textAlign:"center",minWidth:72,borderLeft:"1px solid #2d3748",paddingLeft:12}}>
-                              <div style={{fontSize:10,color:"#718096"}}>Total</div>
-                              <div style={{fontSize:12,fontWeight:700,color:pc(total)}}>{total>=0?"+":""}${total.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
 
               {filteredTx.length===0 ? (
                 <div style={{textAlign:"center",padding:"40px 20px",color:"#718096"}}>
