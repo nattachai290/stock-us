@@ -308,6 +308,7 @@ export default function App() {
   const [actionMenuId, setActionMenuId] = useState<number|null>(null);
   const [txFilterSymbol, setTxFilterSymbol] = useState("ALL");
   const [editTxData, setEditTxData] = useState<{symbol:string; kind:string; index:number; date:string; qty:string; price:string; commission:string; vat:string; secFee:string; tafFee:string; catFee:string; ratio:string}|null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const msg = (m: string, ms = 3000) => { setStatus(m); if (ms) setTimeout(() => setStatus(""), ms); };
 
@@ -859,23 +860,37 @@ export default function App() {
         ))}
       </div>
 
-      <div style={{padding:16,maxWidth:1100,margin:"0 auto"}}>
+      {/* Mobile hamburger FAB */}
+      <button className="hamburger-fab" onClick={()=>setSidebarOpen(o=>!o)} aria-label="เมนู">
+        {sidebarOpen?"✕":"☰"}
+      </button>
+      {sidebarOpen&&<div className="sidebar-overlay" onClick={()=>setSidebarOpen(false)}/>}
+
+      <div className="main-layout" style={{maxWidth:1320,margin:"0 auto"}}>
+
+        {/* ── Right action sidebar ── */}
+        <div className={`action-sidebar${sidebarOpen?" open":""}`}>
+          <button className="sidebar-close-btn" onClick={()=>setSidebarOpen(false)}>✕</button>
+          <div className="sidebar-section-label">ข้อมูล</div>
+          <button onClick={()=>{refreshPrices();setSidebarOpen(false);}} disabled={refreshing||!holdings.length} style={btn("#1e3a5f","#63b3ed",{opacity:refreshing?0.6:1})}>{refreshing?"⏳ ดึงราคา...":"🔄 อัพเดทราคา"}</button>
+          <button onClick={async()=>{setSaving(true);msg("Sync...",0);try{await saveData(holdings);}catch(e:any){msg("Sync ไม่ได้: "+e.message);}setSaving(false);setSidebarOpen(false);}} disabled={saving||!holdings.length||!token} style={btn("#1a3a2a","#7ee8a2",{opacity:(!token||saving||!holdings.length)?0.5:1})}>{saving?"⏳ Syncing...":"☁️ Sync → Drive"}</button>
+          <button onClick={()=>{setShowImport(v=>!v);setSidebarOpen(false);}} style={btn("#2d3748","#a0aec0")}>📥 Import CSV</button>
+          <button onClick={()=>{exportCSV();setSidebarOpen(false);}} style={btn("#2d3748","#a0aec0")}>📤 Export CSV</button>
+          <div className="sidebar-section-label">วิเคราะห์ด้วย AI</div>
+          <button onClick={()=>{copyForAnalysis();setSidebarOpen(false);}} disabled={!holdings.length} style={btn("#3d2a6b","#c084fc")}>📋 วิเคราะห์ Port</button>
+          <button onClick={()=>{copyMoversAnalysis();setSidebarOpen(false);}} disabled={moversCount===0} style={btn("#4a2800","#fb923c",{opacity:moversCount===0?0.4:1})}>⚡ ตัวผิดปกติ ({moversCount})</button>
+          <button onClick={()=>{copyAllocationAnalysis();setSidebarOpen(false);}} disabled={!holdings.length} style={btn("#1a3a4a","#67e8f9")}>🎯 จัดทัพ Port</button>
+          <button onClick={()=>{setShowAllocImport(v=>!v);setSidebarOpen(false);}} disabled={!holdings.length} style={btn("#1a3a1a","#86efac")}>📥 Paste Target % จาก Claude</button>
+          <button onClick={()=>{copyNewIdeas();setSidebarOpen(false);}} disabled={!holdings.length} style={btn("#1a2a3a","#93c5fd")}>💡 แนะนำหุ้นใหม่</button>
+          <div className="sidebar-section-label">อื่นๆ</div>
+          <button onClick={()=>{if(window.confirm(`ลบทั้งหมด ${holdings.length} รายการ?`)){setAndSave([]);setSidebarOpen(false);}}} disabled={!holdings.length} style={btn("#4a1515","#fc8181")}>🗑️ เคลียข้อมูลทั้งหมด</button>
+        </div>
+
+        <div className="content-area">
 
         {/* PORTFOLIO TAB */}
         {tab==="portfolio"&&(
           <div>
-            <div style={{marginBottom:12,display:"grid",gap:8,gridTemplateColumns:"1fr 1fr"}}>
-              <button onClick={refreshPrices} disabled={refreshing||!holdings.length} style={btn("#1e3a5f","#63b3ed",{opacity:refreshing?0.6:1,width:"100%",padding:"10px"})}>{refreshing?"⏳ ดึงราคา...":"🔄 อัพเดทราคา"}</button>
-              <button onClick={async()=>{setSaving(true);msg("Sync...",0);try{await saveData(holdings);}catch(e:any){msg("Sync ไม่ได้: "+e.message);}setSaving(false);}} disabled={saving||!holdings.length||!token} style={btn("#1a3a2a","#7ee8a2",{opacity:(!token||saving||!holdings.length)?0.5:1,width:"100%",padding:"10px"})}>{saving?"⏳ Syncing...":"☁️ Sync → Drive"}</button>
-              <button onClick={()=>setShowImport(!showImport)} style={btn("#2d3748","#a0aec0",{width:"100%",padding:"10px"})}>📥 Import CSV</button>
-              <button onClick={exportCSV} style={btn("#2d3748","#a0aec0",{width:"100%",padding:"10px"})}>📤 Export CSV</button>
-              <button onClick={copyForAnalysis} disabled={!holdings.length} style={btn("#3d2a6b","#c084fc",{gridColumn:"1/-1",width:"100%",padding:"10px"})}>📋 Copy → วิเคราะห์ใน Claude</button>
-              <button onClick={copyMoversAnalysis} disabled={moversCount===0} style={btn("#4a2800","#fb923c",{gridColumn:"1/-1",width:"100%",padding:"10px",opacity:moversCount===0?0.4:1})}>⚡ Copy → ตัวผิดปกติ ({moversCount})</button>
-              <button onClick={copyAllocationAnalysis} disabled={!holdings.length} style={btn("#1a3a4a","#67e8f9",{gridColumn:"1/-1",width:"100%",padding:"10px"})}>🎯 Copy → จัดทัพ Port</button>
-              <button onClick={()=>setShowAllocImport(!showAllocImport)} disabled={!holdings.length} style={btn("#1a3a1a","#86efac",{gridColumn:"1/-1",width:"100%",padding:"10px"})}>📥 Paste ผล Claude → ใส่ Target %</button>
-              <button onClick={copyNewIdeas} disabled={!holdings.length} style={btn("#1a2a3a","#93c5fd",{gridColumn:"1/-1",width:"100%",padding:"10px"})}>💡 Copy → แนะนำหุ้นใหม่ที่ไม่มีใน Port</button>
-              <button onClick={()=>{if(window.confirm(`ลบทั้งหมด ${holdings.length} รายการ?`))setAndSave([]);}} disabled={!holdings.length} style={btn("#4a1515","#fc8181",{gridColumn:"1/-1",width:"100%",padding:"10px"})}>🗑️ เคลียข้อมูลทั้งหมด</button>
-            </div>
 
             {showAllocImport&&(
               <div style={{background:"#1a1d2e",borderRadius:8,padding:16,marginBottom:12,border:"1px solid #2f6b4f"}}>
@@ -919,7 +934,7 @@ export default function App() {
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                   <thead>
                     <tr style={{color:"#cbd5e0",borderBottom:"1px solid #2d3748"}}>
-                      {["หลักทรัพย์","จำนวน*","ต้นทุน*","ราคา","วันนี้","P&L %","มูลค่า ($)","สัดส่วน / เป้า",""].map(h=>(
+                      {["หลักทรัพย์","จำนวน*","ต้นทุน*","ราคา","วันนี้","P&L %","Realized","Unrealized","มูลค่า ($)","สัดส่วน / เป้า",""].map(h=>(
                         <th key={h} style={{padding:"8px 8px",textAlign:h==="หลักทรัพย์"||h==="สัดส่วน / เป้า"?"left":h===""?"center":"right",fontWeight:600,whiteSpace:"nowrap"}}>{h}</th>
                       ))}
                     </tr>
@@ -927,6 +942,8 @@ export default function App() {
                   <tbody>
                     {[...effectiveHoldings].filter((h:any)=>h.shares>0.000001).sort((a,b)=>a.symbol.localeCompare(b.symbol)).map((h:any)=>{
                       const val=h.shares*h.currentPrice; const pp=h.avgCost>0?((h.currentPrice-h.avgCost)/h.avgCost*100):0;
+                      const realized=(h.realizedHistory||[]).reduce((s:number,r:any)=>s+(r.gain||0),0);
+                      const unrealized=h.shares>0?(h.currentPrice-h.avgCost)*h.shares:0;
                       const w=tv>0?(val/tv*100):0; const target=h.targetPct||0;
                       const over=target>0?w-target:0; const overAmt=over>0?(over/100*tv):0;
                       const barPct=target>0?Math.min(w/target*100,150):0;
@@ -951,6 +968,8 @@ export default function App() {
                             {h.changePct==null?"—":`${h.changePct>0?"+":""}${h.changePct}%`}
                           </td>
                           <td style={{padding:"8px 8px",textAlign:"right",color:pc(pp),fontWeight:600}}>{pp>=0?"+":""}{pp.toFixed(2)}%</td>
+                          <td style={{padding:"8px 8px",textAlign:"right",color:pc(realized),fontWeight:600,fontSize:11}}>{realized===0?"—":`${realized>=0?"+":""}$${realized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}`}</td>
+                          <td style={{padding:"8px 8px",textAlign:"right",color:pc(unrealized),fontWeight:600,fontSize:11}}>{unrealized===0?"—":`${unrealized>=0?"+":""}$${unrealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}`}</td>
                           <td style={{padding:"8px 8px",textAlign:"right"}}>
                             <div style={{color:"#e2e8f0"}}>${val.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
                             {h.avgCost>0&&val>0&&(()=>{const cost=h.shares*h.avgCost;const diff=val-cost;return <div style={{fontSize:10,color:diff>=0?"#7ee8a2":"#ff6b6b",fontWeight:600}}>{diff>=0?"+":""}{diff.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} ({pp>=0?"+":""}{pp.toFixed(2)}%)</div>;})()}
@@ -1161,39 +1180,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Per-stock P&L breakdown */}
-              {filteredHoldings.length>0 && (
-                <div style={{background:"#1a1d2e",borderRadius:10,padding:14,marginBottom:16,border:"1px solid #2d3748"}}>
-                  <div style={{fontSize:11,fontWeight:600,color:"#a0aec0",marginBottom:10,letterSpacing:"0.05em",textTransform:"uppercase"}}>P&L รายหุ้น</div>
-                  <div style={{display:"flex",flexDirection:"column",gap:4}}>
-                    {filteredHoldings.map((h:any)=>{
-                      const realized = (h.realizedHistory||[]).reduce((s:number,r:any)=>s+(r.gain||0),0);
-                      const unrealized = h.shares>0 ? (h.currentPrice-h.avgCost)*h.shares : 0;
-                      const total = realized+unrealized;
-                      return (
-                        <div key={h.symbol} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 10px",background:"#0f1117",borderRadius:7,flexWrap:"wrap"}}>
-                          <span style={{fontWeight:700,color:"#7ee8a2",fontSize:13,minWidth:52}}>{h.symbol}</span>
-                          <div style={{display:"flex",gap:12,flex:1,justifyContent:"flex-end",flexWrap:"wrap"}}>
-                            <div style={{textAlign:"center",minWidth:72}}>
-                              <div style={{fontSize:10,color:"#718096"}}>Realized</div>
-                              <div style={{fontSize:12,fontWeight:600,color:pc(realized)}}>{realized>=0?"+":""}${realized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                            </div>
-                            <div style={{textAlign:"center",minWidth:72}}>
-                              <div style={{fontSize:10,color:"#718096"}}>Unrealized</div>
-                              <div style={{fontSize:12,fontWeight:600,color:pc(unrealized)}}>{unrealized>=0?"+":""}${unrealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                            </div>
-                            <div style={{textAlign:"center",minWidth:72,borderLeft:"1px solid #2d3748",paddingLeft:12}}>
-                              <div style={{fontSize:10,color:"#718096"}}>Total</div>
-                              <div style={{fontSize:12,fontWeight:700,color:pc(total)}}>{total>=0?"+":""}${total.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
               {filteredTx.length===0 ? (
                 <div style={{textAlign:"center",padding:"40px 20px",color:"#718096"}}>
                   <div style={{fontSize:36}}>📜</div>
@@ -1262,7 +1248,8 @@ export default function App() {
             </div>
           </div>
         )}
-      </div>
+        </div>{/* content-area */}
+      </div>{/* main-layout */}
 
       {/* EDIT TRANSACTION MODAL */}
       {editTxData && (
@@ -1280,8 +1267,8 @@ export default function App() {
 
             {editTxData.kind==="split" ? (
               <div style={{marginBottom:16}}>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>Split Ratio</div>
-                <input value={editTxData.ratio} onChange={e=>setEditTxData({...editTxData,ratio:e.target.value})} placeholder="4:1"
+                <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>จำนวนหุ้นใหม่ (หลังแตกพาร์)</div>
+                <input type="number" value={editTxData.ratio} onChange={e=>setEditTxData({...editTxData,ratio:e.target.value})} placeholder="ระบุจำนวนหุ้นหลังแตกพาร์"
                   style={{width:"100%",background:"#0f1117",border:"1px solid #4a5568",borderRadius:6,padding:"10px 12px",color:"#e2e8f0",fontSize:14,boxSizing:"border-box"}}/>
               </div>
             ) : (
