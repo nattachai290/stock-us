@@ -1081,6 +1081,29 @@ export default function App() {
           });
           allTx.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
+          // Compute running avgCost after each buy transaction (per symbol, by buyHistory index)
+          const avgCostAtBuy: Map<string, number[]> = new Map();
+          holdings.forEach((h:any) => {
+            const buys = (h.buyHistory||[]);
+            const sells = (h.realizedHistory||[]);
+            const events = [
+              ...buys.map((b:any,i:number)=>({ date:b.date, type:"buy" as const, qty:b.qty, price:b.price, buyIdx:i })),
+              ...sells.map((s:any)=>({ date:s.date, type:"sell" as const, qty:s.qty, price:0, buyIdx:-1 })),
+            ].sort((a,b)=>new Date(a.date).getTime()-new Date(b.date).getTime());
+            let shares=0, totalCost=0;
+            const avgArr: number[] = new Array(buys.length).fill(0);
+            for (const e of events) {
+              if (e.type==="buy") {
+                totalCost += e.qty * e.price; shares += e.qty;
+                avgArr[e.buyIdx] = shares>0 ? totalCost/shares : 0;
+              } else {
+                const avg = shares>0 ? totalCost/shares : 0;
+                shares -= e.qty; totalCost -= e.qty*avg;
+              }
+            }
+            avgCostAtBuy.set(h.symbol, avgArr);
+          });
+
           const allSymbols = [...new Set(holdings.map((h:any)=>h.symbol))].sort();
           const filteredTx = txFilterSymbol==="ALL" ? allTx : allTx.filter(t=>t.symbol===txFilterSymbol);
 
@@ -1197,6 +1220,7 @@ export default function App() {
                         ) : (
                           <>
                             <div style={{fontSize:13,color:"#e2e8f0"}}>{t.qty?.toFixed(7)} หุ้น @ ${t.price?.toFixed(4)}</div>
+                            {t.kind==="buy" && (() => { const avg = avgCostAtBuy.get(t.symbol)?.[t.idx]; return avg!=null ? <div style={{fontSize:11,color:"#a0aec0"}}>ต้นทุนเฉลี่ย: <span style={{color:"#7ee8a2",fontWeight:600}}>${avg.toFixed(4)}</span></div> : null; })()}
                             {t.kind==="sell" && t.proceeds!=null && <div style={{fontSize:11,color:"#67e8f9"}}>ได้รับ ${(t.proceeds-(t.fees||0)).toFixed(2)}</div>}
                             {t.kind==="sell" && (
                               <div>
