@@ -294,6 +294,7 @@ export default function App() {
   const [sellSecFee, setSellSecFee] = useState("");
   const [sellTafFee, setSellTafFee] = useState("");
   const [sellCatFee, setSellCatFee] = useState("");
+  const [sellVat, setSellVat] = useState("");
   const [showFees, setShowFees] = useState(false);
   const [sellDateTime, setSellDateTime] = useState("");
   const [buyDateTime, setBuyDateTime] = useState("");
@@ -306,7 +307,7 @@ export default function App() {
   const [buyPrice, setBuyPrice] = useState("");
   const [actionMenuId, setActionMenuId] = useState<number|null>(null);
   const [txFilterSymbol, setTxFilterSymbol] = useState("ALL");
-  const [editTxData, setEditTxData] = useState<{symbol:string; kind:string; index:number; date:string; qty:string; price:string; commission:string; secFee:string; tafFee:string; catFee:string; ratio:string}|null>(null);
+  const [editTxData, setEditTxData] = useState<{symbol:string; kind:string; index:number; date:string; qty:string; price:string; commission:string; vat:string; secFee:string; tafFee:string; catFee:string; ratio:string}|null>(null);
 
   const msg = (m: string, ms = 3000) => { setStatus(m); if (ms) setTimeout(() => setStatus(""), ms); };
 
@@ -506,13 +507,13 @@ export default function App() {
 
   const openSellModal = (id: number) => {
     setSellModalId(id); setSellQty(""); setSellPrice("");
-    setSellCommission(""); setSellSecFee(""); setSellTafFee(""); setSellCatFee(""); setShowFees(false);
+    setSellCommission(""); setSellSecFee(""); setSellTafFee(""); setSellCatFee(""); setSellVat(""); setShowFees(false);
     setSellDateTime(new Date().toISOString().slice(0,16));
   };
 
   const calcSellFees = () => {
     const commission = parseFloat(sellCommission)||0;
-    const vat = commission * 0.07;
+    const vat = sellVat !== "" ? (parseFloat(sellVat)||0) : commission * 0.07;
     const secFee = parseFloat(sellSecFee)||0;
     const tafFee = parseFloat(sellTafFee)||0;
     const catFee = parseFloat(sellCatFee)||0;
@@ -546,7 +547,7 @@ export default function App() {
     );
     setAndSave(updated);
     setSellModalId(null); setSellQty(""); setSellPrice("");
-    setSellCommission(""); setSellSecFee(""); setSellTafFee(""); setSellCatFee("");
+    setSellCommission(""); setSellSecFee(""); setSellTafFee(""); setSellCatFee(""); setSellVat("");
     msg(`ขาย ${qty} หุ้น ${h.symbol} ${realizedGain>=0?"กำไร":"ขาดทุน"} $${Math.abs(realizedGain).toFixed(2)} (หลังหักค่าธรรมเนียม) ✓`);
   };
 
@@ -612,20 +613,20 @@ export default function App() {
     if (!h) return;
     if (kind === "buy") {
       const tx = (h.buyHistory||[])[index];
-      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty: String(tx.qty), price: String(tx.price), commission:"", secFee:"", tafFee:"", catFee:"", ratio:"" });
+      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty: String(tx.qty), price: String(tx.price), commission:"", vat:"", secFee:"", tafFee:"", catFee:"", ratio:"" });
     } else if (kind === "sell") {
       const tx = (h.realizedHistory||[])[index];
       const fd = tx.feeDetail || {};
-      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty: String(tx.qty), price: String(tx.sellPrice), commission: String(fd.commission||0), secFee: String(fd.secFee||0), tafFee: String(fd.tafFee||0), catFee: String(fd.catFee||0), ratio:"" });
+      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty: String(tx.qty), price: String(tx.sellPrice), commission: String(fd.commission||0), vat: String(fd.vat||""), secFee: String(fd.secFee||0), tafFee: String(fd.tafFee||0), catFee: String(fd.catFee||0), ratio:"" });
     } else if (kind === "split") {
       const tx = (h.splitHistory||[])[index];
-      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty:"", price:"", commission:"", secFee:"", tafFee:"", catFee:"", ratio: tx.ratio });
+      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty:"", price:"", commission:"", vat:"", secFee:"", tafFee:"", catFee:"", ratio: tx.ratio });
     }
   };
 
   const saveEditTx = () => {
     if (!editTxData) return;
-    const { symbol, kind, index, date, qty, price, commission, secFee, tafFee, catFee, ratio } = editTxData;
+    const { symbol, kind, index, date, qty, price, commission, vat: vatStr, secFee, tafFee, catFee, ratio } = editTxData;
     const isoDate = date ? new Date(date).toISOString() : new Date().toISOString();
 
     const updated = holdings.map((h:any) => {
@@ -639,7 +640,7 @@ export default function App() {
         const oldTx = newRealizedHistory[index];
         const q = parseFloat(qty)||0; const p = parseFloat(price)||0;
         const comm = parseFloat(commission)||0; const sec = parseFloat(secFee)||0; const taf = parseFloat(tafFee)||0; const cat = parseFloat(catFee)||0;
-        const vat = comm*0.07; const totalFees = comm+vat+sec+taf+cat;
+        const vat = vatStr !== "" ? (parseFloat(vatStr)||0) : comm*0.07; const totalFees = comm+vat+sec+taf+cat;
         const avgCostAtSale = oldTx.avgCostAtSale;
         const grossGain = (p - avgCostAtSale) * q;
         const gain = grossGain - totalFees;
@@ -1286,6 +1287,11 @@ export default function App() {
                           style={{width:"100%",background:"#1a1d2e",border:"1px solid #4a5568",borderRadius:5,padding:"7px 10px",color:"#e2e8f0",fontSize:13,boxSizing:"border-box"}}/>
                       </div>
                     ))}
+                    <div style={{marginBottom:8,paddingTop:6,borderTop:"1px solid #2d3748"}}>
+                      <div style={{fontSize:11,color:"#718096",marginBottom:3}}>VAT 7% ($) <span style={{color:"#4a5568"}}>(ปล่อยว่าง = อัตโนมัติ {((parseFloat(editTxData.commission)||0)*0.07).toFixed(4)})</span></div>
+                      <input type="number" value={editTxData.vat} onChange={e=>setEditTxData({...editTxData,vat:e.target.value})} placeholder={`${((parseFloat(editTxData.commission)||0)*0.07).toFixed(4)}`}
+                        style={{width:"100%",background:"#1a1d2e",border:"1px solid #4a5568",borderRadius:5,padding:"7px 10px",color:"#e2e8f0",fontSize:13,boxSizing:"border-box"}}/>
+                    </div>
                   </div>
                 )}
               </>
@@ -1439,9 +1445,10 @@ export default function App() {
                         style={{width:"100%",background:"#1a1d2e",border:"1px solid #4a5568",borderRadius:5,padding:"7px 10px",color:"#e2e8f0",fontSize:13,boxSizing:"border-box"}}/>
                     </div>
                   ))}
-                  <div style={{fontSize:11,color:"#718096",display:"flex",justifyContent:"space-between",paddingTop:6,borderTop:"1px solid #2d3748"}}>
-                    <span>VAT 7% (จาก Commission)</span>
-                    <span style={{color:"#e2e8f0"}}>${fees.vat.toFixed(2)}</span>
+                  <div style={{marginBottom:8,paddingTop:6,borderTop:"1px solid #2d3748"}}>
+                    <div style={{fontSize:11,color:"#718096",marginBottom:3}}>VAT 7% ($) <span style={{color:"#4a5568"}}>(ปล่อยว่าง = คำนวณอัตโนมัติจาก Commission × 7% = ${((parseFloat(sellCommission)||0)*0.07).toFixed(2)})</span></div>
+                    <input type="number" value={sellVat} onChange={e=>setSellVat(e.target.value)} placeholder={`${((parseFloat(sellCommission)||0)*0.07).toFixed(4)}`}
+                      style={{width:"100%",background:"#1a1d2e",border:"1px solid #4a5568",borderRadius:5,padding:"7px 10px",color:"#e2e8f0",fontSize:13,boxSizing:"border-box"}}/>
                   </div>
                   <div style={{fontSize:12,fontWeight:700,display:"flex",justifyContent:"space-between",marginTop:4}}>
                     <span style={{color:"#a0aec0"}}>รวมค่าธรรมเนียม</span>
