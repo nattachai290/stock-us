@@ -287,6 +287,8 @@ export default function App() {
   const [editId, setEditId] = useState<number|null>(null);
   const [importText, setImportText] = useState("");
   const [showImport, setShowImport] = useState(false);
+  const [showTxImport, setShowTxImport] = useState(false);
+  const [txImportText, setTxImportText] = useState("");
   const [showAllocImport, setShowAllocImport] = useState(false);
   const [allocText, setAllocText] = useState("");
   const [status, setStatus] = useState("");
@@ -696,6 +698,50 @@ export default function App() {
       setAndSave([...holdings, ...entries]);
       setImportText(""); setShowImport(false); msg(`นำเข้า ${entries.length} รายการแล้ว ✓`);
     } catch { alert("Format: SYMBOL,จำนวนหุ้น,ต้นทุน,ราคาปัจจุบัน,กลุ่ม,หมายเหตุ"); }
+  };
+
+  const importTxCSV = () => {
+    const lines = txImportText.trim().split("\n").map(l=>l.trim()).filter(Boolean);
+    const dataLines = lines.filter(l=>!/^วันที่|^date/i.test(l));
+    if (!dataLines.length) { alert("ไม่พบข้อมูล"); return; }
+    let updatedHoldings = holdings.map((h:any)=>({...h}));
+    let buyCount=0, sellCount=0, skipCount=0;
+    for (const line of dataLines) {
+      const parts = line.split(",").map((s:string)=>s.trim());
+      if (parts.length < 5) { skipCount++; continue; }
+      const [dateStr, side, rawSymbol, qtyStr, priceStr] = parts;
+      // BRK.B → BRK-B (replace dots in ticker with dash)
+      const symbol = rawSymbol.toUpperCase().replace(/\./g,"-");
+      const [dd,mm,yyyy] = dateStr.split("/");
+      if (!dd||!mm||!yyyy||yyyy.length!==4) { skipCount++; continue; }
+      const iso = `${yyyy}-${mm.padStart(2,"0")}-${dd.padStart(2,"0")}T12:00:00`;
+      const qty = parseFloat(qtyStr); const price = parseFloat(priceStr);
+      if (!qty||qty<=0||!price||price<=0) { skipCount++; continue; }
+      const sideUp = side.toUpperCase().charAt(0);
+      if (sideUp==="B") {
+        const buyEntry = { date:iso, qty, price, type:"import" };
+        const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
+        if (idx>=0) {
+          updatedHoldings[idx] = { ...updatedHoldings[idx], buyHistory:[...(updatedHoldings[idx].buyHistory||[]),buyEntry] };
+        } else {
+          updatedHoldings.push({ id:Date.now()+Math.random(), symbol, shares:0, avgCost:0, currentPrice:0, sector:"", note:"", changePct:null, targetPct:0, realizedHistory:[], splitHistory:[], buyHistory:[buyEntry] });
+        }
+        buyCount++;
+      } else if (sideUp==="S") {
+        const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
+        if (idx<0) { skipCount++; continue; }
+        const eff = computeFromHistory(updatedHoldings[idx]);
+        const avgCostAtSale = eff.avgCost;
+        const grossGain = (price-avgCostAtSale)*qty;
+        const proceeds = qty*price;
+        const sellEntry = { date:iso, qty, sellPrice:price, avgCostAtSale, proceeds, grossGain, fees:0, feeDetail:{commission:0,vat:0,secFee:0,tafFee:0,catFee:0}, gain:grossGain, gainPct:avgCostAtSale>0?(grossGain/(avgCostAtSale*qty)*100):0 };
+        updatedHoldings[idx] = { ...updatedHoldings[idx], realizedHistory:[...(updatedHoldings[idx].realizedHistory||[]),sellEntry] };
+        sellCount++;
+      } else { skipCount++; }
+    }
+    setAndSave(updatedHoldings);
+    setTxImportText(""); setShowTxImport(false);
+    msg(`นำเข้าแล้ว: ซื้อ ${buyCount} | ขาย ${sellCount}${skipCount>0?` | ข้าม ${skipCount}`:""} ✓`);
   };
 
   const exportCSV = () => {
@@ -1149,7 +1195,7 @@ export default function App() {
 
           return (
             <div>
-              {/* Symbol Filter */}
+              {/* Symbol Filter + import button */}
               <div style={{marginBottom:12,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                 <span style={{fontSize:12,color:"#718096"}}>กรองหุ้น:</span>
                 <select value={txFilterSymbol} onChange={e=>setTxFilterSymbol(e.target.value)}
@@ -1158,7 +1204,23 @@ export default function App() {
                   {allSymbols.map(s=><option key={s} value={s}>{s}</option>)}
                 </select>
                 {txFilterSymbol!=="ALL" && <button onClick={()=>setTxFilterSymbol("ALL")} style={{fontSize:12,color:"#fc8181",background:"none",border:"none",cursor:"pointer"}}>✕ ล้าง</button>}
+                <button onClick={()=>setShowTxImport(v=>!v)} style={btn("#1a2a3a","#93c5fd",{fontSize:12,padding:"6px 12px",marginLeft:"auto"})}>📥 Import ประวัติ CSV</button>
               </div>
+
+              {/* TX CSV Import panel */}
+              {showTxImport&&(
+                <div style={{background:"#1a1d2e",borderRadius:8,padding:16,marginBottom:12,border:"1px solid #2d3748"}}>
+                  <div style={{fontSize:13,fontWeight:600,color:"#93c5fd",marginBottom:6}}>📥 Import ประวัติ ซื้อ/ขาย</div>
+                  <div style={{fontSize:12,color:"#a0aec0",marginBottom:8}}>Format: <code style={{color:"#67e8f9"}}>วันที่,Side(B/S),Symbol,จำนวน,ราคา,มูลค่า</code> — รองรับ <code style={{color:"#7ee8a2"}}>BRK.B → BRK-B</code> อัตโนมัติ</div>
+                  <textarea value={txImportText} onChange={e=>setTxImportText(e.target.value)}
+                    placeholder={"07/11/2023,B,SCHD,0.3994424,70.30,1002.32\n08/11/2023,S,AAPL,0.05,185.00,9.25"}
+                    style={{width:"100%",minHeight:140,background:"#0f1117",color:"#e2e8f0",border:"1px solid #4a5568",borderRadius:6,padding:10,fontSize:12,resize:"vertical",fontFamily:"monospace"}}/>
+                  <div style={{display:"flex",gap:8,marginTop:8}}>
+                    <button onClick={importTxCSV} disabled={!txImportText.trim()} style={btn("#2f6b4f","#7ee8a2",{opacity:!txImportText.trim()?0.5:1})}>✅ นำเข้า</button>
+                    <button onClick={()=>{setShowTxImport(false);setTxImportText("");}} style={btn("#2d3748","#a0aec0")}>ยกเลิก</button>
+                  </div>
+                </div>
+              )}
 
               {/* Summary */}
               <div style={{background:"#1a1d2e",borderRadius:10,padding:16,marginBottom:16,border:"1px solid #2d3748",display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
