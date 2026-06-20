@@ -1280,8 +1280,8 @@ export default function App() {
 
             {editTxData.kind==="split" ? (
               <div style={{marginBottom:16}}>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>Split Ratio</div>
-                <input value={editTxData.ratio} onChange={e=>setEditTxData({...editTxData,ratio:e.target.value})} placeholder="4:1"
+                <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>จำนวนหุ้นใหม่ (หลังแตกพาร์)</div>
+                <input type="number" value={editTxData.ratio} onChange={e=>setEditTxData({...editTxData,ratio:e.target.value})} placeholder="ระบุจำนวนหุ้นหลังแตกพาร์"
                   style={{width:"100%",background:"#0f1117",border:"1px solid #4a5568",borderRadius:6,padding:"10px 12px",color:"#e2e8f0",fontSize:14,boxSizing:"border-box"}}/>
               </div>
             ) : (
