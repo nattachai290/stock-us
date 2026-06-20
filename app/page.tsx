@@ -294,18 +294,20 @@ export default function App() {
   const [sellSecFee, setSellSecFee] = useState("");
   const [sellTafFee, setSellTafFee] = useState("");
   const [sellCatFee, setSellCatFee] = useState("");
+  const [sellVat, setSellVat] = useState("");
   const [showFees, setShowFees] = useState(false);
   const [sellDateTime, setSellDateTime] = useState("");
   const [buyDateTime, setBuyDateTime] = useState("");
   const [splitModalId, setSplitModalId] = useState<number|null>(null);
   const [splitRatio, setSplitRatio] = useState("");
+  const [splitNewShares, setSplitNewShares] = useState("");
   const [showHistory, setShowHistory] = useState<number|null>(null);
   const [buyModalId, setBuyModalId] = useState<number|null>(null);
   const [buyQty, setBuyQty] = useState("");
   const [buyPrice, setBuyPrice] = useState("");
   const [actionMenuId, setActionMenuId] = useState<number|null>(null);
   const [txFilterSymbol, setTxFilterSymbol] = useState("ALL");
-  const [editTxData, setEditTxData] = useState<{symbol:string; kind:string; index:number; date:string; qty:string; price:string; commission:string; secFee:string; tafFee:string; catFee:string; ratio:string}|null>(null);
+  const [editTxData, setEditTxData] = useState<{symbol:string; kind:string; index:number; date:string; qty:string; price:string; commission:string; vat:string; secFee:string; tafFee:string; catFee:string; ratio:string}|null>(null);
 
   const msg = (m: string, ms = 3000) => { setStatus(m); if (ms) setTimeout(() => setStatus(""), ms); };
 
@@ -505,13 +507,13 @@ export default function App() {
 
   const openSellModal = (id: number) => {
     setSellModalId(id); setSellQty(""); setSellPrice("");
-    setSellCommission(""); setSellSecFee(""); setSellTafFee(""); setSellCatFee(""); setShowFees(false);
+    setSellCommission(""); setSellSecFee(""); setSellTafFee(""); setSellCatFee(""); setSellVat(""); setShowFees(false);
     setSellDateTime(new Date().toISOString().slice(0,16));
   };
 
   const calcSellFees = () => {
     const commission = parseFloat(sellCommission)||0;
-    const vat = commission * 0.07;
+    const vat = sellVat !== "" ? (parseFloat(sellVat)||0) : commission * 0.07;
     const secFee = parseFloat(sellSecFee)||0;
     const tafFee = parseFloat(sellTafFee)||0;
     const catFee = parseFloat(sellCatFee)||0;
@@ -545,7 +547,7 @@ export default function App() {
     );
     setAndSave(updated);
     setSellModalId(null); setSellQty(""); setSellPrice("");
-    setSellCommission(""); setSellSecFee(""); setSellTafFee(""); setSellCatFee("");
+    setSellCommission(""); setSellSecFee(""); setSellTafFee(""); setSellCatFee(""); setSellVat("");
     msg(`ขาย ${qty} หุ้น ${h.symbol} ${realizedGain>=0?"กำไร":"ขาดทุน"} $${Math.abs(realizedGain).toFixed(2)} (หลังหักค่าธรรมเนียม) ✓`);
   };
 
@@ -574,21 +576,20 @@ export default function App() {
     msg(`ซื้อเพิ่ม ${h.symbol} ${qty} หุ้น @ $${price} แล้ว — ต้นทุนเฉลี่ยใหม่ $${newAvgCost.toFixed(4)} ✓`);
   };
 
-  const openSplitModal = (id: number) => { setSplitModalId(id); setSplitRatio(""); };
+  const openSplitModal = (id: number) => { setSplitModalId(id); setSplitRatio(""); setSplitNewShares(""); };
 
   const confirmSplit = () => {
     const h = holdings.find((x:any)=>x.id===splitModalId);
     if (!h) return;
-    // Parse ratio like "4:1" or "4"
-    const parts = splitRatio.split(":").map(s=>parseFloat(s.trim()));
-    const ratio = parts.length===2 ? parts[0]/parts[1] : parseFloat(splitRatio);
-    if (!ratio || ratio<=0) { alert("กรอก ratio ให้ถูกต้อง เช่น 4:1 หรือ 4"); return; }
-
     const eff = computeFromHistory(h);
-    const newShares = eff.shares * ratio;
+    const newSharesCount = parseFloat(splitNewShares);
+    if (!newSharesCount || newSharesCount <= 0) { alert("กรอกจำนวนหุ้นใหม่ให้ถูกต้อง"); return; }
+    const ratio = newSharesCount / eff.shares;
+    const recordedRatio = `${newSharesCount.toFixed(7)}`;
+
     const newAvgCost = eff.avgCost / ratio;
 
-    // Scale ALL historical transactions too, so computeFromHistory stays consistent after split
+    // Scale ALL historical transactions so computeFromHistory stays consistent after split
     const adjustedBuyHistory = (h.buyHistory||[]).map((b:any) => ({ ...b, qty: b.qty*ratio, price: b.price/ratio }));
     const adjustedRealizedHistory = (h.realizedHistory||[]).map((r:any) => ({
       ...r, qty: r.qty*ratio, sellPrice: r.sellPrice/ratio, avgCostAtSale: r.avgCostAtSale/ratio
@@ -596,13 +597,13 @@ export default function App() {
     }));
 
     const updated = holdings.map((x:any) => x.id===splitModalId
-      ? { ...x, shares: newShares, avgCost: newAvgCost, buyHistory: adjustedBuyHistory, realizedHistory: adjustedRealizedHistory,
-          splitHistory: [...(x.splitHistory||[]), { date: new Date().toISOString(), ratio: splitRatio }] }
+      ? { ...x, shares: newSharesCount, avgCost: newAvgCost, buyHistory: adjustedBuyHistory, realizedHistory: adjustedRealizedHistory,
+          splitHistory: [...(x.splitHistory||[]), { date: new Date().toISOString(), ratio: recordedRatio }] }
       : x
     );
     setAndSave(updated);
-    setSplitModalId(null); setSplitRatio("");
-    msg(`แตกพาร์ ${h.symbol} ${splitRatio} แล้ว: ${eff.shares.toFixed(4)} → ${newShares.toFixed(4)} หุ้น ✓`);
+    setSplitModalId(null); setSplitNewShares("");
+    msg(`แตกพาร์ ${h.symbol} แล้ว: ${eff.shares.toFixed(4)} → ${newSharesCount.toFixed(4)} หุ้น ✓`);
   };
 
   const totalRealized = (h: any) => (h.realizedHistory||[]).reduce((s:number,r:any)=>s+r.gain, 0);
@@ -612,20 +613,20 @@ export default function App() {
     if (!h) return;
     if (kind === "buy") {
       const tx = (h.buyHistory||[])[index];
-      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty: String(tx.qty), price: String(tx.price), commission:"", secFee:"", tafFee:"", catFee:"", ratio:"" });
+      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty: String(tx.qty), price: String(tx.price), commission:"", vat:"", secFee:"", tafFee:"", catFee:"", ratio:"" });
     } else if (kind === "sell") {
       const tx = (h.realizedHistory||[])[index];
       const fd = tx.feeDetail || {};
-      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty: String(tx.qty), price: String(tx.sellPrice), commission: String(fd.commission||0), secFee: String(fd.secFee||0), tafFee: String(fd.tafFee||0), catFee: String(fd.catFee||0), ratio:"" });
+      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty: String(tx.qty), price: String(tx.sellPrice), commission: String(fd.commission||0), vat: String(fd.vat||""), secFee: String(fd.secFee||0), tafFee: String(fd.tafFee||0), catFee: String(fd.catFee||0), ratio:"" });
     } else if (kind === "split") {
       const tx = (h.splitHistory||[])[index];
-      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty:"", price:"", commission:"", secFee:"", tafFee:"", catFee:"", ratio: tx.ratio });
+      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty:"", price:"", commission:"", vat:"", secFee:"", tafFee:"", catFee:"", ratio: tx.ratio });
     }
   };
 
   const saveEditTx = () => {
     if (!editTxData) return;
-    const { symbol, kind, index, date, qty, price, commission, secFee, tafFee, catFee, ratio } = editTxData;
+    const { symbol, kind, index, date, qty, price, commission, vat: vatStr, secFee, tafFee, catFee, ratio } = editTxData;
     const isoDate = date ? new Date(date).toISOString() : new Date().toISOString();
 
     const updated = holdings.map((h:any) => {
@@ -639,7 +640,7 @@ export default function App() {
         const oldTx = newRealizedHistory[index];
         const q = parseFloat(qty)||0; const p = parseFloat(price)||0;
         const comm = parseFloat(commission)||0; const sec = parseFloat(secFee)||0; const taf = parseFloat(tafFee)||0; const cat = parseFloat(catFee)||0;
-        const vat = comm*0.07; const totalFees = comm+vat+sec+taf+cat;
+        const vat = vatStr !== "" ? (parseFloat(vatStr)||0) : comm*0.07; const totalFees = comm+vat+sec+taf+cat;
         const avgCostAtSale = oldTx.avgCostAtSale;
         const grossGain = (p - avgCostAtSale) * q;
         const gain = grossGain - totalFees;
@@ -924,7 +925,7 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {[...effectiveHoldings].sort((a,b)=>a.symbol.localeCompare(b.symbol)).map((h:any)=>{
+                    {[...effectiveHoldings].filter((h:any)=>h.shares>0.000001).sort((a,b)=>a.symbol.localeCompare(b.symbol)).map((h:any)=>{
                       const val=h.shares*h.currentPrice; const pp=h.avgCost>0?((h.currentPrice-h.avgCost)/h.avgCost*100):0;
                       const w=tv>0?(val/tv*100):0; const target=h.targetPct||0;
                       const over=target>0?w-target:0; const overAmt=over>0?(over/100*tv):0;
@@ -1196,7 +1197,7 @@ export default function App() {
                         ) : (
                           <>
                             <div style={{fontSize:13,color:"#e2e8f0"}}>{t.qty?.toFixed(7)} หุ้น @ ${t.price?.toFixed(4)}</div>
-                            {t.kind==="sell" && t.proceeds!=null && <div style={{fontSize:11,color:"#67e8f9"}}>ได้รับ ${t.proceeds.toFixed(2)}</div>}
+                            {t.kind==="sell" && t.proceeds!=null && <div style={{fontSize:11,color:"#67e8f9"}}>ได้รับ ${(t.proceeds-(t.fees||0)).toFixed(2)}</div>}
                             {t.kind==="sell" && (
                               <div>
                                 <div style={{fontSize:12,fontWeight:700,color:pc(t.gain||0)}}>
@@ -1286,6 +1287,11 @@ export default function App() {
                           style={{width:"100%",background:"#1a1d2e",border:"1px solid #4a5568",borderRadius:5,padding:"7px 10px",color:"#e2e8f0",fontSize:13,boxSizing:"border-box"}}/>
                       </div>
                     ))}
+                    <div style={{marginBottom:8,paddingTop:6,borderTop:"1px solid #2d3748"}}>
+                      <div style={{fontSize:11,color:"#718096",marginBottom:3}}>VAT 7% ($) <span style={{color:"#4a5568"}}>(ปล่อยว่าง = อัตโนมัติ {((parseFloat(editTxData.commission)||0)*0.07).toFixed(4)})</span></div>
+                      <input type="number" value={editTxData.vat} onChange={e=>setEditTxData({...editTxData,vat:e.target.value})} placeholder={`${((parseFloat(editTxData.commission)||0)*0.07).toFixed(4)}`}
+                        style={{width:"100%",background:"#1a1d2e",border:"1px solid #4a5568",borderRadius:5,padding:"7px 10px",color:"#e2e8f0",fontSize:13,boxSizing:"border-box"}}/>
+                    </div>
                   </div>
                 )}
               </>
@@ -1439,9 +1445,10 @@ export default function App() {
                         style={{width:"100%",background:"#1a1d2e",border:"1px solid #4a5568",borderRadius:5,padding:"7px 10px",color:"#e2e8f0",fontSize:13,boxSizing:"border-box"}}/>
                     </div>
                   ))}
-                  <div style={{fontSize:11,color:"#718096",display:"flex",justifyContent:"space-between",paddingTop:6,borderTop:"1px solid #2d3748"}}>
-                    <span>VAT 7% (จาก Commission)</span>
-                    <span style={{color:"#e2e8f0"}}>${fees.vat.toFixed(2)}</span>
+                  <div style={{marginBottom:8,paddingTop:6,borderTop:"1px solid #2d3748"}}>
+                    <div style={{fontSize:11,color:"#718096",marginBottom:3}}>VAT 7% ($) <span style={{color:"#4a5568"}}>(ปล่อยว่าง = คำนวณอัตโนมัติจาก Commission × 7% = ${((parseFloat(sellCommission)||0)*0.07).toFixed(2)})</span></div>
+                    <input type="number" value={sellVat} onChange={e=>setSellVat(e.target.value)} placeholder={`${((parseFloat(sellCommission)||0)*0.07).toFixed(4)}`}
+                      style={{width:"100%",background:"#1a1d2e",border:"1px solid #4a5568",borderRadius:5,padding:"7px 10px",color:"#e2e8f0",fontSize:13,boxSizing:"border-box"}}/>
                   </div>
                   <div style={{fontSize:12,fontWeight:700,display:"flex",justifyContent:"space-between",marginTop:4}}>
                     <span style={{color:"#a0aec0"}}>รวมค่าธรรมเนียม</span>
@@ -1486,10 +1493,9 @@ export default function App() {
       {splitModalId !== null && (() => {
         const h = effectiveHoldings.find((x:any)=>x.id===splitModalId);
         if (!h) return null;
-        const parts = splitRatio.split(":").map(s=>parseFloat(s.trim()));
-        const ratio = parts.length===2 ? parts[0]/parts[1] : parseFloat(splitRatio);
-        const previewShares = ratio>0 ? h.shares*ratio : null;
-        const previewCost = ratio>0 ? h.avgCost/ratio : null;
+        const newCount = parseFloat(splitNewShares);
+        const valid = newCount > 0 && newCount !== h.shares;
+        const previewCost = valid ? (h.avgCost * h.shares) / newCount : null;
         return (
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={()=>setSplitModalId(null)}>
             <div style={{background:"#1a1d2e",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid #2d3748"}} onClick={e=>e.stopPropagation()}>
@@ -1497,17 +1503,17 @@ export default function App() {
               <div style={{fontSize:12,color:"#718096",marginBottom:16}}>ปัจจุบัน {h.shares.toFixed(7)} หุ้น | ทุน ${h.avgCost.toFixed(4)}/หุ้น</div>
 
               <div style={{marginBottom:16}}>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>Split Ratio (เช่น 4:1 = แตก 4 เท่า, 1:2 = reverse split รวม 2 หุ้นเป็น 1)</div>
-                <input value={splitRatio} onChange={e=>setSplitRatio(e.target.value)} placeholder="4:1" autoFocus
+                <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>จำนวนหุ้นใหม่ (หลังแตกพาร์)</div>
+                <input type="number" value={splitNewShares} onChange={e=>setSplitNewShares(e.target.value)} placeholder={`เช่น ${(h.shares*4).toFixed(4)}`} autoFocus
                   style={{width:"100%",background:"#0f1117",border:"1px solid #4a5568",borderRadius:6,padding:"10px 12px",color:"#e2e8f0",fontSize:14}}/>
               </div>
 
-              {ratio>0 && (
+              {valid && (
                 <div style={{background:"#0f1117",borderRadius:8,padding:12,marginBottom:16}}>
                   <div style={{fontSize:11,color:"#718096",marginBottom:6}}>ผลลัพธ์หลังแตกพาร์</div>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}>
                     <span style={{color:"#a0aec0"}}>จำนวนหุ้น</span>
-                    <span style={{color:"#e2e8f0"}}>{h.shares.toFixed(4)} → <b style={{color:"#7ee8a2"}}>{previewShares?.toFixed(4)}</b></span>
+                    <span style={{color:"#e2e8f0"}}>{h.shares.toFixed(4)} → <b style={{color:"#7ee8a2"}}>{newCount.toFixed(4)}</b></span>
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
                     <span style={{color:"#a0aec0"}}>ต้นทุน/หุ้น</span>
@@ -1517,7 +1523,7 @@ export default function App() {
               )}
 
               <div style={{display:"flex",gap:8}}>
-                <button onClick={confirmSplit} disabled={!ratio||ratio<=0} style={{...btn("#1a3a4a","#67e8f9"),flex:1,padding:"10px",opacity:(!ratio||ratio<=0)?0.5:1}}>✅ ยืนยันแตกพาร์</button>
+                <button onClick={confirmSplit} disabled={!valid} style={{...btn("#1a3a4a","#67e8f9"),flex:1,padding:"10px",opacity:valid?1:0.5}}>✅ ยืนยันแตกพาร์</button>
                 <button onClick={()=>setSplitModalId(null)} style={{...btn("#2d3748","#a0aec0"),flex:1,padding:"10px"}}>ยกเลิก</button>
               </div>
             </div>
