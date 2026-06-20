@@ -81,9 +81,11 @@ function DateTimePicker24h({ value, onChange }: { value: string; onChange: (iso:
   const [viewYear, setViewYear] = useState(y ? parseInt(y) : new Date().getFullYear());
   const [viewMonth, setViewMonth] = useState(m ? parseInt(m)-1 : new Date().getMonth()); // 0-indexed
   const [textVal, setTextVal] = useState(d && m && y ? `${d}/${m}/${y} ${hh.padStart(2,"0")}:${mm.padStart(2,"0")}` : "");
+  const [inputFocused, setInputFocused] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (inputFocused) return; // don't override while user is typing
     if (d && m && y) setTextVal(`${d}/${m}/${y} ${hh.padStart(2,"0")}:${mm.padStart(2,"0")}`);
     else setTextVal("");
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -136,6 +138,11 @@ function DateTimePicker24h({ value, onChange }: { value: string; onChange: (iso:
           type="text"
           value={textVal}
           onChange={e=>handleTextChange(e.target.value)}
+          onFocus={()=>setInputFocused(true)}
+          onBlur={()=>{
+            setInputFocused(false);
+            if (d && m && y) setTextVal(`${d}/${m}/${y} ${hh.padStart(2,"0")}:${mm.padStart(2,"0")}`);
+          }}
           placeholder="DD/MM/YYYY HH:mm"
           style={{
             flex:1, background:"#0f1117", border:"1px solid #4a5568", borderRadius:6,
