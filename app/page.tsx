@@ -861,15 +861,13 @@ export default function App() {
       </div>
 
       {/* Mobile hamburger FAB */}
-      <button className="hamburger-fab" onClick={()=>setSidebarOpen(o=>!o)} aria-label="เมนู">
-        {sidebarOpen?"✕":"☰"}
-      </button>
-      {sidebarOpen&&<div className="sidebar-overlay" onClick={()=>setSidebarOpen(false)}/>}
+      {tab==="portfolio"&&<button className="hamburger-fab" onClick={()=>setSidebarOpen(o=>!o)} aria-label="เมนู">{sidebarOpen?"✕":"☰"}</button>}
+      {tab==="portfolio"&&sidebarOpen&&<div className="sidebar-overlay" onClick={()=>setSidebarOpen(false)}/>}
 
       <div className="main-layout" style={{maxWidth:1320,margin:"0 auto"}}>
 
         {/* ── Right action sidebar ── */}
-        <div className={`action-sidebar${sidebarOpen?" open":""}`}>
+        <div className={`action-sidebar${sidebarOpen?" open":""}${tab!=="portfolio"?" hidden":""}`}>
           <button className="sidebar-close-btn" onClick={()=>setSidebarOpen(false)}>✕</button>
           <div className="sidebar-section-label">ข้อมูล</div>
           <button onClick={()=>{refreshPrices();setSidebarOpen(false);}} disabled={refreshing||!holdings.length} style={btn("#1e3a5f","#63b3ed",{opacity:refreshing?0.6:1})}>{refreshing?"⏳ ดึงราคา...":"🔄 อัพเดทราคา"}</button>
