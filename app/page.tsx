@@ -1197,7 +1197,7 @@ export default function App() {
                         ) : (
                           <>
                             <div style={{fontSize:13,color:"#e2e8f0"}}>{t.qty?.toFixed(7)} หุ้น @ ${t.price?.toFixed(4)}</div>
-                            {t.kind==="sell" && t.proceeds!=null && <div style={{fontSize:11,color:"#67e8f9"}}>ได้รับ ${t.proceeds.toFixed(2)}</div>}
+                            {t.kind==="sell" && t.proceeds!=null && <div style={{fontSize:11,color:"#67e8f9"}}>ได้รับ ${(t.proceeds-(t.fees||0)).toFixed(2)}</div>}
                             {t.kind==="sell" && (
                               <div>
                                 <div style={{fontSize:12,fontWeight:700,color:pc(t.gain||0)}}>
