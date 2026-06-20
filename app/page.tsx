@@ -1202,7 +1202,7 @@ export default function App() {
                             <span style={{fontWeight:700,color:"#7ee8a2",fontSize:13}}>{t.symbol}</span>
                             <span style={{fontSize:11,color:kindColor(t.kind),fontWeight:600}}>{kindLabel(t.kind)}</span>
                           </div>
-                          <div style={{fontSize:11,color:"#718096"}}>{new Date(t.date).toLocaleDateString("th-TH",{year:"numeric",month:"short",day:"numeric"})} {new Date(t.date).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit"})}</div>
+                          <div style={{fontSize:11,color:"#718096"}}>{new Date(t.date).toLocaleDateString("en-GB",{year:"numeric",month:"short",day:"numeric"})} {new Date(t.date).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false})}</div>
                         </div>
                       </div>
                       <div style={{textAlign:"right"}}>
