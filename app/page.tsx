@@ -606,7 +606,7 @@ export default function App() {
 
     const updated = holdings.map((x:any) => x.id===splitModalId
       ? { ...x, shares: newSharesCount, avgCost: newAvgCost, buyHistory: adjustedBuyHistory, realizedHistory: adjustedRealizedHistory,
-          splitHistory: [...(x.splitHistory||[]), { date: new Date().toISOString(), ratio: newSharesCount.toFixed(7) }] }
+          splitHistory: [...(x.splitHistory||[]), { date: new Date().toISOString(), ratio: newSharesCount.toFixed(7), multiplier: ratio }] }
       : x
     );
     setAndSave(updated);
@@ -680,7 +680,16 @@ export default function App() {
       let newH = { ...h };
       if (kind === "buy") newH.buyHistory = (h.buyHistory||[]).filter((_:any,i:number)=>i!==index);
       if (kind === "sell") newH.realizedHistory = (h.realizedHistory||[]).filter((_:any,i:number)=>i!==index);
-      if (kind === "split") newH.splitHistory = (h.splitHistory||[]).filter((_:any,i:number)=>i!==index);
+      if (kind === "split") {
+        const splitRecord = (h.splitHistory||[])[index];
+        const mult = splitRecord?.multiplier || 1;
+        const inv = 1 / mult;
+        newH.splitHistory = (h.splitHistory||[]).filter((_:any,i:number)=>i!==index);
+        newH.buyHistory = (h.buyHistory||[]).map((b:any) => ({ ...b, qty: b.qty*inv, price: b.price/inv }));
+        newH.realizedHistory = (h.realizedHistory||[]).map((r:any) => ({
+          ...r, qty: r.qty*inv, sellPrice: r.sellPrice/inv, avgCostAtSale: r.avgCostAtSale/inv
+        }));
+      }
 
       // If all buy/sell history removed, freeze current computed values into stored fields
       // so the holding doesn't disappear/reset to 0 when displayed via fallback
@@ -769,18 +778,17 @@ export default function App() {
         const price = parseFloat(priceStr) || 0;
         const pending = pendingSplitOut[symbol];
         if (price <= 0 && pending) {
-          // Pair with buffered -: compute ratio → apply split
+          // Pair with buffered -: ratio derived from eff.shares so result equals + qty exactly
           delete pendingSplitOut[symbol];
-          const ratio = qty / pending.qty;
           const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
           if (idx>=0) {
             const h = updatedHoldings[idx];
             const eff = computeFromHistory(h);
-            const newSharesCount = eff.shares * ratio;
+            const ratio = qty / eff.shares;
             const adjBuy = (h.buyHistory||[]).map((b:any)=>({...b,qty:b.qty*ratio,price:b.price/ratio}));
             const adjSell = (h.realizedHistory||[]).map((r:any)=>({...r,qty:r.qty*ratio,sellPrice:r.sellPrice/ratio,avgCostAtSale:r.avgCostAtSale/ratio}));
             updatedHoldings[idx] = { ...h, buyHistory:adjBuy, realizedHistory:adjSell,
-              splitHistory:[...(h.splitHistory||[]),{date:iso,ratio:newSharesCount.toFixed(7)}] };
+              splitHistory:[...(h.splitHistory||[]),{date:iso,ratio:qty.toFixed(7),multiplier:ratio}] };
           }
           splitCount++;
         } else {
@@ -806,7 +814,7 @@ export default function App() {
           ...r, qty: r.qty*ratio, sellPrice: r.sellPrice/ratio, avgCostAtSale: r.avgCostAtSale/ratio
         }));
         updatedHoldings[idx] = { ...h, buyHistory: adjustedBuyHistory, realizedHistory: adjustedRealizedHistory,
-          splitHistory: [...(h.splitHistory||[]), { date: iso, ratio: newSharesCount.toFixed(7) }] };
+          splitHistory: [...(h.splitHistory||[]), { date: iso, ratio: newSharesCount.toFixed(7), multiplier: ratio }] };
         splitCount++;
       } else { skipCount++; }
     }
