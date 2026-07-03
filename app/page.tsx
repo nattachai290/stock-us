@@ -621,16 +621,22 @@ export default function App() {
   const openEditTx = (symbol:string, kind:string, index:number) => {
     const h = holdings.find((x:any)=>x.symbol===symbol);
     if (!h) return;
+    // Convert UTC ISO to local datetime string for the picker
+    const toLocalISO = (iso: string) => {
+      const d = new Date(iso);
+      const p = (n:number) => String(n).padStart(2,"0");
+      return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+    };
     if (kind === "buy") {
       const tx = (h.buyHistory||[])[index];
-      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty: String(tx.qty), price: String(tx.price), commission:"", vat:"", secFee:"", tafFee:"", catFee:"", ratio:"" });
+      setEditTxData({ symbol, kind, index, date: toLocalISO(tx.date), qty: String(tx.qty), price: String(tx.price), commission:"", vat:"", secFee:"", tafFee:"", catFee:"", ratio:"" });
     } else if (kind === "sell") {
       const tx = (h.realizedHistory||[])[index];
       const fd = tx.feeDetail || {};
-      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty: String(tx.qty), price: String(tx.sellPrice), commission: String(fd.commission||0), vat: String(fd.vat||""), secFee: String(fd.secFee||0), tafFee: String(fd.tafFee||0), catFee: String(fd.catFee||0), ratio:"" });
+      setEditTxData({ symbol, kind, index, date: toLocalISO(tx.date), qty: String(tx.qty), price: String(tx.sellPrice), commission: String(fd.commission||0), vat: String(fd.vat||""), secFee: String(fd.secFee||0), tafFee: String(fd.tafFee||0), catFee: String(fd.catFee||0), ratio:"" });
     } else if (kind === "split") {
       const tx = (h.splitHistory||[])[index];
-      setEditTxData({ symbol, kind, index, date: tx.date.slice(0,16), qty:"", price:"", commission:"", vat:"", secFee:"", tafFee:"", catFee:"", ratio: tx.ratio });
+      setEditTxData({ symbol, kind, index, date: toLocalISO(tx.date), qty:"", price:"", commission:"", vat:"", secFee:"", tafFee:"", catFee:"", ratio: tx.ratio });
     }
   };
 
