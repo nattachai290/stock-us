@@ -593,9 +593,9 @@ export default function App() {
     const h = holdings.find((x:any)=>x.id===splitModalId);
     if (!h) return;
     const eff = computeFromHistory(h);
-    const ratio = parseFloat(splitRatio);
-    if (!ratio || ratio <= 0) { alert("กรอกอัตราส่วนให้ถูกต้อง"); return; }
-    const newSharesCount = eff.shares * ratio;
+    const newSharesCount = parseFloat(splitRatio);
+    if (!newSharesCount || newSharesCount <= 0 || newSharesCount === eff.shares) { alert("กรอกจำนวนหุ้นใหม่ให้ถูกต้อง"); return; }
+    const ratio = newSharesCount / eff.shares;
     const newAvgCost = eff.avgCost / ratio;
 
     // Scale ALL historical transactions so computeFromHistory stays consistent after split
@@ -715,7 +715,7 @@ export default function App() {
       const parts = line.split(",").map((s:string)=>s.trim());
       if (parts.length < 4) { skipCount++; continue; }
       const [dateStr, side, rawSymbol, qtyStr] = parts;
-      const priceStr = parts[4] ?? "1";
+      const priceStr = parts[4] ?? "";
       // BRK.B → BRK-B (replace dots in ticker with dash)
       const symbol = rawSymbol.toUpperCase().replace(/\./g,"-");
       // Support "DD/MM/YYYY" or "DD/MM/YYYY HH:MM" or "DD/MM/YYYY HH:MM:SS"
@@ -1654,35 +1654,19 @@ export default function App() {
       {splitModalId !== null && (() => {
         const h = effectiveHoldings.find((x:any)=>x.id===splitModalId);
         if (!h) return null;
-        const ratio = parseFloat(splitRatio);
-        const valid = ratio > 0 && ratio !== 1;
-        const newCount = valid ? h.shares * ratio : null;
-        const previewCost = valid ? h.avgCost / ratio : null;
+        const newShares = parseFloat(splitRatio);
+        const valid = newShares > 0 && newShares !== h.shares;
         return (
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={()=>setSplitModalId(null)}>
             <div style={{background:"#1a1d2e",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid #2d3748"}} onClick={e=>e.stopPropagation()}>
               <div style={{fontSize:16,fontWeight:700,color:"#67e8f9",marginBottom:4}}>🔀 แตกพาร์ {h.symbol}</div>
-              <div style={{fontSize:12,color:"#718096",marginBottom:16}}>ปัจจุบัน {h.shares.toFixed(7)} หุ้น | ทุน ${h.avgCost.toFixed(4)}/หุ้น</div>
+              <div style={{fontSize:12,color:"#718096",marginBottom:16}}>ปัจจุบัน {h.shares.toFixed(7)} หุ้น</div>
 
-              <div style={{marginBottom:12}}>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:6}}>อัตราส่วนแตกพาร์ (เช่น 4 = 4:1 split)</div>
-                <input type="number" value={splitRatio} onChange={e=>setSplitRatio(e.target.value)} placeholder="เช่น 4" min="0" step="any" autoFocus
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:12,color:"#a0aec0",marginBottom:6}}>จำนวนหุ้นหลังแตกพาร์</div>
+                <input type="number" value={splitRatio} onChange={e=>setSplitRatio(e.target.value)} placeholder={`เช่น ${(h.shares*4).toFixed(7)}`} min="0" step="any" autoFocus
                   style={{width:"100%",background:"#0f1117",border:"1px solid #4a5568",borderRadius:6,padding:"10px 12px",color:"#e2e8f0",fontSize:14}}/>
               </div>
-
-              {valid && (
-                <div style={{background:"#0f1117",borderRadius:8,padding:12,marginBottom:16}}>
-                  <div style={{fontSize:11,color:"#718096",marginBottom:6}}>ผลลัพธ์หลังแตกพาร์</div>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}>
-                    <span style={{color:"#a0aec0"}}>จำนวนหุ้น</span>
-                    <span style={{color:"#e2e8f0"}}>{h.shares.toFixed(4)} → <b style={{color:"#7ee8a2"}}>{newCount!.toFixed(4)}</b></span>
-                  </div>
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
-                    <span style={{color:"#a0aec0"}}>ต้นทุน/หุ้น</span>
-                    <span style={{color:"#e2e8f0"}}>${h.avgCost.toFixed(4)} → <b style={{color:"#7ee8a2"}}>${previewCost!.toFixed(4)}</b></span>
-                  </div>
-                </div>
-              )}
 
               <div style={{display:"flex",gap:8}}>
                 <button onClick={confirmSplit} disabled={!valid} style={{...btn("#1a3a4a","#67e8f9"),flex:1,padding:"10px",opacity:valid?1:0.5}}>✅ ยืนยันแตกพาร์</button>
