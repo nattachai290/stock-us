@@ -1,24 +1,64 @@
 import { NextRequest } from "next/server";
 
+const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+// Module-level cache — persists across warm Lambda invocations
+let crumbCache: { crumb: string; cookie: string; expires: number } | null = null;
+
+async function fetchCrumb(): Promise<{ crumb: string; cookie: string }> {
+  if (crumbCache && crumbCache.expires > Date.now()) return crumbCache;
+
+  // 1. Hit Yahoo Finance homepage to get session cookies
+  const homeRes = await fetch("https://finance.yahoo.com/", {
+    headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", "Accept": "text/html" },
+    cache: "no-store",
+    redirect: "follow",
+  });
+
+  const rawCookie = homeRes.headers.get("set-cookie") ?? "";
+  // Keep only name=value pairs (strip Secure/HttpOnly/Path/etc.)
+  const cookieStr = rawCookie.split(",")
+    .map(c => c.split(";")[0].trim())
+    .filter(Boolean)
+    .join("; ");
+
+  // 2. Fetch the crumb token
+  const crumbRes = await fetch("https://query1.finance.yahoo.com/v1/test/getcrumb", {
+    headers: { "User-Agent": UA, "Cookie": cookieStr },
+    cache: "no-store",
+  });
+
+  const crumb = (await crumbRes.text()).trim();
+  if (!crumb || crumb.startsWith("<") || crumb.length > 60) {
+    throw new Error(`Cannot get crumb (status ${crumbRes.status}): ${crumb.slice(0, 80)}`);
+  }
+
+  crumbCache = { crumb, cookie: cookieStr, expires: Date.now() + 25 * 60 * 1000 }; // 25 min TTL
+  return crumbCache;
+}
+
 export async function GET(request: NextRequest) {
-  const symbols = request.nextUrl.searchParams.get("symbols") || "";
+  const symbols = request.nextUrl.searchParams.get("symbols") ?? "";
   if (!symbols) return Response.json({ results: [] });
 
   const symList = symbols.split(",").map(s => s.trim()).filter(Boolean);
 
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/quote?symbols=${symList.join(",")}&fields=regularMarketPrice,regularMarketChangePercent`;
+    const { crumb, cookie } = await fetchCrumb();
+
+    const url = `https://query1.finance.yahoo.com/v8/finance/quote?symbols=${symList.join(",")}&crumb=${encodeURIComponent(crumb)}&fields=regularMarketPrice,regularMarketChangePercent`;
     const res = await fetch(url, {
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": UA,
+        "Cookie": cookie,
         "Accept": "application/json",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://finance.yahoo.com/",
       },
       cache: "no-store",
     });
 
     if (!res.ok) {
+      crumbCache = null; // force re-auth next time
       const body = await res.text().catch(() => "");
       return Response.json(
         { results: [], error: `Yahoo ${res.status}: ${body.slice(0, 200)}` },
@@ -27,11 +67,11 @@ export async function GET(request: NextRequest) {
     }
 
     const data = await res.json();
-    const quotes = data?.quoteResponse?.result || [];
+    const quotes = data?.quoteResponse?.result ?? [];
 
     if (!quotes.length && data?.quoteResponse?.error) {
       return Response.json(
-        { results: [], error: `Yahoo error: ${JSON.stringify(data.quoteResponse.error)}` },
+        { results: [], error: `Yahoo: ${JSON.stringify(data.quoteResponse.error)}` },
         { status: 502 }
       );
     }
@@ -48,6 +88,7 @@ export async function GET(request: NextRequest) {
 
     return Response.json({ results });
   } catch (err: any) {
+    crumbCache = null;
     return Response.json({ results: [], error: err.message }, { status: 502 });
   }
 }
