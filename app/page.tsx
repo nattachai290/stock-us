@@ -715,7 +715,7 @@ export default function App() {
       const parts = line.split(",").map((s:string)=>s.trim());
       if (parts.length < 4) { skipCount++; continue; }
       const [dateStr, side, rawSymbol, qtyStr] = parts;
-      const priceStr = parts[4] ?? "1";
+      const priceStr = parts[4] ?? "";
       // BRK.B → BRK-B (replace dots in ticker with dash)
       const symbol = rawSymbol.toUpperCase().replace(/\./g,"-");
       // Support "DD/MM/YYYY" or "DD/MM/YYYY HH:MM" or "DD/MM/YYYY HH:MM:SS"
