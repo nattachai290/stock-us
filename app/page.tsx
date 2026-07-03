@@ -769,18 +769,17 @@ export default function App() {
         const price = parseFloat(priceStr) || 0;
         const pending = pendingSplitOut[symbol];
         if (price <= 0 && pending) {
-          // Pair with buffered -: compute ratio → apply split
+          // Pair with buffered -: ratio derived from eff.shares so result equals + qty exactly
           delete pendingSplitOut[symbol];
-          const ratio = qty / pending.qty;
           const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
           if (idx>=0) {
             const h = updatedHoldings[idx];
             const eff = computeFromHistory(h);
-            const newSharesCount = eff.shares * ratio;
+            const ratio = qty / eff.shares;
             const adjBuy = (h.buyHistory||[]).map((b:any)=>({...b,qty:b.qty*ratio,price:b.price/ratio}));
             const adjSell = (h.realizedHistory||[]).map((r:any)=>({...r,qty:r.qty*ratio,sellPrice:r.sellPrice/ratio,avgCostAtSale:r.avgCostAtSale/ratio}));
             updatedHoldings[idx] = { ...h, buyHistory:adjBuy, realizedHistory:adjSell,
-              splitHistory:[...(h.splitHistory||[]),{date:iso,ratio:newSharesCount.toFixed(7)}] };
+              splitHistory:[...(h.splitHistory||[]),{date:iso,ratio:qty.toFixed(7)}] };
           }
           splitCount++;
         } else {
