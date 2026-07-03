@@ -710,6 +710,7 @@ export default function App() {
     if (!dataLines.length) { alert("ไม่พบข้อมูล"); return; }
     let updatedHoldings = holdings.map((h:any)=>({...h}));
     let buyCount=0, sellCount=0, splitCount=0, skipCount=0;
+    const pendingSplitOut: Record<string,{qty:number,iso:string}> = {};
     for (const line of dataLines) {
       const parts = line.split(",").map((s:string)=>s.trim());
       if (parts.length < 4) { skipCount++; continue; }
@@ -749,24 +750,50 @@ export default function App() {
         const sellEntry = { date:iso, qty, sellPrice:price, avgCostAtSale, proceeds, grossGain, fees:0, feeDetail:{commission:0,vat:0,secFee:0,tafFee:0,catFee:0}, gain:grossGain, gainPct:avgCostAtSale>0?(grossGain/(avgCostAtSale*qty)*100):0 };
         updatedHoldings[idx] = { ...updatedHoldings[idx], realizedHistory:[...(updatedHoldings[idx].realizedHistory||[]),sellEntry] };
         sellCount++;
+      } else if (sideUp==="-" || sideUp==="SUB") {
+        const price = parseFloat(priceStr) || 0;
+        if (price <= 0) {
+          // No price → buffer as split-out, pair with incoming +
+          pendingSplitOut[symbol] = { qty, iso };
+        } else {
+          // Has price → regular transfer-out at avgCost (zero P&L)
+          const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
+          if (idx<0) { skipCount++; continue; }
+          const eff = computeFromHistory(updatedHoldings[idx]);
+          const avgCostAtSale = eff.avgCost;
+          const sellEntry = { date:iso, qty, sellPrice:avgCostAtSale, avgCostAtSale, proceeds:qty*avgCostAtSale, grossGain:0, fees:0, feeDetail:{commission:0,vat:0,secFee:0,tafFee:0,catFee:0}, gain:0, gainPct:0 };
+          updatedHoldings[idx] = { ...updatedHoldings[idx], realizedHistory:[...(updatedHoldings[idx].realizedHistory||[]),sellEntry] };
+          sellCount++;
+        }
       } else if (sideUp==="+" || sideUp==="ADD") {
         const price = parseFloat(priceStr) || 0;
-        const buyEntry = { date:iso, qty, price, type:"adjustment" };
-        const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
-        if (idx>=0) {
-          updatedHoldings[idx] = { ...updatedHoldings[idx], buyHistory:[...(updatedHoldings[idx].buyHistory||[]),buyEntry] };
+        const pending = pendingSplitOut[symbol];
+        if (price <= 0 && pending) {
+          // Pair with buffered -: compute ratio → apply split
+          delete pendingSplitOut[symbol];
+          const ratio = qty / pending.qty;
+          const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
+          if (idx>=0) {
+            const h = updatedHoldings[idx];
+            const eff = computeFromHistory(h);
+            const newSharesCount = eff.shares * ratio;
+            const adjBuy = (h.buyHistory||[]).map((b:any)=>({...b,qty:b.qty*ratio,price:b.price/ratio}));
+            const adjSell = (h.realizedHistory||[]).map((r:any)=>({...r,qty:r.qty*ratio,sellPrice:r.sellPrice/ratio,avgCostAtSale:r.avgCostAtSale/ratio}));
+            updatedHoldings[idx] = { ...h, buyHistory:adjBuy, realizedHistory:adjSell,
+              splitHistory:[...(h.splitHistory||[]),{date:iso,ratio:newSharesCount.toFixed(7)}] };
+          }
+          splitCount++;
         } else {
-          updatedHoldings.push({ id:Date.now()+Math.random(), symbol, shares:0, avgCost:0, currentPrice:0, sector:"", note:"", changePct:null, targetPct:0, realizedHistory:[], splitHistory:[], buyHistory:[buyEntry] });
+          // Has price or no pending - → regular add at given price
+          const buyEntry = { date:iso, qty, price, type:"adjustment" };
+          const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
+          if (idx>=0) {
+            updatedHoldings[idx] = { ...updatedHoldings[idx], buyHistory:[...(updatedHoldings[idx].buyHistory||[]),buyEntry] };
+          } else {
+            updatedHoldings.push({ id:Date.now()+Math.random(), symbol, shares:0, avgCost:0, currentPrice:0, sector:"", note:"", changePct:null, targetPct:0, realizedHistory:[], splitHistory:[], buyHistory:[buyEntry] });
+          }
+          buyCount++;
         }
-        buyCount++;
-      } else if (sideUp==="-" || sideUp==="SUB") {
-        const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
-        if (idx<0) { skipCount++; continue; }
-        const eff = computeFromHistory(updatedHoldings[idx]);
-        const avgCostAtSale = eff.avgCost;
-        const sellEntry = { date:iso, qty, sellPrice:avgCostAtSale, avgCostAtSale, proceeds:qty*avgCostAtSale, grossGain:0, fees:0, feeDetail:{commission:0,vat:0,secFee:0,tafFee:0,catFee:0}, gain:0, gainPct:0 };
-        updatedHoldings[idx] = { ...updatedHoldings[idx], realizedHistory:[...(updatedHoldings[idx].realizedHistory||[]),sellEntry] };
-        sellCount++;
       } else if (sideUp==="SPLIT") {
         const ratio = qty; // column 4 = multiplier (e.g. 4 for 4:1 split)
         const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
