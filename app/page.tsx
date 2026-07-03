@@ -1213,7 +1213,17 @@ export default function App() {
                   {allSymbols.map(s=><option key={s} value={s}>{s}</option>)}
                 </select>
                 {txFilterSymbol!=="ALL" && <button onClick={()=>setTxFilterSymbol("ALL")} style={{fontSize:12,color:"#fc8181",background:"none",border:"none",cursor:"pointer"}}>✕ ล้าง</button>}
-                <button onClick={()=>setShowTxImport(v=>!v)} style={btn("#1a2a3a","#93c5fd",{fontSize:12,padding:"6px 12px",marginLeft:"auto"})}>📥 Import ประวัติ CSV</button>
+                <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+                  <button onClick={()=>setShowTxImport(v=>!v)} style={btn("#1a2a3a","#93c5fd",{fontSize:12,padding:"6px 12px"})}>📥 Import ประวัติ CSV</button>
+                  <button onClick={()=>{
+                    if(!window.confirm("ลบประวัติ transaction ทั้งหมด?\n(จำนวนหุ้น/ต้นทุนปัจจุบันจะถูกบันทึกไว้ก่อนลบ)")) return;
+                    const updated = holdings.map((h:any)=>{
+                      const eff = computeFromHistory(h);
+                      return { ...h, shares: eff.shares, avgCost: eff.avgCost, buyHistory:[], realizedHistory:[], splitHistory:[] };
+                    });
+                    setAndSave(updated); msg("ลบประวัติทั้งหมดแล้ว ✓");
+                  }} style={btn("#4a1515","#fc8181",{fontSize:12,padding:"6px 12px"})}>🗑️ Clear ประวัติ</button>
+                </div>
               </div>
 
               {/* TX CSV Import panel */}
