@@ -482,7 +482,7 @@ export default function App() {
       const BATCH = 20; const errors: string[] = []; let updated = [...holdings];
       for (let i = 0; i < holdings.length; i += BATCH) {
         const syms = holdings.slice(i, i+BATCH).map((h:any)=>h.symbol).join(",");
-        const res = await fetch(`${PROXY_URL}?symbols=${syms}`);
+        const res = await fetch(`${PROXY_URL}?symbols=${syms}&t=${Date.now()}`, { cache: "no-store" });
         const data = await res.json();
         data.results?.forEach((r:any) => {
           if (r.error) errors.push(`${r.symbol}: ${r.error}`);
