@@ -593,27 +593,24 @@ export default function App() {
     const h = holdings.find((x:any)=>x.id===splitModalId);
     if (!h) return;
     const eff = computeFromHistory(h);
-    const newSharesCount = parseFloat(splitNewShares);
-    if (!newSharesCount || newSharesCount <= 0) { alert("กรอกจำนวนหุ้นใหม่ให้ถูกต้อง"); return; }
-    const ratio = newSharesCount / eff.shares;
-    const recordedRatio = `${newSharesCount.toFixed(7)}`;
-
+    const ratio = parseFloat(splitRatio);
+    if (!ratio || ratio <= 0) { alert("กรอกอัตราส่วนให้ถูกต้อง"); return; }
+    const newSharesCount = eff.shares * ratio;
     const newAvgCost = eff.avgCost / ratio;
 
     // Scale ALL historical transactions so computeFromHistory stays consistent after split
     const adjustedBuyHistory = (h.buyHistory||[]).map((b:any) => ({ ...b, qty: b.qty*ratio, price: b.price/ratio }));
     const adjustedRealizedHistory = (h.realizedHistory||[]).map((r:any) => ({
       ...r, qty: r.qty*ratio, sellPrice: r.sellPrice/ratio, avgCostAtSale: r.avgCostAtSale/ratio
-      // gain/gainPct/proceeds/grossGain stay the same — $ amounts don't change in a split
     }));
 
     const updated = holdings.map((x:any) => x.id===splitModalId
       ? { ...x, shares: newSharesCount, avgCost: newAvgCost, buyHistory: adjustedBuyHistory, realizedHistory: adjustedRealizedHistory,
-          splitHistory: [...(x.splitHistory||[]), { date: new Date().toISOString(), ratio: recordedRatio }] }
+          splitHistory: [...(x.splitHistory||[]), { date: new Date().toISOString(), ratio: newSharesCount.toFixed(7) }] }
       : x
     );
     setAndSave(updated);
-    setSplitModalId(null); setSplitNewShares("");
+    setSplitModalId(null); setSplitRatio("");
     msg(`แตกพาร์ ${h.symbol} แล้ว: ${eff.shares.toFixed(4)} → ${newSharesCount.toFixed(4)} หุ้น ✓`);
   };
 
@@ -712,11 +709,12 @@ export default function App() {
     const dataLines = lines.filter(l=>!/^วันที่|^date/i.test(l));
     if (!dataLines.length) { alert("ไม่พบข้อมูล"); return; }
     let updatedHoldings = holdings.map((h:any)=>({...h}));
-    let buyCount=0, sellCount=0, skipCount=0;
+    let buyCount=0, sellCount=0, splitCount=0, skipCount=0;
     for (const line of dataLines) {
       const parts = line.split(",").map((s:string)=>s.trim());
-      if (parts.length < 5) { skipCount++; continue; }
-      const [dateStr, side, rawSymbol, qtyStr, priceStr] = parts;
+      if (parts.length < 4) { skipCount++; continue; }
+      const [dateStr, side, rawSymbol, qtyStr] = parts;
+      const priceStr = parts[4] ?? "1";
       // BRK.B → BRK-B (replace dots in ticker with dash)
       const symbol = rawSymbol.toUpperCase().replace(/\./g,"-");
       // Support "DD/MM/YYYY" or "DD/MM/YYYY HH:MM" or "DD/MM/YYYY HH:MM:SS"
@@ -725,10 +723,12 @@ export default function App() {
       if (!dd||!mm||!yyyy||yyyy.length!==4) { skipCount++; continue; }
       const timeStr = timePart ? timePart.slice(0,5) : "12:00";
       const iso = `${yyyy}-${mm.padStart(2,"0")}-${dd.padStart(2,"0")}T${timeStr}:00`;
-      const qty = parseFloat(qtyStr); const price = parseFloat(priceStr);
-      if (!qty||qty<=0||!price||price<=0) { skipCount++; continue; }
-      const sideUp = side.toUpperCase().charAt(0);
+      const qty = parseFloat(qtyStr);
+      if (!qty||qty<=0) { skipCount++; continue; }
+      const sideUp = side.toUpperCase();
       if (sideUp==="B") {
+        const price = parseFloat(priceStr);
+        if (!price||price<=0) { skipCount++; continue; }
         const buyEntry = { date:iso, qty, price, type:"import" };
         const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
         if (idx>=0) {
@@ -738,6 +738,8 @@ export default function App() {
         }
         buyCount++;
       } else if (sideUp==="S") {
+        const price = parseFloat(priceStr);
+        if (!price||price<=0) { skipCount++; continue; }
         const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
         if (idx<0) { skipCount++; continue; }
         const eff = computeFromHistory(updatedHoldings[idx]);
@@ -747,11 +749,43 @@ export default function App() {
         const sellEntry = { date:iso, qty, sellPrice:price, avgCostAtSale, proceeds, grossGain, fees:0, feeDetail:{commission:0,vat:0,secFee:0,tafFee:0,catFee:0}, gain:grossGain, gainPct:avgCostAtSale>0?(grossGain/(avgCostAtSale*qty)*100):0 };
         updatedHoldings[idx] = { ...updatedHoldings[idx], realizedHistory:[...(updatedHoldings[idx].realizedHistory||[]),sellEntry] };
         sellCount++;
+      } else if (sideUp==="+" || sideUp==="ADD") {
+        const price = parseFloat(priceStr) || 0;
+        const buyEntry = { date:iso, qty, price, type:"adjustment" };
+        const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
+        if (idx>=0) {
+          updatedHoldings[idx] = { ...updatedHoldings[idx], buyHistory:[...(updatedHoldings[idx].buyHistory||[]),buyEntry] };
+        } else {
+          updatedHoldings.push({ id:Date.now()+Math.random(), symbol, shares:0, avgCost:0, currentPrice:0, sector:"", note:"", changePct:null, targetPct:0, realizedHistory:[], splitHistory:[], buyHistory:[buyEntry] });
+        }
+        buyCount++;
+      } else if (sideUp==="-" || sideUp==="SUB") {
+        const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
+        if (idx<0) { skipCount++; continue; }
+        const eff = computeFromHistory(updatedHoldings[idx]);
+        const avgCostAtSale = eff.avgCost;
+        const sellEntry = { date:iso, qty, sellPrice:avgCostAtSale, avgCostAtSale, proceeds:qty*avgCostAtSale, grossGain:0, fees:0, feeDetail:{commission:0,vat:0,secFee:0,tafFee:0,catFee:0}, gain:0, gainPct:0 };
+        updatedHoldings[idx] = { ...updatedHoldings[idx], realizedHistory:[...(updatedHoldings[idx].realizedHistory||[]),sellEntry] };
+        sellCount++;
+      } else if (sideUp==="SPLIT") {
+        const ratio = qty; // column 4 = multiplier (e.g. 4 for 4:1 split)
+        const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
+        if (idx<0) { skipCount++; continue; }
+        const h = updatedHoldings[idx];
+        const eff = computeFromHistory(h);
+        const newSharesCount = eff.shares * ratio;
+        const adjustedBuyHistory = (h.buyHistory||[]).map((b:any) => ({ ...b, qty: b.qty*ratio, price: b.price/ratio }));
+        const adjustedRealizedHistory = (h.realizedHistory||[]).map((r:any) => ({
+          ...r, qty: r.qty*ratio, sellPrice: r.sellPrice/ratio, avgCostAtSale: r.avgCostAtSale/ratio
+        }));
+        updatedHoldings[idx] = { ...h, buyHistory: adjustedBuyHistory, realizedHistory: adjustedRealizedHistory,
+          splitHistory: [...(h.splitHistory||[]), { date: iso, ratio: newSharesCount.toFixed(7) }] };
+        splitCount++;
       } else { skipCount++; }
     }
     setAndSave(updatedHoldings);
     setTxImportText(""); setShowTxImport(false);
-    msg(`นำเข้าแล้ว: ซื้อ ${buyCount} | ขาย ${sellCount}${skipCount>0?` | ข้าม ${skipCount}`:""} ✓`);
+    msg(`นำเข้าแล้ว: ซื้อ ${buyCount} | ขาย ${sellCount}${splitCount>0?` | Split ${splitCount}`:""}${skipCount>0?` | ข้าม ${skipCount}`:""} ✓`);
   };
 
   const exportCSV = () => {
@@ -1235,7 +1269,7 @@ export default function App() {
                   <div style={{fontSize:13,fontWeight:600,color:"#93c5fd",marginBottom:6}}>📥 Import ประวัติ ซื้อ/ขาย</div>
                   <div style={{fontSize:12,color:"#a0aec0",marginBottom:8}}>Format: <code style={{color:"#67e8f9"}}>DD/MM/YYYY HH:MM,Side(B/S),Symbol,จำนวน,ราคา</code> — เวลาใส่หรือไม่ใส่ก็ได้, <code style={{color:"#7ee8a2"}}>BRK.B → BRK-B</code> อัตโนมัติ</div>
                   <textarea value={txImportText} onChange={e=>setTxImportText(e.target.value)}
-                    placeholder={"01/11/2025 21:21,B,ACLS,0.1499694,81.95\n18/06/2026 07:20,S,ACLS,0.0445361,184.12"}
+                    placeholder={"01/11/2025 21:21,B,ACLS,0.1499694,81.95\n18/06/2026 07:20,S,ACLS,0.0445361,184.12\n02/07/2026 15:03,SPLIT,CRWD,4\n02/07/2026 15:03,+,CRWD,0.5311213,0\n02/07/2026 15:03,-,CRWD,0.1327803"}
                     style={{width:"100%",minHeight:140,background:"#0f1117",color:"#e2e8f0",border:"1px solid #4a5568",borderRadius:6,padding:10,fontSize:12,resize:"vertical",fontFamily:"monospace"}}/>
                   <div style={{display:"flex",gap:8,marginTop:8}}>
                     <button onClick={importTxCSV} disabled={!txImportText.trim()} style={btn("#2f6b4f","#7ee8a2",{opacity:!txImportText.trim()?0.5:1})}>✅ นำเข้า</button>
@@ -1593,18 +1627,19 @@ export default function App() {
       {splitModalId !== null && (() => {
         const h = effectiveHoldings.find((x:any)=>x.id===splitModalId);
         if (!h) return null;
-        const newCount = parseFloat(splitNewShares);
-        const valid = newCount > 0 && newCount !== h.shares;
-        const previewCost = valid ? (h.avgCost * h.shares) / newCount : null;
+        const ratio = parseFloat(splitRatio);
+        const valid = ratio > 0 && ratio !== 1;
+        const newCount = valid ? h.shares * ratio : null;
+        const previewCost = valid ? h.avgCost / ratio : null;
         return (
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={()=>setSplitModalId(null)}>
             <div style={{background:"#1a1d2e",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid #2d3748"}} onClick={e=>e.stopPropagation()}>
               <div style={{fontSize:16,fontWeight:700,color:"#67e8f9",marginBottom:4}}>🔀 แตกพาร์ {h.symbol}</div>
               <div style={{fontSize:12,color:"#718096",marginBottom:16}}>ปัจจุบัน {h.shares.toFixed(7)} หุ้น | ทุน ${h.avgCost.toFixed(4)}/หุ้น</div>
 
-              <div style={{marginBottom:16}}>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>จำนวนหุ้นใหม่ (หลังแตกพาร์)</div>
-                <input type="number" value={splitNewShares} onChange={e=>setSplitNewShares(e.target.value)} placeholder={`เช่น ${(h.shares*4).toFixed(4)}`} autoFocus
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:12,color:"#a0aec0",marginBottom:6}}>อัตราส่วนแตกพาร์ (เช่น 4 = 4:1 split)</div>
+                <input type="number" value={splitRatio} onChange={e=>setSplitRatio(e.target.value)} placeholder="เช่น 4" min="0" step="any" autoFocus
                   style={{width:"100%",background:"#0f1117",border:"1px solid #4a5568",borderRadius:6,padding:"10px 12px",color:"#e2e8f0",fontSize:14}}/>
               </div>
 
@@ -1613,11 +1648,11 @@ export default function App() {
                   <div style={{fontSize:11,color:"#718096",marginBottom:6}}>ผลลัพธ์หลังแตกพาร์</div>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}>
                     <span style={{color:"#a0aec0"}}>จำนวนหุ้น</span>
-                    <span style={{color:"#e2e8f0"}}>{h.shares.toFixed(4)} → <b style={{color:"#7ee8a2"}}>{newCount.toFixed(4)}</b></span>
+                    <span style={{color:"#e2e8f0"}}>{h.shares.toFixed(4)} → <b style={{color:"#7ee8a2"}}>{newCount!.toFixed(4)}</b></span>
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
                     <span style={{color:"#a0aec0"}}>ต้นทุน/หุ้น</span>
-                    <span style={{color:"#e2e8f0"}}>${h.avgCost.toFixed(4)} → <b style={{color:"#7ee8a2"}}>${previewCost?.toFixed(4)}</b></span>
+                    <span style={{color:"#e2e8f0"}}>${h.avgCost.toFixed(4)} → <b style={{color:"#7ee8a2"}}>${previewCost!.toFixed(4)}</b></span>
                   </div>
                 </div>
               )}
