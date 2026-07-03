@@ -41,33 +41,36 @@ function copyToClipboard(text: string) {
   } catch { navigator.clipboard?.writeText(text).catch(() => {}); }
 }
 
-// Compute effective shares & avgCost from transaction history (buy/sell), fallback to stored fields if no history
+// Compute effective shares & avgCost from transaction history (buy/sell/split), fallback to stored fields if no history
+// Splits are NOT baked into buyHistory — they are virtual events applied chronologically here
 function computeFromHistory(h: any): { shares: number; avgCost: number } {
   const buys = h.buyHistory || [];
   const sells = h.realizedHistory || [];
+  const splits = h.splitHistory || [];
   if (buys.length === 0 && sells.length === 0) {
     return { shares: h.shares || 0, avgCost: h.avgCost || 0 };
   }
-  // Replay all transactions in chronological order
   const events = [
-    ...buys.map((b:any) => ({ date: b.date, type: "buy", qty: b.qty, price: b.price })),
-    ...sells.map((s:any) => ({ date: s.date, type: "sell", qty: s.qty })),
+    ...buys.map((b:any) => ({ date: b.date, type: "buy", qty: b.qty, price: b.price, targetShares: 0 })),
+    ...sells.map((s:any) => ({ date: s.date, type: "sell", qty: s.qty, price: 0, targetShares: 0 })),
+    ...splits.map((sp:any) => ({ date: sp.date, type: "split", qty: 0, price: 0, targetShares: parseFloat(sp.ratio) || 0 })),
   ].sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
   let shares = 0; let totalCost = 0;
   for (const e of events) {
     if (e.type === "buy") {
-      totalCost += e.qty * (e as any).price;
+      totalCost += e.qty * e.price;
       shares += e.qty;
-    } else {
-      // sell: reduce shares proportionally, cost basis reduces too (avgCost stays same effectively)
-      const avgCostBefore = shares>0 ? totalCost/shares : 0;
+    } else if (e.type === "sell") {
+      const avg = shares > 0 ? totalCost / shares : 0;
       shares -= e.qty;
-      totalCost -= e.qty * avgCostBefore;
+      totalCost -= e.qty * avg;
+    } else {
+      // split: set shares to target count, totalCost unchanged → avgCost adjusts automatically
+      if (e.targetShares > 0) shares = e.targetShares;
     }
   }
-  const avgCost = shares > 0 ? totalCost / shares : 0;
-  return { shares: Math.max(shares, 0), avgCost };
+  return { shares: Math.max(shares, 0), avgCost: shares > 0 ? totalCost / shares : 0 };
 }
 
 // Date+time picker: separate DD/MM/YYYY fields + 24h time, avoids browser locale issues entirely
@@ -595,18 +598,8 @@ export default function App() {
     const eff = computeFromHistory(h);
     const newSharesCount = parseFloat(splitRatio);
     if (!newSharesCount || newSharesCount <= 0 || newSharesCount === eff.shares) { alert("กรอกจำนวนหุ้นใหม่ให้ถูกต้อง"); return; }
-    const ratio = newSharesCount / eff.shares;
-    const newAvgCost = eff.avgCost / ratio;
-
-    // Scale ALL historical transactions so computeFromHistory stays consistent after split
-    const adjustedBuyHistory = (h.buyHistory||[]).map((b:any) => ({ ...b, qty: b.qty*ratio, price: b.price/ratio }));
-    const adjustedRealizedHistory = (h.realizedHistory||[]).map((r:any) => ({
-      ...r, qty: r.qty*ratio, sellPrice: r.sellPrice/ratio, avgCostAtSale: r.avgCostAtSale/ratio
-    }));
-
     const updated = holdings.map((x:any) => x.id===splitModalId
-      ? { ...x, shares: newSharesCount, avgCost: newAvgCost, buyHistory: adjustedBuyHistory, realizedHistory: adjustedRealizedHistory,
-          splitHistory: [...(x.splitHistory||[]), { date: new Date().toISOString(), ratio: newSharesCount.toFixed(7), multiplier: ratio }] }
+      ? { ...x, splitHistory: [...(x.splitHistory||[]), { date: new Date().toISOString(), ratio: newSharesCount.toFixed(7) }] }
       : x
     );
     setAndSave(updated);
@@ -680,16 +673,7 @@ export default function App() {
       let newH = { ...h };
       if (kind === "buy") newH.buyHistory = (h.buyHistory||[]).filter((_:any,i:number)=>i!==index);
       if (kind === "sell") newH.realizedHistory = (h.realizedHistory||[]).filter((_:any,i:number)=>i!==index);
-      if (kind === "split") {
-        const splitRecord = (h.splitHistory||[])[index];
-        const mult = splitRecord?.multiplier || 1;
-        const inv = 1 / mult;
-        newH.splitHistory = (h.splitHistory||[]).filter((_:any,i:number)=>i!==index);
-        newH.buyHistory = (h.buyHistory||[]).map((b:any) => ({ ...b, qty: b.qty*inv, price: b.price/inv }));
-        newH.realizedHistory = (h.realizedHistory||[]).map((r:any) => ({
-          ...r, qty: r.qty*inv, sellPrice: r.sellPrice/inv, avgCostAtSale: r.avgCostAtSale/inv
-        }));
-      }
+      if (kind === "split") newH.splitHistory = (h.splitHistory||[]).filter((_:any,i:number)=>i!==index);
 
       // If all buy/sell history removed, freeze current computed values into stored fields
       // so the holding doesn't disappear/reset to 0 when displayed via fallback
@@ -778,17 +762,12 @@ export default function App() {
         const price = parseFloat(priceStr) || 0;
         const pending = pendingSplitOut[symbol];
         if (price <= 0 && pending) {
-          // Pair with buffered -: ratio derived from eff.shares so result equals + qty exactly
+          // Pair with buffered -: record split target in splitHistory only, don't touch buyHistory
           delete pendingSplitOut[symbol];
           const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
           if (idx>=0) {
             const h = updatedHoldings[idx];
-            const eff = computeFromHistory(h);
-            const ratio = qty / eff.shares;
-            const adjBuy = (h.buyHistory||[]).map((b:any)=>({...b,qty:b.qty*ratio,price:b.price/ratio}));
-            const adjSell = (h.realizedHistory||[]).map((r:any)=>({...r,qty:r.qty*ratio,sellPrice:r.sellPrice/ratio,avgCostAtSale:r.avgCostAtSale/ratio}));
-            updatedHoldings[idx] = { ...h, buyHistory:adjBuy, realizedHistory:adjSell,
-              splitHistory:[...(h.splitHistory||[]),{date:iso,ratio:qty.toFixed(7),multiplier:ratio}] };
+            updatedHoldings[idx] = { ...h, splitHistory:[...(h.splitHistory||[]),{date:iso,ratio:qty.toFixed(7)}] };
           }
           splitCount++;
         } else {
@@ -809,12 +788,7 @@ export default function App() {
         const h = updatedHoldings[idx];
         const eff = computeFromHistory(h);
         const newSharesCount = eff.shares * ratio;
-        const adjustedBuyHistory = (h.buyHistory||[]).map((b:any) => ({ ...b, qty: b.qty*ratio, price: b.price/ratio }));
-        const adjustedRealizedHistory = (h.realizedHistory||[]).map((r:any) => ({
-          ...r, qty: r.qty*ratio, sellPrice: r.sellPrice/ratio, avgCostAtSale: r.avgCostAtSale/ratio
-        }));
-        updatedHoldings[idx] = { ...h, buyHistory: adjustedBuyHistory, realizedHistory: adjustedRealizedHistory,
-          splitHistory: [...(h.splitHistory||[]), { date: iso, ratio: newSharesCount.toFixed(7), multiplier: ratio }] };
+        updatedHoldings[idx] = { ...h, splitHistory: [...(h.splitHistory||[]), { date: iso, ratio: newSharesCount.toFixed(7) }] };
         splitCount++;
       } else { skipCount++; }
     }
@@ -1237,9 +1211,11 @@ export default function App() {
           holdings.forEach((h:any) => {
             const buys = (h.buyHistory||[]);
             const sells = (h.realizedHistory||[]);
+            const splits = (h.splitHistory||[]);
             const events = [
-              ...buys.map((b:any,i:number)=>({ date:b.date, type:"buy" as const, qty:b.qty, price:b.price, buyIdx:i })),
-              ...sells.map((s:any)=>({ date:s.date, type:"sell" as const, qty:s.qty, price:0, buyIdx:-1 })),
+              ...buys.map((b:any,i:number)=>({ date:b.date, type:"buy" as const, qty:b.qty, price:b.price, buyIdx:i, targetShares:0 })),
+              ...sells.map((s:any)=>({ date:s.date, type:"sell" as const, qty:s.qty, price:0, buyIdx:-1, targetShares:0 })),
+              ...splits.map((sp:any)=>({ date:sp.date, type:"split" as const, qty:0, price:0, buyIdx:-1, targetShares:parseFloat(sp.ratio)||0 })),
             ].sort((a,b)=>new Date(a.date).getTime()-new Date(b.date).getTime());
             let shares=0, totalCost=0;
             const avgArr: number[] = new Array(buys.length).fill(0);
@@ -1247,9 +1223,11 @@ export default function App() {
               if (e.type==="buy") {
                 totalCost += e.qty * e.price; shares += e.qty;
                 avgArr[e.buyIdx] = shares>0 ? totalCost/shares : 0;
-              } else {
+              } else if (e.type==="sell") {
                 const avg = shares>0 ? totalCost/shares : 0;
                 shares -= e.qty; totalCost -= e.qty*avg;
+              } else if (e.targetShares > 0) {
+                shares = e.targetShares;
               }
             }
             avgCostAtBuy.set(h.symbol, avgArr);
