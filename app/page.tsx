@@ -484,6 +484,7 @@ export default function App() {
         const syms = holdings.slice(i, i+BATCH).map((h:any)=>h.symbol).join(",");
         const res = await fetch(`${PROXY_URL}?symbols=${syms}&t=${Date.now()}`, { cache: "no-store" });
         const data = await res.json();
+        if (data.error) { errors.push(`API Error: ${data.error}`); continue; }
         data.results?.forEach((r:any) => {
           if (r.error) errors.push(`${r.symbol}: ${r.error}`);
           else updated = updated.map((h:any) => h.symbol===r.symbol ? {...h, currentPrice:r.price, changePct:r.changePct} : h);
@@ -491,8 +492,8 @@ export default function App() {
       }
       setHoldings(updated); localStorage.setItem(`holdings-${currentPortId||"local"}`, JSON.stringify(updated));
       setLastUpdated(new Date()); setPriceErrors(errors);
-      msg(errors.length ? `อัพเดทแล้ว (${errors.length} ตัวพลาด)` : "อัพเดทราคาแล้ว ✓");
-    } catch (e:any) { msg("ดึงราคาไม่ได้: " + e.message); }
+      msg(errors.length ? `⚠️ มี ${errors.length} ตัวพลาด — ดูด้านล่าง` : "อัพเดทราคาแล้ว ✓");
+    } catch (e:any) { msg("ดึงราคาไม่ได้: " + e.message); setPriceErrors([e.message]); }
     setRefreshing(false);
   };
 
@@ -971,8 +972,10 @@ export default function App() {
             )}
 
             {priceErrors.length>0&&(
-              <div style={{background:"#2d1515",border:"1px solid #7c2d2d",borderRadius:8,padding:10,marginBottom:12,fontSize:12,color:"#fc8181"}}>
-                {"⚠️ ดึงราคาไม่ได้: "+priceErrors.join(", ")}
+              <div style={{background:"#2d1515",border:"1px solid #7c2d2d",borderRadius:8,padding:12,marginBottom:12,color:"#fc8181"}}>
+                <div style={{fontWeight:700,fontSize:13,marginBottom:6}}>⚠️ ดึงราคาไม่ได้ ({priceErrors.length} ตัว)</div>
+                {priceErrors.map((e,i)=><div key={i} style={{fontSize:11,wordBreak:"break-all",marginBottom:2}}>• {e}</div>)}
+                <button onClick={()=>setPriceErrors([])} style={{marginTop:8,background:"none",border:"1px solid #7c2d2d",borderRadius:4,color:"#fc8181",fontSize:11,cursor:"pointer",padding:"2px 8px"}}>✕ ปิด</button>
               </div>
             )}
 
@@ -1213,7 +1216,17 @@ export default function App() {
                   {allSymbols.map(s=><option key={s} value={s}>{s}</option>)}
                 </select>
                 {txFilterSymbol!=="ALL" && <button onClick={()=>setTxFilterSymbol("ALL")} style={{fontSize:12,color:"#fc8181",background:"none",border:"none",cursor:"pointer"}}>✕ ล้าง</button>}
-                <button onClick={()=>setShowTxImport(v=>!v)} style={btn("#1a2a3a","#93c5fd",{fontSize:12,padding:"6px 12px",marginLeft:"auto"})}>📥 Import ประวัติ CSV</button>
+                <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+                  <button onClick={()=>setShowTxImport(v=>!v)} style={btn("#1a2a3a","#93c5fd",{fontSize:12,padding:"6px 12px"})}>📥 Import ประวัติ CSV</button>
+                  <button onClick={()=>{
+                    if(!window.confirm("ลบประวัติ transaction ทั้งหมด?\n(จำนวนหุ้น/ต้นทุนปัจจุบันจะถูกบันทึกไว้ก่อนลบ)")) return;
+                    const updated = holdings.map((h:any)=>{
+                      const eff = computeFromHistory(h);
+                      return { ...h, shares: eff.shares, avgCost: eff.avgCost, buyHistory:[], realizedHistory:[], splitHistory:[] };
+                    });
+                    setAndSave(updated); msg("ลบประวัติทั้งหมดแล้ว ✓");
+                  }} style={btn("#4a1515","#fc8181",{fontSize:12,padding:"6px 12px"})}>🗑️ Clear ประวัติ</button>
+                </div>
               </div>
 
               {/* TX CSV Import panel */}
