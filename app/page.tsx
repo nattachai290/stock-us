@@ -718,9 +718,12 @@ export default function App() {
       const [dateStr, side, rawSymbol, qtyStr, priceStr] = parts;
       // BRK.B → BRK-B (replace dots in ticker with dash)
       const symbol = rawSymbol.toUpperCase().replace(/\./g,"-");
-      const [dd,mm,yyyy] = dateStr.split("/");
+      // Support "DD/MM/YYYY" or "DD/MM/YYYY HH:MM" or "DD/MM/YYYY HH:MM:SS"
+      const [datePart, timePart] = dateStr.split(" ");
+      const [dd,mm,yyyy] = datePart.split("/");
       if (!dd||!mm||!yyyy||yyyy.length!==4) { skipCount++; continue; }
-      const iso = `${yyyy}-${mm.padStart(2,"0")}-${dd.padStart(2,"0")}T12:00:00`;
+      const timeStr = timePart ? timePart.slice(0,5) : "12:00";
+      const iso = `${yyyy}-${mm.padStart(2,"0")}-${dd.padStart(2,"0")}T${timeStr}:00`;
       const qty = parseFloat(qtyStr); const price = parseFloat(priceStr);
       if (!qty||qty<=0||!price||price<=0) { skipCount++; continue; }
       const sideUp = side.toUpperCase().charAt(0);
@@ -1217,9 +1220,9 @@ export default function App() {
               {showTxImport&&(
                 <div style={{background:"#1a1d2e",borderRadius:8,padding:16,marginBottom:12,border:"1px solid #2d3748"}}>
                   <div style={{fontSize:13,fontWeight:600,color:"#93c5fd",marginBottom:6}}>📥 Import ประวัติ ซื้อ/ขาย</div>
-                  <div style={{fontSize:12,color:"#a0aec0",marginBottom:8}}>Format: <code style={{color:"#67e8f9"}}>วันที่,Side(B/S),Symbol,จำนวน,ราคา,มูลค่า</code> — รองรับ <code style={{color:"#7ee8a2"}}>BRK.B → BRK-B</code> อัตโนมัติ</div>
+                  <div style={{fontSize:12,color:"#a0aec0",marginBottom:8}}>Format: <code style={{color:"#67e8f9"}}>DD/MM/YYYY HH:MM,Side(B/S),Symbol,จำนวน,ราคา</code> — เวลาใส่หรือไม่ใส่ก็ได้, <code style={{color:"#7ee8a2"}}>BRK.B → BRK-B</code> อัตโนมัติ</div>
                   <textarea value={txImportText} onChange={e=>setTxImportText(e.target.value)}
-                    placeholder={"07/11/2023,B,SCHD,0.3994424,70.30,1002.32\n08/11/2023,S,AAPL,0.05,185.00,9.25"}
+                    placeholder={"01/11/2025 21:21,B,ACLS,0.1499694,81.95\n18/06/2026 07:20,S,ACLS,0.0445361,184.12"}
                     style={{width:"100%",minHeight:140,background:"#0f1117",color:"#e2e8f0",border:"1px solid #4a5568",borderRadius:6,padding:10,fontSize:12,resize:"vertical",fontFamily:"monospace"}}/>
                   <div style={{display:"flex",gap:8,marginTop:8}}>
                     <button onClick={importTxCSV} disabled={!txImportText.trim()} style={btn("#2f6b4f","#7ee8a2",{opacity:!txImportText.trim()?0.5:1})}>✅ นำเข้า</button>
