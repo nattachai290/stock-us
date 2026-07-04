@@ -484,13 +484,14 @@ export default function App() {
     try {
       const BATCH = 20; const errors: string[] = []; let updated = [...holdings];
       for (let i = 0; i < holdings.length; i += BATCH) {
+        if (i > 0) await new Promise(r => setTimeout(r, 400)); // space out requests to avoid tripping Yahoo's rate limit
         const syms = holdings.slice(i, i+BATCH).map((h:any)=>h.symbol).join(",");
         const res = await fetch(`${PROXY_URL}?symbols=${syms}&t=${Date.now()}`, { cache: "no-store" });
         const data = await res.json();
         if (data.error) { errors.push(`API Error: ${data.error}`); continue; }
         data.results?.forEach((r:any) => {
           if (r.error) errors.push(`${r.symbol}: ${r.error}`);
-          else updated = updated.map((h:any) => h.symbol===r.symbol ? {...h, currentPrice:r.price, changePct:r.changePct} : h);
+          else updated = updated.map((h:any) => h.symbol===r.symbol ? {...h, currentPrice:r.price, changePct:r.changePct, priceTime:r.marketTime} : h);
         });
       }
       setHoldings(updated); localStorage.setItem(`holdings-${currentPortId||"local"}`, JSON.stringify(updated));
@@ -1068,6 +1069,9 @@ export default function App() {
                             <td key={f} style={{padding:"8px 8px",textAlign:"right",color:"#e2e8f0"}}>
                               {editId===h.id&&f==="currentPrice"?<input type="number" value={h[f]} onChange={e=>updateH(h.id,f,e.target.value)} style={{...inp,width:72}}/>
                               :<span>{f==="shares"?Number(h[f]).toFixed(7):f==="avgCost"?Number(h[f]).toFixed(4):Number(h[f]).toLocaleString()}</span>}
+                              {f==="currentPrice"&&h.priceTime&&editId!==h.id&&(
+                                <div style={{fontSize:9,color:"#4a5568",whiteSpace:"nowrap"}}>{new Date(h.priceTime).toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}</div>
+                              )}
                             </td>
                           ))}
                           <td style={{padding:"8px 8px",textAlign:"right",color:h.changePct==null?"#4a5568":pc(h.changePct),fontWeight:600,fontSize:11}}>
