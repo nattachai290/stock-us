@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
   try {
     const { crumb, cookie } = await fetchCrumb();
 
-    const url = `https://query1.finance.yahoo.com/v8/finance/quote?symbols=${symList.join(",")}&crumb=${encodeURIComponent(crumb)}&fields=regularMarketPrice,regularMarketChangePercent`;
+    const url = `https://query1.finance.yahoo.com/v8/finance/quote?symbols=${symList.join(",")}&crumb=${encodeURIComponent(crumb)}&fields=regularMarketPrice,regularMarketChangePercent,regularMarketTime`;
 
     // Yahoo rate-limits (429) are transient — retry with backoff instead of
     // nuking the crumb/cookie, which would otherwise force extra handshake
@@ -104,6 +104,8 @@ export async function GET(request: NextRequest) {
         symbol: sym,
         price: q.regularMarketPrice ?? null,
         changePct: q.regularMarketChangePercent ?? null,
+        // regularMarketTime is unix seconds — convert to ms for JS Date
+        marketTime: q.regularMarketTime ? q.regularMarketTime * 1000 : null,
       };
     });
 

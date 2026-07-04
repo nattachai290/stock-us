@@ -491,7 +491,7 @@ export default function App() {
         if (data.error) { errors.push(`API Error: ${data.error}`); continue; }
         data.results?.forEach((r:any) => {
           if (r.error) errors.push(`${r.symbol}: ${r.error}`);
-          else updated = updated.map((h:any) => h.symbol===r.symbol ? {...h, currentPrice:r.price, changePct:r.changePct} : h);
+          else updated = updated.map((h:any) => h.symbol===r.symbol ? {...h, currentPrice:r.price, changePct:r.changePct, priceTime:r.marketTime} : h);
         });
       }
       setHoldings(updated); localStorage.setItem(`holdings-${currentPortId||"local"}`, JSON.stringify(updated));
@@ -1068,7 +1068,7 @@ export default function App() {
                           {["shares","avgCost","currentPrice"].map(f=>(
                             <td key={f} style={{padding:"8px 8px",textAlign:"right",color:"#e2e8f0"}}>
                               {editId===h.id&&f==="currentPrice"?<input type="number" value={h[f]} onChange={e=>updateH(h.id,f,e.target.value)} style={{...inp,width:72}}/>
-                              :<span>{f==="shares"?Number(h[f]).toFixed(7):f==="avgCost"?Number(h[f]).toFixed(4):Number(h[f]).toLocaleString()}</span>}
+                              :<span title={f==="currentPrice"&&h.priceTime?`ราคา ณ ${new Date(h.priceTime).toLocaleString("th-TH")}`:undefined} style={f==="currentPrice"&&h.priceTime?{borderBottom:"1px dotted #4a5568",cursor:"help"}:undefined}>{f==="shares"?Number(h[f]).toFixed(7):f==="avgCost"?Number(h[f]).toFixed(4):Number(h[f]).toLocaleString()}</span>}
                             </td>
                           ))}
                           <td style={{padding:"8px 8px",textAlign:"right",color:h.changePct==null?"#4a5568":pc(h.changePct),fontWeight:600,fontSize:11}}>
