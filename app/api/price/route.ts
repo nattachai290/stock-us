@@ -26,9 +26,11 @@ async function fetchQuote(symbol: string, cboeSym: string): Promise<Response> {
 }
 
 async function fetchOne(symbol: string): Promise<QuoteResult> {
-  // Cboe drops the dash on class shares (BRK-B -> BRKB); try the raw ticker
-  // first, then a dashless variant if that 404s.
-  const variants = symbol.includes("-") ? [symbol, symbol.replace(/-/g, "")] : [symbol];
+  // Cboe writes class shares with a dot (BRK-B -> BRK.B), sometimes dashless
+  // (BRKB). Try the raw ticker first, then the dot and dashless variants.
+  const variants = symbol.includes("-")
+    ? [symbol, symbol.replace(/-/g, "."), symbol.replace(/-/g, "")]
+    : [symbol];
   const maxAttempts = 3;
   let lastErr = "not found";
 
