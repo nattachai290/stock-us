@@ -4,39 +4,75 @@ const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Module-level cache — persists across warm Lambda invocations
-let crumbCache: { crumb: string; cookie: string; expires: number } | null = null;
+type QuoteResult = { symbol: string; price?: number | null; changePct?: number | null; marketTime?: number | null; error?: string };
 
-async function fetchCrumb(): Promise<{ crumb: string; cookie: string }> {
-  if (crumbCache && crumbCache.expires > Date.now()) return crumbCache;
+// The chart endpoint needs no crumb/cookie handshake and is far more tolerant of
+// repeated requests than v8/finance/quote, which now rate-limits (429) aggressively.
+// It's per-symbol, so we fan out with limited concurrency (see mapLimit below).
+async function fetchOne(symbol: string): Promise<QuoteResult> {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`;
+  const maxAttempts = 4;
+  for (let attempt = 1; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { "User-Agent": UA, "Accept": "application/json", "Accept-Language": "en-US,en;q=0.9" },
+        cache: "no-store",
+      });
+    } catch (e: any) {
+      if (attempt >= maxAttempts) return { symbol, error: e.message };
+      await sleep(400 * attempt);
+      continue;
+    }
 
-  // 1. Hit Yahoo Finance homepage to get session cookies
-  const homeRes = await fetch("https://finance.yahoo.com/", {
-    headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9", "Accept": "text/html" },
-    cache: "no-store",
-    redirect: "follow",
-  });
+    // 429 (and occasionally 5xx) are transient — back off and retry.
+    if ((res.status === 429 || res.status >= 500) && attempt < maxAttempts) {
+      const retryAfter = parseInt(res.headers.get("retry-after") || "", 10);
+      const backoffMs = Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : 500 * 2 ** (attempt - 1); // 500ms, 1000ms, 2000ms
+      await sleep(backoffMs);
+      continue;
+    }
 
-  const rawCookie = homeRes.headers.get("set-cookie") ?? "";
-  // Keep only name=value pairs (strip Secure/HttpOnly/Path/etc.)
-  const cookieStr = rawCookie.split(",")
-    .map(c => c.split(";")[0].trim())
-    .filter(Boolean)
-    .join("; ");
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return { symbol, error: `Yahoo ${res.status}: ${body.slice(0, 120)}` };
+    }
 
-  // 2. Fetch the crumb token
-  const crumbRes = await fetch("https://query1.finance.yahoo.com/v1/test/getcrumb", {
-    headers: { "User-Agent": UA, "Cookie": cookieStr },
-    cache: "no-store",
-  });
+    const data = await res.json().catch(() => null);
+    const meta = data?.chart?.result?.[0]?.meta;
+    if (!meta) {
+      const err = data?.chart?.error;
+      return { symbol, error: err ? JSON.stringify(err) : "no data" };
+    }
 
-  const crumb = (await crumbRes.text()).trim();
-  if (!crumb || crumb.startsWith("<") || crumb.length > 60) {
-    throw new Error(`Cannot get crumb (status ${crumbRes.status}): ${crumb.slice(0, 80)}`);
+    const price = meta.regularMarketPrice ?? null;
+    const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? null;
+    const changePctRaw = price != null && prevClose ? ((price - prevClose) / prevClose) * 100 : null;
+    return {
+      symbol,
+      price,
+      changePct: changePctRaw != null ? Math.round(changePctRaw * 100) / 100 : null,
+      // regularMarketTime is unix seconds — convert to ms for JS Date
+      marketTime: meta.regularMarketTime ? meta.regularMarketTime * 1000 : null,
+    };
   }
+}
 
-  crumbCache = { crumb, cookie: cookieStr, expires: Date.now() + 25 * 60 * 1000 }; // 25 min TTL
-  return crumbCache;
+// Run fn over items with at most `limit` requests in flight at once, so we don't
+// spray Yahoo with the whole batch simultaneously and trip its rate limiter.
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const idx = next++;
+      results[idx] = await fn(items[idx]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 export async function GET(request: NextRequest) {
@@ -44,74 +80,6 @@ export async function GET(request: NextRequest) {
   if (!symbols) return Response.json({ results: [] });
 
   const symList = symbols.split(",").map(s => s.trim()).filter(Boolean);
-
-  try {
-    const { crumb, cookie } = await fetchCrumb();
-
-    const url = `https://query1.finance.yahoo.com/v8/finance/quote?symbols=${symList.join(",")}&crumb=${encodeURIComponent(crumb)}&fields=regularMarketPrice,regularMarketChangePercent,regularMarketTime`;
-
-    // Yahoo rate-limits (429) are transient — retry with backoff instead of
-    // nuking the crumb/cookie, which would otherwise force extra handshake
-    // requests right when Yahoo is already throttling us.
-    let res: Response;
-    let body = "";
-    const maxAttempts = 3;
-    for (let attempt = 1; ; attempt++) {
-      res = await fetch(url, {
-        headers: {
-          "User-Agent": UA,
-          "Cookie": cookie,
-          "Accept": "application/json",
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-        cache: "no-store",
-      });
-
-      if (res.ok || res.status !== 429 || attempt >= maxAttempts) break;
-
-      const retryAfter = parseInt(res.headers.get("retry-after") || "", 10);
-      const backoffMs = Number.isFinite(retryAfter) && retryAfter > 0
-        ? retryAfter * 1000
-        : 500 * 2 ** (attempt - 1); // 500ms, 1000ms, ...
-      await sleep(backoffMs);
-    }
-
-    if (!res.ok) {
-      // Only auth failures mean the crumb/cookie is actually invalid.
-      // A 429 just means we were too fast — keep the cached crumb.
-      if (res.status === 401 || res.status === 403) crumbCache = null;
-      body = await res.text().catch(() => "");
-      return Response.json(
-        { results: [], error: `Yahoo ${res.status}: ${body.slice(0, 200)}` },
-        { status: 502 }
-      );
-    }
-
-    const data = await res.json();
-    const quotes = data?.quoteResponse?.result ?? [];
-
-    if (!quotes.length && data?.quoteResponse?.error) {
-      return Response.json(
-        { results: [], error: `Yahoo: ${JSON.stringify(data.quoteResponse.error)}` },
-        { status: 502 }
-      );
-    }
-
-    const results = symList.map(sym => {
-      const q = quotes.find((r: any) => r.symbol === sym);
-      if (!q) return { symbol: sym, error: "not found" };
-      return {
-        symbol: sym,
-        price: q.regularMarketPrice ?? null,
-        changePct: q.regularMarketChangePercent ?? null,
-        // regularMarketTime is unix seconds — convert to ms for JS Date
-        marketTime: q.regularMarketTime ? q.regularMarketTime * 1000 : null,
-      };
-    });
-
-    return Response.json({ results });
-  } catch (err: any) {
-    crumbCache = null;
-    return Response.json({ results: [], error: err.message }, { status: 502 });
-  }
+  const results = await mapLimit(symList, 4, fetchOne);
+  return Response.json({ results });
 }
