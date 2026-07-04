@@ -486,9 +486,10 @@ export default function App() {
       const totalBatches = Math.ceil(holdings.length / BATCH);
       for (let i = 0; i < holdings.length; i += BATCH) {
         const batchNo = Math.floor(i / BATCH) + 1;
-        msg(`กำลังดึงราคา... (${batchNo}/${totalBatches})`, 0);
+        const batchSymbols = holdings.slice(i, i+BATCH).map((h:any)=>h.symbol);
+        msg(`กำลังดึงราคา... (${batchNo}/${totalBatches}) ${batchSymbols.join(", ")}`, 0);
         if (i > 0) await new Promise(r => setTimeout(r, 300)); // space out requests to avoid tripping Yahoo's rate limit
-        const syms = holdings.slice(i, i+BATCH).map((h:any)=>h.symbol).join(",");
+        const syms = batchSymbols.join(",");
         try {
           // Abort a stuck batch instead of freezing the whole refresh forever.
           const ctrl = new AbortController();
