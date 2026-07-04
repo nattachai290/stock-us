@@ -2,6 +2,8 @@ import { NextRequest } from "next/server";
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 // Module-level cache — persists across warm Lambda invocations
 let crumbCache: { crumb: string; cookie: string; expires: number } | null = null;
 
@@ -47,19 +49,38 @@ export async function GET(request: NextRequest) {
     const { crumb, cookie } = await fetchCrumb();
 
     const url = `https://query1.finance.yahoo.com/v8/finance/quote?symbols=${symList.join(",")}&crumb=${encodeURIComponent(crumb)}&fields=regularMarketPrice,regularMarketChangePercent`;
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": UA,
-        "Cookie": cookie,
-        "Accept": "application/json",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-      cache: "no-store",
-    });
+
+    // Yahoo rate-limits (429) are transient — retry with backoff instead of
+    // nuking the crumb/cookie, which would otherwise force extra handshake
+    // requests right when Yahoo is already throttling us.
+    let res: Response;
+    let body = "";
+    const maxAttempts = 3;
+    for (let attempt = 1; ; attempt++) {
+      res = await fetch(url, {
+        headers: {
+          "User-Agent": UA,
+          "Cookie": cookie,
+          "Accept": "application/json",
+          "Accept-Language": "en-US,en;q=0.9",
+        },
+        cache: "no-store",
+      });
+
+      if (res.ok || res.status !== 429 || attempt >= maxAttempts) break;
+
+      const retryAfter = parseInt(res.headers.get("retry-after") || "", 10);
+      const backoffMs = Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : 500 * 2 ** (attempt - 1); // 500ms, 1000ms, ...
+      await sleep(backoffMs);
+    }
 
     if (!res.ok) {
-      crumbCache = null; // force re-auth next time
-      const body = await res.text().catch(() => "");
+      // Only auth failures mean the crumb/cookie is actually invalid.
+      // A 429 just means we were too fast — keep the cached crumb.
+      if (res.status === 401 || res.status === 403) crumbCache = null;
+      body = await res.text().catch(() => "");
       return Response.json(
         { results: [], error: `Yahoo ${res.status}: ${body.slice(0, 200)}` },
         { status: 502 }

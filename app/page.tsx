@@ -484,6 +484,7 @@ export default function App() {
     try {
       const BATCH = 20; const errors: string[] = []; let updated = [...holdings];
       for (let i = 0; i < holdings.length; i += BATCH) {
+        if (i > 0) await new Promise(r => setTimeout(r, 400)); // space out requests to avoid tripping Yahoo's rate limit
         const syms = holdings.slice(i, i+BATCH).map((h:any)=>h.symbol).join(",");
         const res = await fetch(`${PROXY_URL}?symbols=${syms}&t=${Date.now()}`, { cache: "no-store" });
         const data = await res.json();
