@@ -116,6 +116,28 @@ function chunk<T>(arr: T[], size: number): T[][] {
 }
 
 export async function GET(request: NextRequest) {
+  // TEMP debug: inspect raw CNBC response from Vercel's egress. Remove after tuning.
+  const dbg = request.nextUrl.searchParams.get("debugcnbc");
+  if (dbg) {
+    const syms = dbg.split(",").map(s => s.trim()).filter(Boolean);
+    const qs = syms.map(s => `symbols=${encodeURIComponent(s)}`).join("&");
+    const urls = [
+      `https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?${qs}&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json`,
+      `https://quote.cnbc.com/quote-html-webservice/quote.htm?partnerId=2&requestMethod=quick&exthrs=1&noform=1&fund=1&output=json&${qs}`,
+    ];
+    const out: any[] = [];
+    for (const url of urls) {
+      try {
+        const r = await fetch(url, { headers: { "User-Agent": UA, "Accept": "application/json" }, cache: "no-store" });
+        const body = await r.text();
+        out.push({ url, status: r.status, body: body.slice(0, 1200) });
+      } catch (e: any) {
+        out.push({ url, error: e.message });
+      }
+    }
+    return Response.json(out);
+  }
+
   const symbols = request.nextUrl.searchParams.get("symbols") ?? "";
   if (!symbols) return Response.json({ results: [] });
 
