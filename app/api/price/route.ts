@@ -41,7 +41,9 @@ async function fetchOne(symbol: string): Promise<QuoteResult> {
         lastErr = e.name === "AbortError" ? "timeout" : e.message;
         continue;
       }
-      if (res.status === 404) { lastErr = "not found"; continue; }
+      // Cboe's CDN returns 403 (S3 AccessDenied) or 404 for tickers it doesn't
+      // have — treat both as "missing" and try the next variant.
+      if (res.status === 404 || res.status === 403) { lastErr = "not found"; continue; }
       if ((res.status === 429 || res.status >= 500)) { lastErr = `Cboe ${res.status}`; break; } // retry outer loop
       if (!res.ok) {
         const body = await res.text().catch(() => "");
