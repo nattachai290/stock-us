@@ -120,10 +120,11 @@ export async function GET(request: NextRequest) {
   const dbg = request.nextUrl.searchParams.get("debugcnbc");
   if (dbg) {
     const syms = dbg.split(",").map(s => s.trim()).filter(Boolean);
-    const qs = syms.map(s => `symbols=${encodeURIComponent(s)}`).join("&");
+    const pipe = encodeURIComponent(syms.join("|"));
+    const one = encodeURIComponent(syms[0]);
     const urls = [
-      `https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?${qs}&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json`,
-      `https://quote.cnbc.com/quote-html-webservice/quote.htm?partnerId=2&requestMethod=quick&exthrs=1&noform=1&fund=1&output=json&${qs}`,
+      `https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=${one}&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json`,
+      `https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=${pipe}&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json`,
     ];
     const out: any[] = [];
     for (const url of urls) {
