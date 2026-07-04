@@ -63,7 +63,9 @@ const toNum = (v: any) => {
 async function fetchCnbcBatch(symbols: string[]): Promise<Map<string, QuoteResult>> {
   const out = new Map<string, QuoteResult>();
   if (!symbols.length) return out;
-  const qs = symbols.map(s => `symbols=${encodeURIComponent(s)}`).join("&");
+  // CNBC wants pipe-separated symbols in one param (repeated params merge into a
+  // single bad ticker).
+  const qs = `symbols=${encodeURIComponent(symbols.join("|"))}`;
   const url = `https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?${qs}&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 8000);
@@ -81,7 +83,7 @@ async function fetchCnbcBatch(symbols: string[]): Promise<Map<string, QuoteResul
   if (!Array.isArray(quotes)) quotes = [quotes];
   for (const q of quotes) {
     const sym = String(q?.symbol ?? "").toUpperCase();
-    if (!sym) continue;
+    if (!sym || Number(q?.code) !== 0) continue; // code 0 = valid quote
     const price = toNum(q?.last);
     if (price == null) continue;
     let changePct = toNum(q?.change_pct);
@@ -116,29 +118,6 @@ function chunk<T>(arr: T[], size: number): T[][] {
 }
 
 export async function GET(request: NextRequest) {
-  // TEMP debug: inspect raw CNBC response from Vercel's egress. Remove after tuning.
-  const dbg = request.nextUrl.searchParams.get("debugcnbc");
-  if (dbg) {
-    const syms = dbg.split(",").map(s => s.trim()).filter(Boolean);
-    const pipe = encodeURIComponent(syms.join("|"));
-    const one = encodeURIComponent(syms[0]);
-    const urls = [
-      `https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=${one}&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json`,
-      `https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=${pipe}&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json`,
-    ];
-    const out: any[] = [];
-    for (const url of urls) {
-      try {
-        const r = await fetch(url, { headers: { "User-Agent": UA, "Accept": "application/json" }, cache: "no-store" });
-        const body = await r.text();
-        out.push({ url, status: r.status, body: body.slice(0, 1200) });
-      } catch (e: any) {
-        out.push({ url, error: e.message });
-      }
-    }
-    return Response.json(out);
-  }
-
   const symbols = request.nextUrl.searchParams.get("symbols") ?? "";
   if (!symbols) return Response.json({ results: [] });
 
