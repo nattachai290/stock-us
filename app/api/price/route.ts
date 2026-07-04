@@ -11,18 +11,24 @@ type QuoteResult = { symbol: string; price?: number | null; changePct?: number |
 // It's per-symbol, so we fan out with limited concurrency (see mapLimit below).
 async function fetchOne(symbol: string): Promise<QuoteResult> {
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`;
-  const maxAttempts = 4;
+  const maxAttempts = 3;
   for (let attempt = 1; ; attempt++) {
     let res: Response;
+    // Hard cap each attempt so a hung Yahoo connection can't stall the request forever.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 7000);
     try {
       res = await fetch(url, {
         headers: { "User-Agent": UA, "Accept": "application/json", "Accept-Language": "en-US,en;q=0.9" },
         cache: "no-store",
+        signal: ctrl.signal,
       });
     } catch (e: any) {
-      if (attempt >= maxAttempts) return { symbol, error: e.message };
+      if (attempt >= maxAttempts) return { symbol, error: e.name === "AbortError" ? "timeout" : e.message };
       await sleep(400 * attempt);
       continue;
+    } finally {
+      clearTimeout(timer);
     }
 
     // 429 (and occasionally 5xx) are transient — back off and retry.
