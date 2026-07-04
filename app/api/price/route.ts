@@ -1,5 +1,9 @@
 import { NextRequest } from "next/server";
 
+// Stooq (a Polish site) 404s requests from US datacenter IPs. Vercel defaults to
+// iad1 (US East); pin this function to Frankfurt so Stooq serves us.
+export const preferredRegion = "fra1";
+
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -16,8 +20,10 @@ const num = (s: string) => {
 };
 
 async function fetchBatch(symbols: string[]): Promise<QuoteResult[]> {
+  // Raw commas — Stooq treats an encoded "%2C" as part of a single ticker and 404s.
+  // Tickers are alphanumerics plus "." and "-", all URL-safe, so no encoding needed.
   const query = symbols.map(s => `${s.toLowerCase()}.us`).join(",");
-  const url = `https://stooq.com/q/l/?s=${encodeURIComponent(query)}&f=sd2t2ohlc&h&e=csv`;
+  const url = `https://stooq.com/q/l/?s=${query}&f=sd2t2ohlc&h&e=csv`;
 
   const maxAttempts = 3;
   let lastErr = "unknown error";
