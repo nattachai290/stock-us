@@ -232,9 +232,17 @@ const inp = { background: "#0f1117", border: "1px solid #4a5568", borderRadius: 
 
 
 // ── Google Drive ──────────────────────────────────────────────────────────────
+// Called when Drive rejects the token (expired/revoked) so the UI can auto-logout.
+let onDriveAuthExpired: (() => void) | null = null;
+
 async function driveReq(url: string, token: string, options: RequestInit = {}) {
   const res = await fetch(url, { ...options, headers: { Authorization: `Bearer ${token}`, ...(options.headers || {}) } });
-  if (!res.ok) throw new Error(`Drive ${res.status}`);
+  if (!res.ok) {
+    // 401 = token expired/invalid. Google tokens (implicit flow) last ~1h with no
+    // refresh, so kick the user out to re-login instead of silently failing.
+    if (res.status === 401) onDriveAuthExpired?.();
+    throw new Error(`Drive ${res.status}`);
+  }
   return res;
 }
 
@@ -324,6 +332,22 @@ export default function App() {
 
   const msg = (m: string, ms = 3000) => { setStatus(m); if (ms) setTimeout(() => setStatus(""), ms); };
 
+  // Auto-logout when the Google token expires (Drive returned 401). Guard so the
+  // many in-flight Drive calls that all 401 at once only trigger one logout.
+  const authExpiredRef = useRef(false);
+  const handleAuthExpired = useCallback(() => {
+    if (authExpiredRef.current) return;
+    authExpiredRef.current = true;
+    setToken(null); tokenRef.current = null; setUserEmail(null);
+    localStorage.removeItem("gtoken"); localStorage.removeItem("gemail");
+    msg("⚠️ Session Google หมดอายุ — ออกให้อัตโนมัติแล้ว กรุณาเชื่อมต่อใหม่", 8000);
+  }, []);
+
+  useEffect(() => {
+    onDriveAuthExpired = handleAuthExpired;
+    return () => { onDriveAuthExpired = null; };
+  }, [handleAuthExpired]);
+
   // Load saved token on mount
   useEffect(() => {
     const script = document.createElement("script");
@@ -380,6 +404,7 @@ export default function App() {
       callback: async (response: any) => {
         if (!response.access_token) { setGoogleLoading(false); return; }
         const t = response.access_token;
+        authExpiredRef.current = false; // fresh token — re-arm the expiry guard
         setToken(t); tokenRef.current = t;
         localStorage.setItem("gtoken", t);
         try {
