@@ -1068,7 +1068,10 @@ export default function App() {
                           {["shares","avgCost","currentPrice"].map(f=>(
                             <td key={f} style={{padding:"8px 8px",textAlign:"right",color:"#e2e8f0"}}>
                               {editId===h.id&&f==="currentPrice"?<input type="number" value={h[f]} onChange={e=>updateH(h.id,f,e.target.value)} style={{...inp,width:72}}/>
-                              :<span title={f==="currentPrice"&&h.priceTime?`ราคา ณ ${new Date(h.priceTime).toLocaleString("th-TH")}`:undefined} style={f==="currentPrice"&&h.priceTime?{borderBottom:"1px dotted #4a5568",cursor:"help"}:undefined}>{f==="shares"?Number(h[f]).toFixed(7):f==="avgCost"?Number(h[f]).toFixed(4):Number(h[f]).toLocaleString()}</span>}
+                              :<span>{f==="shares"?Number(h[f]).toFixed(7):f==="avgCost"?Number(h[f]).toFixed(4):Number(h[f]).toLocaleString()}</span>}
+                              {f==="currentPrice"&&h.priceTime&&editId!==h.id&&(
+                                <div style={{fontSize:9,color:"#4a5568",whiteSpace:"nowrap"}}>{new Date(h.priceTime).toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}</div>
+                              )}
                             </td>
                           ))}
                           <td style={{padding:"8px 8px",textAlign:"right",color:h.changePct==null?"#4a5568":pc(h.changePct),fontWeight:600,fontSize:11}}>
