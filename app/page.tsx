@@ -482,19 +482,31 @@ export default function App() {
     if (!holdings.length) return;
     setRefreshing(true); setPriceErrors([]); msg("กำลังดึงราคา...", 0);
     try {
-      const BATCH = 20; const errors: string[] = []; let updated = [...holdings];
+      const BATCH = 10; const errors: string[] = []; let updated = [...holdings];
+      const totalBatches = Math.ceil(holdings.length / BATCH);
       for (let i = 0; i < holdings.length; i += BATCH) {
-        if (i > 0) await new Promise(r => setTimeout(r, 400)); // space out requests to avoid tripping Yahoo's rate limit
+        const batchNo = Math.floor(i / BATCH) + 1;
+        msg(`กำลังดึงราคา... (${batchNo}/${totalBatches})`, 0);
+        if (i > 0) await new Promise(r => setTimeout(r, 300)); // space out requests to avoid tripping Yahoo's rate limit
         const syms = holdings.slice(i, i+BATCH).map((h:any)=>h.symbol).join(",");
-        const res = await fetch(`${PROXY_URL}?symbols=${syms}&t=${Date.now()}`, { cache: "no-store" });
-        const data = await res.json();
-        if (data.error) { errors.push(`API Error: ${data.error}`); continue; }
-        data.results?.forEach((r:any) => {
-          if (r.error) errors.push(`${r.symbol}: ${r.error}`);
-          else updated = updated.map((h:any) => h.symbol===r.symbol ? {...h, currentPrice:r.price, changePct:r.changePct, priceTime:r.marketTime} : h);
-        });
+        try {
+          // Abort a stuck batch instead of freezing the whole refresh forever.
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 30000);
+          const res = await fetch(`${PROXY_URL}?symbols=${syms}&t=${Date.now()}`, { cache: "no-store", signal: ctrl.signal });
+          clearTimeout(timer);
+          const data = await res.json();
+          if (data.error) { errors.push(`API Error: ${data.error}`); continue; }
+          data.results?.forEach((r:any) => {
+            if (r.error) errors.push(`${r.symbol}: ${r.error}`);
+            else updated = updated.map((h:any) => h.symbol===r.symbol ? {...h, currentPrice:r.price, changePct:r.changePct, priceTime:r.marketTime} : h);
+          });
+        } catch (e:any) {
+          errors.push(`batch ${batchNo}: ${e.name === "AbortError" ? "timeout" : e.message}`);
+        }
+        // Show prices filling in as each batch lands, instead of waiting for all.
+        setHoldings(updated); localStorage.setItem(`holdings-${currentPortId||"local"}`, JSON.stringify(updated));
       }
-      setHoldings(updated); localStorage.setItem(`holdings-${currentPortId||"local"}`, JSON.stringify(updated));
       setLastUpdated(new Date()); setPriceErrors(errors);
       msg(errors.length ? `⚠️ มี ${errors.length} ตัวพลาด — ดูด้านล่าง` : "อัพเดทราคาแล้ว ✓");
     } catch (e:any) { msg("ดึงราคาไม่ได้: " + e.message); setPriceErrors([e.message]); }
