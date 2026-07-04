@@ -482,7 +482,7 @@ export default function App() {
     if (!holdings.length) return;
     setRefreshing(true); setPriceErrors([]); msg("กำลังดึงราคา...", 0);
     try {
-      const BATCH = 10; const errors: string[] = []; let updated = [...holdings];
+      const BATCH = 20; const errors: string[] = []; let updated = [...holdings];
       const totalBatches = Math.ceil(holdings.length / BATCH);
       for (let i = 0; i < holdings.length; i += BATCH) {
         const batchNo = Math.floor(i / BATCH) + 1;
