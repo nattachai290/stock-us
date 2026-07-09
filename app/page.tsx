@@ -675,6 +675,17 @@ export default function App() {
     const { symbol, kind, index, date, qty, price, commission, vat: vatStr, secFee, tafFee, catFee, ratio } = editTxData;
     const isoDate = date ? new Date(date).toISOString() : new Date().toISOString();
 
+    // Guard: editing a sell can't exceed the shares available without it.
+    if (kind === "sell") {
+      const h = holdings.find((x:any)=>x.symbol===symbol);
+      const q = parseFloat(qty)||0;
+      if (h) {
+        const withoutThis = { ...h, realizedHistory: (h.realizedHistory||[]).filter((_:any,i:number)=>i!==index) };
+        const avail = computeFromHistory(withoutThis).shares;
+        if (q > avail + 1e-9) { alert(`จำนวนไม่พอขาย: มีแค่ ${avail.toFixed(7)} หุ้น (ใส่ ${q.toFixed(7)})`); return; }
+      }
+    }
+
     const updated = holdings.map((h:any) => {
       if (h.symbol !== symbol) return h;
       if (kind === "buy") {
@@ -741,7 +752,7 @@ export default function App() {
     const dataLines = lines.filter(l=>!/^วันที่|^date/i.test(l));
     if (!dataLines.length) { alert("ไม่พบข้อมูล"); return; }
     let updatedHoldings = holdings.map((h:any)=>({...h}));
-    let buyCount=0, sellCount=0, splitCount=0, skipCount=0;
+    let buyCount=0, sellCount=0, splitCount=0, skipCount=0, insufficientCount=0;
     const pendingSplitOut: Record<string,{qty:number,iso:string}> = {};
     for (const line of dataLines) {
       const parts = line.split(",").map((s:string)=>s.trim());
@@ -776,6 +787,7 @@ export default function App() {
         const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
         if (idx<0) { skipCount++; continue; }
         const eff = computeFromHistory(updatedHoldings[idx]);
+        if (qty > eff.shares + 1e-9) { insufficientCount++; continue; } // จำนวนไม่พอขาย
         const avgCostAtSale = eff.avgCost;
         const grossGain = (price-avgCostAtSale)*qty;
         const proceeds = qty*price;
@@ -792,6 +804,7 @@ export default function App() {
           const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
           if (idx<0) { skipCount++; continue; }
           const eff = computeFromHistory(updatedHoldings[idx]);
+          if (qty > eff.shares + 1e-9) { insufficientCount++; continue; } // จำนวนไม่พอขาย
           const avgCostAtSale = eff.avgCost;
           const sellEntry = { date:iso, qty, sellPrice:avgCostAtSale, avgCostAtSale, proceeds:qty*avgCostAtSale, grossGain:0, fees:0, feeDetail:{commission:0,vat:0,secFee:0,tafFee:0,catFee:0}, gain:0, gainPct:0 };
           updatedHoldings[idx] = { ...updatedHoldings[idx], realizedHistory:[...(updatedHoldings[idx].realizedHistory||[]),sellEntry] };
@@ -833,7 +846,7 @@ export default function App() {
     }
     setAndSave(updatedHoldings);
     setTxImportText(""); setShowTxImport(false);
-    msg(`นำเข้าแล้ว: ซื้อ ${buyCount} | ขาย ${sellCount}${splitCount>0?` | Split ${splitCount}`:""}${skipCount>0?` | ข้าม ${skipCount}`:""} ✓`);
+    msg(`นำเข้าแล้ว: ซื้อ ${buyCount} | ขาย ${sellCount}${splitCount>0?` | Split ${splitCount}`:""}${insufficientCount>0?` | จำนวนไม่พอขาย ${insufficientCount}`:""}${skipCount>0?` | ข้าม ${skipCount}`:""} ✓`, insufficientCount>0?6000:3000);
   };
 
   const exportCSV = () => {
