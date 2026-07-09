@@ -967,7 +967,7 @@ export default function App() {
       <div style={{background:"#1a1d2e",borderBottom:"1px solid #2d3748",padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
         <div>
           <div style={{fontSize:18,fontWeight:700,color:"#7ee8a2"}}>📈 PORT AI</div>
-          <div style={{fontSize:11,color:"#a0aec0",marginTop:2}}>{holdings.length} หลักทรัพย์ · <span style={{color:saving?"#f6c90e":status?"#f6c90e":"#4a5568"}}>{status||(lastUpdated?`ราคา ${lastUpdated.toLocaleTimeString("th")}`:"พร้อมใช้งาน")}</span></div>
+          <div style={{fontSize:11,color:"#a0aec0",marginTop:2}}>{activeHoldings.length} ถืออยู่{holdings.length>activeHoldings.length?` · ขายหมด ${holdings.length-activeHoldings.length}`:""} · <span style={{color:saving?"#f6c90e":status?"#f6c90e":"#4a5568"}}>{status||(lastUpdated?`ราคา ${lastUpdated.toLocaleTimeString("th")}`:"พร้อมใช้งาน")}</span></div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
           {userEmail ? (
@@ -1217,7 +1217,7 @@ export default function App() {
                     <div style={{background:"#0f1117",borderRadius:8,padding:14,textAlign:"center"}}>
                       <div style={{fontSize:11,color:"#718096",marginBottom:6}}>📊 Unrealized (ถืออยู่)</div>
                       <div style={{fontSize:18,fontWeight:700,color:pc(pnl)}}>{pnl>=0?"+":""}${pnl.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                      <div style={{fontSize:11,color:"#718096",marginTop:4}}>{holdings.length} หลักทรัพย์</div>
+                      <div style={{fontSize:11,color:"#718096",marginTop:4}}>{activeHoldings.length} หลักทรัพย์</div>
                     </div>
                   </div>
                   <div style={{marginTop:10,paddingTop:10,borderTop:"1px solid #2d3748",display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:700}}>
