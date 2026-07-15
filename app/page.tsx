@@ -41,35 +41,64 @@ function copyToClipboard(text: string) {
   } catch { navigator.clipboard?.writeText(text).catch(() => {}); }
 }
 
-// Compute effective shares & avgCost from transaction history (buy/sell/split), fallback to stored fields if no history
-// Splits are NOT baked into buyHistory — they are virtual events applied chronologically here
-function computeFromHistory(h: any): { shares: number; avgCost: number } {
+// FIFO lot accounting (matches broker): sells consume the oldest lots first, so the
+// remaining cost basis is the cost of the newest lots — not the running average.
+// Splits are NOT baked into buyHistory — they rescale each remaining lot here.
+function replayLots(h: any): { qty: number; price: number }[] {
   const buys = h.buyHistory || [];
   const sells = h.realizedHistory || [];
   const splits = h.splitHistory || [];
-  if (buys.length === 0 && sells.length === 0) {
-    return { shares: h.shares || 0, avgCost: h.avgCost || 0 };
-  }
   const events = [
     ...buys.map((b:any) => ({ date: b.date, type: "buy", qty: b.qty, price: b.price, targetShares: 0 })),
     ...sells.map((s:any) => ({ date: s.date, type: "sell", qty: s.qty, price: 0, targetShares: 0 })),
     ...splits.map((sp:any) => ({ date: sp.date, type: "split", qty: 0, price: 0, targetShares: parseFloat(sp.ratio) || 0 })),
   ].sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-  let shares = 0; let totalCost = 0;
+  const lots: { qty: number; price: number }[] = [];
   for (const e of events) {
     if (e.type === "buy") {
-      totalCost += e.qty * e.price;
-      shares += e.qty;
+      lots.push({ qty: e.qty, price: e.price });
     } else if (e.type === "sell") {
-      const avg = shares > 0 ? totalCost / shares : 0;
-      shares -= e.qty;
-      totalCost -= e.qty * avg;
-    } else {
-      // split: set shares to target count, totalCost unchanged → avgCost adjusts automatically
-      if (e.targetShares > 0) shares = e.targetShares;
+      let rem = e.qty;
+      while (rem > 1e-12 && lots.length) {
+        const take = Math.min(lots[0].qty, rem);
+        lots[0].qty -= take; rem -= take;
+        if (lots[0].qty <= 1e-12) lots.shift();
+      }
+    } else if (e.targetShares > 0) {
+      // split: rescale every remaining lot to the new total; lot cost unchanged
+      const cur = lots.reduce((s, l) => s + l.qty, 0);
+      if (cur > 0) {
+        const f = e.targetShares / cur;
+        for (const l of lots) { l.qty *= f; l.price /= f; }
+      }
     }
   }
+  return lots;
+}
+
+// FIFO cost basis per share for selling `qty` from the current lots
+function fifoBasisForSale(h: any, qty: number): number {
+  const lots = replayLots(h);
+  let rem = qty, cost = 0, got = 0;
+  for (const l of lots) {
+    const take = Math.min(l.qty, rem);
+    cost += take * l.price; got += take; rem -= take;
+    if (rem <= 1e-12) break;
+  }
+  return got > 0 ? cost / got : 0;
+}
+
+// Compute effective shares & avgCost from transaction history, fallback to stored fields if no history
+function computeFromHistory(h: any): { shares: number; avgCost: number } {
+  const buys = h.buyHistory || [];
+  const sells = h.realizedHistory || [];
+  if (buys.length === 0 && sells.length === 0) {
+    return { shares: h.shares || 0, avgCost: h.avgCost || 0 };
+  }
+  const lots = replayLots(h);
+  const shares = lots.reduce((s, l) => s + l.qty, 0);
+  const totalCost = lots.reduce((s, l) => s + l.qty * l.price, 0);
   return { shares: Math.max(shares, 0), avgCost: shares > 0 ? totalCost / shares : 0 };
 }
 
@@ -583,13 +612,15 @@ export default function App() {
     if (qty > eff.shares) { alert(`มีแค่ ${eff.shares.toFixed(7)} หุ้น ขายไม่ได้เกินจำนวนที่มี`); return; }
 
     const fees = calcSellFees();
-    const grossGain = (price - eff.avgCost) * qty;
+    // FIFO: cost basis of the actual (oldest) lots being sold, matching the broker
+    const basis = fifoBasisForSale(h, qty);
+    const grossGain = (price - basis) * qty;
     const realizedGain = grossGain - fees.totalFees;
-    const realizedPct = eff.avgCost>0 ? (realizedGain/(eff.avgCost*qty)*100) : 0;
+    const realizedPct = basis>0 ? (realizedGain/(basis*qty)*100) : 0;
     const proceeds = qty * price;
     const txDate = sellDateTime ? new Date(sellDateTime).toISOString() : new Date().toISOString();
     const historyEntry = {
-      date: txDate, qty, sellPrice: price, avgCostAtSale: eff.avgCost, proceeds,
+      date: txDate, qty, sellPrice: price, avgCostAtSale: basis, proceeds,
       grossGain, fees: fees.totalFees, feeDetail: { commission: fees.commission, vat: fees.vat, secFee: fees.secFee, tafFee: fees.tafFee, catFee: fees.catFee },
       gain: realizedGain, gainPct: realizedPct
     };
@@ -788,7 +819,7 @@ export default function App() {
         if (idx<0) { skipCount++; continue; }
         const eff = computeFromHistory(updatedHoldings[idx]);
         if (qty > eff.shares + 1e-9) { insufficientCount++; continue; } // จำนวนไม่พอขาย
-        const avgCostAtSale = eff.avgCost;
+        const avgCostAtSale = fifoBasisForSale(updatedHoldings[idx], qty); // FIFO basis of sold lots
         const grossGain = (price-avgCostAtSale)*qty;
         const proceeds = qty*price;
         const sellEntry = { date:iso, qty, sellPrice:price, avgCostAtSale, proceeds, grossGain, fees:0, feeDetail:{commission:0,vat:0,secFee:0,tafFee:0,catFee:0}, gain:grossGain, gainPct:avgCostAtSale>0?(grossGain/(avgCostAtSale*qty)*100):0 };
@@ -805,7 +836,7 @@ export default function App() {
           if (idx<0) { skipCount++; continue; }
           const eff = computeFromHistory(updatedHoldings[idx]);
           if (qty > eff.shares + 1e-9) { insufficientCount++; continue; } // จำนวนไม่พอขาย
-          const avgCostAtSale = eff.avgCost;
+          const avgCostAtSale = fifoBasisForSale(updatedHoldings[idx], qty); // transfer-out at FIFO basis → zero P&L
           const sellEntry = { date:iso, qty, sellPrice:avgCostAtSale, avgCostAtSale, proceeds:qty*avgCostAtSale, grossGain:0, fees:0, feeDetail:{commission:0,vat:0,secFee:0,tafFee:0,catFee:0}, gain:0, gainPct:0 };
           updatedHoldings[idx] = { ...updatedHoldings[idx], realizedHistory:[...(updatedHoldings[idx].realizedHistory||[]),sellEntry] };
           sellCount++;
@@ -1272,7 +1303,7 @@ export default function App() {
           });
           allTx.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-          // Compute running avgCost after each buy transaction (per symbol, by buyHistory index)
+          // Running avgCost after each buy (per symbol, by buyHistory index) — FIFO lots, same as computeFromHistory
           const avgCostAtBuy: Map<string, number[]> = new Map();
           holdings.forEach((h:any) => {
             const buys = (h.buyHistory||[]);
@@ -1283,17 +1314,23 @@ export default function App() {
               ...sells.map((s:any)=>({ date:s.date, type:"sell" as const, qty:s.qty, price:0, buyIdx:-1, targetShares:0 })),
               ...splits.map((sp:any)=>({ date:sp.date, type:"split" as const, qty:0, price:0, buyIdx:-1, targetShares:parseFloat(sp.ratio)||0 })),
             ].sort((a,b)=>new Date(a.date).getTime()-new Date(b.date).getTime());
-            let shares=0, totalCost=0;
+            const lots: {qty:number,price:number}[] = [];
             const avgArr: number[] = new Array(buys.length).fill(0);
             for (const e of events) {
               if (e.type==="buy") {
-                totalCost += e.qty * e.price; shares += e.qty;
-                avgArr[e.buyIdx] = shares>0 ? totalCost/shares : 0;
+                lots.push({ qty:e.qty, price:e.price });
+                const sh = lots.reduce((s,l)=>s+l.qty,0);
+                avgArr[e.buyIdx] = sh>0 ? lots.reduce((s,l)=>s+l.qty*l.price,0)/sh : 0;
               } else if (e.type==="sell") {
-                const avg = shares>0 ? totalCost/shares : 0;
-                shares -= e.qty; totalCost -= e.qty*avg;
+                let rem = e.qty;
+                while (rem > 1e-12 && lots.length) {
+                  const take = Math.min(lots[0].qty, rem);
+                  lots[0].qty -= take; rem -= take;
+                  if (lots[0].qty <= 1e-12) lots.shift();
+                }
               } else if (e.targetShares > 0) {
-                shares = e.targetShares;
+                const cur = lots.reduce((s,l)=>s+l.qty,0);
+                if (cur > 0) { const f = e.targetShares/cur; for (const l of lots) { l.qty *= f; l.price /= f; } }
               }
             }
             avgCostAtBuy.set(h.symbol, avgArr);
