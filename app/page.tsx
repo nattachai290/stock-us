@@ -998,6 +998,8 @@ export default function App() {
                       const unrealized=h.shares>0?(h.currentPrice-h.avgCost)*h.shares:0;
                       const w=tv>0?(val/tv*100):0; const target=h.targetPct||0;
                       const over=target>0?w-target:0; const overAmt=over>0?(over/100*tv):0;
+                      // $ to buy so this position reaches target weight (buying also grows total value)
+                      const underNeed=(target>0&&target<100&&w<target)?((target/100*tv-val)/(1-target/100)):0;
                       const barPct=target>0?Math.min(w/target*100,150):0;
                       const barColor=over>0?"#ff6b6b":w>0?"#7ee8a2":"#2d3748";
                       const isAlert=h.changePct!=null&&Math.abs(h.changePct)>=3;
@@ -1050,6 +1052,7 @@ export default function App() {
                             </div>
                             {target>0&&<div style={{background:"#2d3748",borderRadius:3,height:4,overflow:"hidden"}}><div style={{width:`${Math.min(barPct,100)}%`,height:"100%",background:barColor,borderRadius:3}}/></div>}
                             {over>0&&<div style={{fontSize:10,color:"#ff6b6b",marginTop:1}}>เกิน +${overAmt.toFixed(2)}</div>}
+                            {underNeed>0&&<div style={{fontSize:10,color:"#7ee8a2",marginTop:1}}>ซื้อเพิ่ม ~${underNeed.toLocaleString("en",{maximumFractionDigits:2})} ถึงเป้า</div>}
                           </td>
                           <td style={{padding:"8px 4px",textAlign:"center",whiteSpace:"nowrap"}}>
                             {editId===h.id?(
