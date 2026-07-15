@@ -769,6 +769,54 @@ export default function App() {
     msg("ลบ transaction แล้ว ✓");
   };
 
+  // Rewrite every stored sell's realized P&L using the FIFO basis of the lots
+  // actually sold at that point in history, so old records match the broker.
+  const recalcRealizedFIFO = () => {
+    if (!window.confirm("คำนวณกำไรขายทุกรายการใหม่แบบ FIFO ให้ตรงโบรกเกอร์?\n(ตัวเลข Realized P&L ของรายการขายเก่าจะถูกเขียนทับ)")) return;
+    let changed = 0;
+    const updated = holdings.map((h:any) => {
+      const buys = h.buyHistory||[], sells = h.realizedHistory||[], splits = h.splitHistory||[];
+      if (!sells.length) return h;
+      const events = [
+        ...buys.map((b:any)=>({date:b.date,type:"buy" as const,qty:b.qty,price:b.price,sellIdx:-1,targetShares:0})),
+        ...sells.map((s:any,i:number)=>({date:s.date,type:"sell" as const,qty:s.qty,price:0,sellIdx:i,targetShares:0})),
+        ...splits.map((sp:any)=>({date:sp.date,type:"split" as const,qty:0,price:0,sellIdx:-1,targetShares:parseFloat(sp.ratio)||0})),
+      ].sort((a,b)=>new Date(a.date).getTime()-new Date(b.date).getTime());
+      const lots: {qty:number,price:number}[] = [];
+      const newSells = sells.map((s:any)=>({...s}));
+      for (const e of events) {
+        if (e.type==="buy") {
+          lots.push({ qty:e.qty, price:e.price });
+        } else if (e.type==="sell") {
+          let rem=e.qty, cost=0, got=0;
+          while (rem>1e-12 && lots.length) {
+            const take=Math.min(lots[0].qty,rem);
+            cost+=take*lots[0].price; got+=take;
+            lots[0].qty-=take; rem-=take;
+            if (lots[0].qty<=1e-12) lots.shift();
+          }
+          const basis = got>0 ? cost/got : 0;
+          const tx = newSells[e.sellIdx];
+          // transfer-outs were recorded at basis price for zero P&L — keep them zero at the new basis
+          const isTransfer = tx.sellPrice === tx.avgCostAtSale;
+          const sellPrice = isTransfer ? basis : (tx.sellPrice||0);
+          const fees = tx.fees||0;
+          const grossGain = (sellPrice - basis) * tx.qty;
+          const gain = grossGain - fees;
+          const gainPct = basis>0 && tx.qty>0 ? (gain/(basis*tx.qty)*100) : 0;
+          if (Math.abs((tx.gain||0)-gain) > 0.005 || Math.abs((tx.avgCostAtSale||0)-basis) > 0.005) changed++;
+          Object.assign(tx, { avgCostAtSale: basis, sellPrice, proceeds: tx.qty*sellPrice, grossGain, gain, gainPct });
+        } else if (e.targetShares>0) {
+          const cur=lots.reduce((s,l)=>s+l.qty,0);
+          if (cur>0){ const f=e.targetShares/cur; for(const l of lots){ l.qty*=f; l.price/=f; } }
+        }
+      }
+      return { ...h, realizedHistory: newSells };
+    });
+    setAndSave(updated);
+    msg(`คำนวณใหม่แบบ FIFO แล้ว — อัพเดท ${changed} รายการขาย ✓`, 5000);
+  };
+
   const importCSV = () => {
     try {
       const entries = parseCSV(importText);
@@ -1368,6 +1416,7 @@ export default function App() {
                 {txFilterSymbol!=="ALL" && <button onClick={()=>setTxFilterSymbol("ALL")} style={{fontSize:12,color:"#fc8181",background:"none",border:"none",cursor:"pointer"}}>✕ ล้าง</button>}
                 <div style={{marginLeft:"auto",display:"flex",gap:6}}>
                   <button onClick={()=>setShowTxImport(v=>!v)} style={btn("#1a2a3a","#93c5fd",{fontSize:12,padding:"6px 12px"})}>📥 Import ประวัติ CSV</button>
+                  <button onClick={recalcRealizedFIFO} style={btn("#1a3a4a","#67e8f9",{fontSize:12,padding:"6px 12px"})}>🔁 Recalc FIFO</button>
                   <button onClick={()=>{
                     if(!window.confirm("ลบประวัติ transaction ทั้งหมด?\n(จำนวนหุ้น/ต้นทุนปัจจุบันจะถูกบันทึกไว้ก่อนลบ)")) return;
                     const updated = holdings.map((h:any)=>{
