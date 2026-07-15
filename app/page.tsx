@@ -1,314 +1,15 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
+import DateTimePicker24h from "./components/DateTimePicker24h";
+import { parseCSV, toCSV, copyToClipboard, fifoBasisForSale, computeFromHistory } from "./lib/portfolio";
+import { setOnDriveAuthExpired, listPortfolios, loadPortfolio, savePortfolio, deletePortfolio } from "./lib/drive";
+import { btn, inp, PIE_COLORS } from "./lib/ui";
 
 const PROXY_URL = "/api/price";
 const GOOGLE_CLIENT_ID = "45222114320-2r8rh69n1mt4jd4138v90vqq7ha0dgq2.apps.googleusercontent.com";
 const SCOPES = "https://www.googleapis.com/auth/drive.file";
 
-// ── helpers ──────────────────────────────────────────────────────────────────
-function parseCSV(csvText: string) {
-  const lines = csvText.trim().split("\n").filter(l => l.trim());
-  if (!lines.length) return [];
-  const dataLines = lines[0].toLowerCase().startsWith("symbol") ? lines.slice(1) : lines;
-  return dataLines.map((line, i) => {
-    const p = line.split(",").map(s => s.trim());
-    return {
-      id: Date.now() + i + Math.random(),
-      symbol: (p[0] || "").toUpperCase(),
-      shares: parseFloat(p[1]) || 0,
-      avgCost: parseFloat(p[2]) || 0,
-      currentPrice: parseFloat(p[3]) || 0,
-      sector: p[4] || "",
-      note: p[5] || "",
-      changePct: null as number | null,
-      targetPct: 0,
-    };
-  }).filter(h => h.symbol && h.symbol.toLowerCase() !== "symbol");
-}
-
-function toCSV(holdings: any[]) {
-  return ["symbol,shares,avgCost,currentPrice,sector,note",
-    ...holdings.map(h => `${h.symbol},${h.shares},${h.avgCost},${h.currentPrice},${h.sector||""},${h.note||""}`)
-  ].join("\n");
-}
-
-function copyToClipboard(text: string) {
-  try {
-    const el = document.createElement("textarea");
-    el.value = text; el.style.cssText = "position:fixed;top:-9999px;opacity:0";
-    document.body.appendChild(el); el.select(); document.execCommand("copy"); document.body.removeChild(el);
-  } catch { navigator.clipboard?.writeText(text).catch(() => {}); }
-}
-
-// FIFO lot accounting (matches broker): sells consume the oldest lots first, so the
-// remaining cost basis is the cost of the newest lots — not the running average.
-// Splits are NOT baked into buyHistory — they rescale each remaining lot here.
-function replayLots(h: any): { qty: number; price: number }[] {
-  const buys = h.buyHistory || [];
-  const sells = h.realizedHistory || [];
-  const splits = h.splitHistory || [];
-  const events = [
-    ...buys.map((b:any) => ({ date: b.date, type: "buy", qty: b.qty, price: b.price, targetShares: 0 })),
-    ...sells.map((s:any) => ({ date: s.date, type: "sell", qty: s.qty, price: 0, targetShares: 0 })),
-    ...splits.map((sp:any) => ({ date: sp.date, type: "split", qty: 0, price: 0, targetShares: parseFloat(sp.ratio) || 0 })),
-  ].sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-  const lots: { qty: number; price: number }[] = [];
-  for (const e of events) {
-    if (e.type === "buy") {
-      lots.push({ qty: e.qty, price: e.price });
-    } else if (e.type === "sell") {
-      let rem = e.qty;
-      while (rem > 1e-12 && lots.length) {
-        const take = Math.min(lots[0].qty, rem);
-        lots[0].qty -= take; rem -= take;
-        if (lots[0].qty <= 1e-12) lots.shift();
-      }
-    } else if (e.targetShares > 0) {
-      // split: rescale every remaining lot to the new total; lot cost unchanged
-      const cur = lots.reduce((s, l) => s + l.qty, 0);
-      if (cur > 0) {
-        const f = e.targetShares / cur;
-        for (const l of lots) { l.qty *= f; l.price /= f; }
-      }
-    }
-  }
-  return lots;
-}
-
-// FIFO cost basis per share for selling `qty` from the current lots
-function fifoBasisForSale(h: any, qty: number): number {
-  const lots = replayLots(h);
-  let rem = qty, cost = 0, got = 0;
-  for (const l of lots) {
-    const take = Math.min(l.qty, rem);
-    cost += take * l.price; got += take; rem -= take;
-    if (rem <= 1e-12) break;
-  }
-  return got > 0 ? cost / got : 0;
-}
-
-// Compute effective shares & avgCost from transaction history, fallback to stored fields if no history
-function computeFromHistory(h: any): { shares: number; avgCost: number } {
-  const buys = h.buyHistory || [];
-  const sells = h.realizedHistory || [];
-  if (buys.length === 0 && sells.length === 0) {
-    return { shares: h.shares || 0, avgCost: h.avgCost || 0 };
-  }
-  const lots = replayLots(h);
-  const shares = lots.reduce((s, l) => s + l.qty, 0);
-  const totalCost = lots.reduce((s, l) => s + l.qty * l.price, 0);
-  return { shares: Math.max(shares, 0), avgCost: shares > 0 ? totalCost / shares : 0 };
-}
-
-// Date+time picker: separate DD/MM/YYYY fields + 24h time, avoids browser locale issues entirely
-function DateTimePicker24h({ value, onChange }: { value: string; onChange: (iso: string) => void }) {
-  // value is ISO-like "YYYY-MM-DDTHH:mm"
-  const [datePart, timePart] = value ? value.split("T") : ["", ""];
-  const [y, m, d] = datePart ? datePart.split("-") : ["", "", ""];
-  const [hh, mm] = timePart ? timePart.split(":") : ["00", "00"];
-
-  const [open, setOpen] = useState(false);
-  const [viewYear, setViewYear] = useState(y ? parseInt(y) : new Date().getFullYear());
-  const [viewMonth, setViewMonth] = useState(m ? parseInt(m)-1 : new Date().getMonth()); // 0-indexed
-  const [textVal, setTextVal] = useState(d && m && y ? `${d}/${m}/${y} ${hh.padStart(2,"0")}:${mm.padStart(2,"0")}` : "");
-  const [inputFocused, setInputFocused] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (inputFocused) return; // don't override while user is typing
-    if (d && m && y) setTextVal(`${d}/${m}/${y} ${hh.padStart(2,"0")}:${mm.padStart(2,"0")}`);
-    else setTextVal("");
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
-
-  useEffect(() => {
-    const close = (e: MouseEvent) => { if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, []);
-
-  const monthNames = ["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน","กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม"];
-  const dayNames = ["อา","จ","อ","พ","พฤ","ศ","ส"];
-
-  const handleTextChange = (v: string) => {
-    setTextVal(v);
-    const match = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})$/);
-    if (match) {
-      const [, dd, mo, yr, hr, mi] = match;
-      const iso = `${yr}-${mo.padStart(2,"0")}-${dd.padStart(2,"0")}T${hr.padStart(2,"0")}:${mi}`;
-      onChange(iso);
-      setViewYear(parseInt(yr));
-      setViewMonth(parseInt(mo)-1);
-    }
-  };
-
-  const selectDate = (day: number) => {
-    const dd = String(day).padStart(2,"0");
-    const mm2 = String(viewMonth+1).padStart(2,"0");
-    const iso = `${viewYear}-${mm2}-${dd}T${hh.padStart(2,"0")}:${mm.padStart(2,"0")}`;
-    onChange(iso);
-  };
-
-  const setTime = (nhh: string, nmm: string) => {
-    if (!d) return; // need a date selected first
-    const iso = `${y}-${m}-${d}T${(nhh||"00").padStart(2,"0")}:${(nmm||"00").padStart(2,"0")}`;
-    onChange(iso);
-  };
-
-  const daysInMonth = new Date(viewYear, viewMonth+1, 0).getDate();
-  const firstDayOfWeek = new Date(viewYear, viewMonth, 1).getDay(); // 0=Sun
-  const selectedDay = (y===String(viewYear) && m===String(viewMonth+1).padStart(2,"0")) ? parseInt(d) : null;
-  const today = new Date();
-  const isToday = (day:number) => viewYear===today.getFullYear() && viewMonth===today.getMonth() && day===today.getDate();
-
-  return (
-    <div ref={wrapRef} style={{ position: "relative" }}>
-      <div style={{ display:"flex", gap:6 }}>
-        <input
-          type="text"
-          value={textVal}
-          onChange={e=>handleTextChange(e.target.value)}
-          onFocus={()=>setInputFocused(true)}
-          onBlur={()=>{
-            setInputFocused(false);
-            if (d && m && y) setTextVal(`${d}/${m}/${y} ${hh.padStart(2,"0")}:${mm.padStart(2,"0")}`);
-          }}
-          placeholder="DD/MM/YYYY HH:mm"
-          style={{
-            flex:1, background:"#0f1117", border:"1px solid #4a5568", borderRadius:6,
-            padding:"10px 12px", color:"#e2e8f0", fontSize:14, boxSizing:"border-box",
-            outline:"none", minWidth:0
-          }}
-        />
-        <button onClick={()=>setOpen(!open)} type="button" style={{
-          background:"#1a1d2e", border:"1px solid #4a5568", borderRadius:6,
-          padding:"10px 12px", color:"#67e8f9", fontSize:14, cursor:"pointer", flexShrink:0
-        }}>
-          📅{open?"▲":"▼"}
-        </button>
-      </div>
-
-      {open && (
-        <div style={{
-          position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, zIndex: 100,
-          background: "#1a1d2e", border: "1px solid #2d3748", borderRadius: 10, padding: 14,
-          boxShadow: "0 8px 24px rgba(0,0,0,0.5)"
-        }}>
-          {/* Month/Year nav */}
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-            <button type="button" onClick={()=>{ if(viewMonth===0){setViewMonth(11);setViewYear(viewYear-1);} else setViewMonth(viewMonth-1); }}
-              style={{background:"#2d3748",border:"none",borderRadius:5,color:"#e2e8f0",cursor:"pointer",padding:"4px 10px",fontSize:14}}>‹</button>
-            <div style={{fontSize:13,fontWeight:600,color:"#e2e8f0"}}>{monthNames[viewMonth]} {viewYear}</div>
-            <button type="button" onClick={()=>{ if(viewMonth===11){setViewMonth(0);setViewYear(viewYear+1);} else setViewMonth(viewMonth+1); }}
-              style={{background:"#2d3748",border:"none",borderRadius:5,color:"#e2e8f0",cursor:"pointer",padding:"4px 10px",fontSize:14}}>›</button>
-          </div>
-
-          {/* Day headers */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:4}}>
-            {dayNames.map(dn=>(<div key={dn} style={{textAlign:"center",fontSize:11,color:"#718096",padding:"2px 0"}}>{dn}</div>))}
-          </div>
-
-          {/* Day grid */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:12}}>
-            {Array.from({length:firstDayOfWeek}).map((_,i)=>(<div key={`pad-${i}`}/>))}
-            {Array.from({length:daysInMonth}).map((_,i)=>{
-              const day = i+1;
-              const isSelected = selectedDay===day;
-              return (
-                <button key={day} type="button" onClick={()=>selectDate(day)} style={{
-                  background: isSelected?"#2f6b4f":"transparent",
-                  border: isToday(day)&&!isSelected?"1px solid #67e8f9":"none",
-                  borderRadius: 6, color: isSelected?"#7ee8a2":"#e2e8f0", cursor:"pointer",
-                  padding:"6px 0", fontSize:13, fontWeight: isSelected?700:400
-                }}>{day}</button>
-              );
-            })}
-          </div>
-
-          {/* Time picker */}
-          <div style={{display:"flex",alignItems:"center",gap:8,paddingTop:10,borderTop:"1px solid #2d3748"}}>
-            <span style={{fontSize:12,color:"#a0aec0"}}>เวลา</span>
-            <select value={hh} onChange={e=>setTime(e.target.value,mm)} disabled={!d}
-              style={{background:"#0f1117",border:"1px solid #4a5568",borderRadius:5,color:"#e2e8f0",fontSize:13,padding:"6px 8px"}}>
-              {Array.from({length:24}).map((_,i)=>(<option key={i} value={String(i).padStart(2,"0")}>{String(i).padStart(2,"0")}</option>))}
-            </select>
-            <span style={{color:"#718096"}}>:</span>
-            <select value={mm} onChange={e=>setTime(hh,e.target.value)} disabled={!d}
-              style={{background:"#0f1117",border:"1px solid #4a5568",borderRadius:5,color:"#e2e8f0",fontSize:13,padding:"6px 8px"}}>
-              {Array.from({length:60}).map((_,i)=>(<option key={i} value={String(i).padStart(2,"0")}>{String(i).padStart(2,"0")}</option>))}
-            </select>
-            <span style={{fontSize:11,color:"#4a5568"}}>(24h)</span>
-            <button type="button" onClick={()=>setOpen(false)} style={{marginLeft:"auto",background:"#2f6b4f",border:"none",borderRadius:5,color:"#7ee8a2",cursor:"pointer",padding:"6px 14px",fontSize:12,fontWeight:600}}>เสร็จ</button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function formatDDMMYYYY(iso: string): string {
-  if (!iso) return "";
-  const [datePart, timePart] = iso.split("T");
-  const [y,m,d] = datePart.split("-");
-  return `${d}/${m}/${y} ${timePart||""}`;
-}
-
-
-const btn = (bg: string, color: string, extra: any = {}) => ({ background: bg, color, border: "none", borderRadius: 6, padding: "8px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", ...extra } as React.CSSProperties);
-const inp = { background: "#0f1117", border: "1px solid #4a5568", borderRadius: 4, color: "#e2e8f0", fontSize: 13, padding: "4px 6px", width: 70 } as React.CSSProperties;
-
-
-// ── Google Drive ──────────────────────────────────────────────────────────────
-// Called when Drive rejects the token (expired/revoked) so the UI can auto-logout.
-let onDriveAuthExpired: (() => void) | null = null;
-
-async function driveReq(url: string, token: string, options: RequestInit = {}) {
-  const res = await fetch(url, { ...options, headers: { Authorization: `Bearer ${token}`, ...(options.headers || {}) } });
-  if (!res.ok) {
-    // 401 = token expired/invalid. Google tokens (implicit flow) last ~1h with no
-    // refresh, so kick the user out to re-login instead of silently failing.
-    if (res.status === 401) onDriveAuthExpired?.();
-    throw new Error(`Drive ${res.status}`);
-  }
-  return res;
-}
-
-async function listPortfolios(token: string): Promise<{id: string, name: string}[]> {
-  const res = await driveReq(`https://www.googleapis.com/drive/v3/files?q=name contains 'portfolio-' and mimeType='application/json' and trashed=false&fields=files(id,name)&orderBy=name`, token);
-  const data = await res.json();
-  return (data.files || []).map((f: any) => ({ id: f.id, name: f.name.replace("portfolio-","").replace(".json","") }));
-}
-
-async function loadPortfolio(token: string, fileId: string): Promise<any[]> {
-  const res = await driveReq(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, token);
-  const data = await res.json();
-  return Array.isArray(data) ? data : [];
-}
-
-async function savePortfolio(token: string, fileId: string | null, name: string, holdings: any[]): Promise<string> {
-  const json = JSON.stringify(holdings, null, 2);
-  const blob = new Blob([json], { type: "application/json" });
-  if (fileId) {
-    await driveReq(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, token, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: blob });
-    return fileId;
-  } else {
-    const meta = JSON.stringify({ name: `portfolio-${name}.json`, mimeType: "application/json" });
-    const boundary = "pb";
-    const body = `--${boundary}\r\nContent-Type: application/json\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${json}\r\n--${boundary}--`;
-    const res = await driveReq("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", token, { method: "POST", headers: { "Content-Type": `multipart/related; boundary=${boundary}` }, body });
-    const created = await res.json();
-    return created.id;
-  }
-}
-
-async function deletePortfolio(token: string, fileId: string) {
-  await driveReq(`https://www.googleapis.com/drive/v3/files/${fileId}`, token, { method: "DELETE" });
-}
-
-// ── Pie Chart Colors ──────────────────────────────────────────────────────────
-const PIE_COLORS = ["#7ee8a2","#63b3ed","#f6c90e","#fc8181","#c084fc","#fb923c","#67e8f9","#86efac","#fca5a5","#93c5fd","#d8b4fe","#fcd34d","#6ee7b7","#a5b4fc","#f9a8d4"];
 
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
@@ -361,26 +62,75 @@ export default function App() {
 
   const msg = (m: string, ms = 3000) => { setStatus(m); if (ms) setTimeout(() => setStatus(""), ms); };
 
-  // Auto-logout when the Google token expires (Drive returned 401). Guard so the
-  // many in-flight Drive calls that all 401 at once only trigger one logout.
+  // ── Google auth with silent renewal ──
+  // Google implicit-flow tokens last ~1h. One shared token client; its callback is
+  // swapped via tokenCallbackRef so both interactive login and silent renewal reuse it.
+  const tokenClientRef = useRef<any>(null);
+  const tokenCallbackRef = useRef<(resp: any) => void>(() => {});
+  const ensureTokenClient = useCallback(() => {
+    if (tokenClientRef.current) return tokenClientRef.current;
+    const g = (window as any).google?.accounts?.oauth2;
+    if (!g) return null;
+    tokenClientRef.current = g.initTokenClient({
+      client_id: GOOGLE_CLIENT_ID, scope: SCOPES,
+      callback: (resp: any) => tokenCallbackRef.current(resp),
+      error_callback: () => tokenCallbackRef.current({}),
+    });
+    return tokenClientRef.current;
+  }, []);
+
+  // Ask Google for a fresh token without any UI (works while the Google session
+  // is alive and consent was already granted). Resolves null on failure/timeout.
+  const trySilentRefresh = useCallback(() => new Promise<string | null>((resolve) => {
+    const client = ensureTokenClient();
+    if (!client) return resolve(null);
+    let done = false;
+    const finish = (t: string | null) => { if (!done) { done = true; clearTimeout(timer); resolve(t); } };
+    const timer = setTimeout(() => finish(null), 8000);
+    tokenCallbackRef.current = (resp: any) => {
+      if (resp?.access_token) {
+        const t = resp.access_token;
+        authExpiredRef.current = false;
+        setToken(t); tokenRef.current = t;
+        localStorage.setItem("gtoken", t);
+        finish(t);
+      } else finish(null);
+    };
+    try { client.requestAccessToken({ prompt: "" }); } catch { finish(null); }
+  }), [ensureTokenClient]);
+
+  // On Drive 401: try a silent renewal first; only log out if that fails.
+  // Guard so the many in-flight Drive calls that all 401 at once trigger this once.
   const authExpiredRef = useRef(false);
   const handleAuthExpired = useCallback(() => {
     if (authExpiredRef.current) return;
     authExpiredRef.current = true;
-    setToken(null); tokenRef.current = null; setUserEmail(null);
-    localStorage.removeItem("gtoken"); localStorage.removeItem("gemail");
-    msg("⚠️ Session Google หมดอายุ — ออกให้อัตโนมัติแล้ว กรุณาเชื่อมต่อใหม่", 8000);
-  }, []);
+    trySilentRefresh().then(t => {
+      if (t) { msg("🔄 ต่ออายุ Google อัตโนมัติแล้ว ✓"); return; }
+      setToken(null); tokenRef.current = null; setUserEmail(null);
+      localStorage.removeItem("gtoken"); localStorage.removeItem("gemail");
+      msg("⚠️ Session Google หมดอายุ — ออกให้อัตโนมัติแล้ว กรุณาเชื่อมต่อใหม่", 8000);
+    });
+  }, [trySilentRefresh]);
 
   useEffect(() => {
-    onDriveAuthExpired = handleAuthExpired;
-    return () => { onDriveAuthExpired = null; };
+    setOnDriveAuthExpired(handleAuthExpired);
+    return () => { setOnDriveAuthExpired(null); };
   }, [handleAuthExpired]);
+
+  // Proactively renew every 45 min so the hourly expiry is never hit mid-use
+  useEffect(() => {
+    if (!token) return;
+    const id = setInterval(() => { trySilentRefresh(); }, 45 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [token, trySilentRefresh]);
 
   // Load saved token on mount
   useEffect(() => {
     const script = document.createElement("script");
     script.src = "https://accounts.google.com/gsi/client"; script.async = true;
+    // Saved tokens are usually already stale when the app reopens — renew silently once GIS loads
+    script.onload = () => { if (localStorage.getItem("gtoken")) trySilentRefresh(); };
     document.head.appendChild(script);
 
     // Restore token from localStorage
@@ -403,6 +153,7 @@ export default function App() {
     if (savedToken) {
       listPortfolios(savedToken).then(setPortfolios).catch(() => {});
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Lock body scroll when any modal is open
@@ -428,9 +179,9 @@ export default function App() {
 
   const handleGoogleLogin = () => {
     setGoogleLoading(true);
-    const client = (window as any).google?.accounts.oauth2.initTokenClient({
-      client_id: GOOGLE_CLIENT_ID, scope: SCOPES,
-      callback: async (response: any) => {
+    const client = ensureTokenClient();
+    if (!client) { setGoogleLoading(false); msg("Google ยังโหลดไม่เสร็จ ลองอีกครั้ง"); return; }
+    tokenCallbackRef.current = async (response: any) => {
         if (!response.access_token) { setGoogleLoading(false); return; }
         const t = response.access_token;
         authExpiredRef.current = false; // fresh token — re-arm the expiry guard
@@ -456,9 +207,8 @@ export default function App() {
           }
         } catch (e: any) { msg("โหลดไม่ได้: " + e.message); }
         setGoogleLoading(false);
-      }
-    });
-    client?.requestAccessToken();
+    };
+    client.requestAccessToken();
   };
 
   const handleLogout = () => {
@@ -532,15 +282,34 @@ export default function App() {
 
   const setAndSave = (data: any[]) => { setHoldings(data); saveData(data); };
 
+  // One-slot safety snapshot taken before destructive operations (recalc, clear,
+  // import, delete) so a bad rewrite can be undone with the กู้คืน button.
+  const makeBackup = (label: string) => {
+    try {
+      localStorage.setItem(`backup-${currentPortId||"local"}`, JSON.stringify({ ts: Date.now(), label, holdings }));
+    } catch {}
+  };
+  const restoreBackup = () => {
+    const raw = localStorage.getItem(`backup-${currentPortId||"local"}`);
+    if (!raw) { msg("ไม่มี backup ให้กู้คืน"); return; }
+    try {
+      const b = JSON.parse(raw);
+      if (!window.confirm(`กู้คืนข้อมูลก่อน "${b.label}"\n(${new Date(b.ts).toLocaleString("th-TH")})?\n\nข้อมูลปัจจุบันจะถูกแทนที่`)) return;
+      setAndSave(b.holdings);
+      msg(`กู้คืนข้อมูลก่อน "${b.label}" แล้ว ✓`, 5000);
+    } catch { msg("backup เสียหาย กู้คืนไม่ได้"); }
+  };
+
   const refreshPrices = async () => {
     if (!holdings.length) return;
     setRefreshing(true); setPriceErrors([]); msg("กำลังดึงราคา...", 0);
     try {
       const BATCH = 20; const errors: string[] = []; let updated = [...holdings];
-      const totalBatches = Math.ceil(holdings.length / BATCH);
-      for (let i = 0; i < holdings.length; i += BATCH) {
+      const fetchList = holdings.filter((h:any)=>!h.hidden); // skip deleted-but-archived entries
+      const totalBatches = Math.ceil(fetchList.length / BATCH);
+      for (let i = 0; i < fetchList.length; i += BATCH) {
         const batchNo = Math.floor(i / BATCH) + 1;
-        const batchSymbols = holdings.slice(i, i+BATCH).map((h:any)=>h.symbol);
+        const batchSymbols = fetchList.slice(i, i+BATCH).map((h:any)=>h.symbol);
         msg(`กำลังดึงราคา... (${batchNo}/${totalBatches}) ${batchSymbols.join(", ")}`, 0);
         if (i > 0) await new Promise(r => setTimeout(r, 300)); // space out requests to avoid tripping Yahoo's rate limit
         const syms = batchSymbols.join(",");
@@ -585,7 +354,21 @@ export default function App() {
   };
 
   const confirmEdit = () => { setEditId(null); saveData(holdings); msg("บันทึกแล้ว ✓"); };
-  const removeH = (id: number) => setAndSave(holdings.filter((h:any)=>h.id!==id));
+  const removeH = (id: number) => {
+    const h = holdings.find((x:any)=>x.id===id);
+    if (!h) return;
+    makeBackup(`ลบ ${h.symbol}`);
+    if ((h.realizedHistory||[]).length) {
+      // Keep the record (hidden) so realized P&L survives — only remove it from the active port views
+      if (!window.confirm(`ลบ ${h.symbol} ออกจาก Port?\n\nประวัติกำไรขาย (Realized) จะยังถูกเก็บไว้ในแท็บประวัติ`)) return;
+      setAndSave(holdings.map((x:any)=>x.id===id ? { ...x, hidden: true, targetPct: 0 } : x));
+      msg(`ลบ ${h.symbol} แล้ว — ประวัติขายยังอยู่ในแท็บประวัติ ✓`, 5000);
+    } else {
+      if (!window.confirm(`ลบ ${h.symbol} ออกจาก Port?`)) return;
+      setAndSave(holdings.filter((x:any)=>x.id!==id));
+      msg(`ลบ ${h.symbol} แล้ว ✓`);
+    }
+  };
 
   const openSellModal = (id: number) => {
     setSellModalId(id); setSellQty(""); setSellPrice("");
@@ -643,10 +426,11 @@ export default function App() {
     const qty = parseFloat(buyQty); const price = parseFloat(buyPrice);
     if (!qty || qty<=0 || !price || price<=0) { alert("กรอกจำนวนและราคาให้ถูกต้อง"); return; }
 
-    // Weighted average cost calculation
-    const oldValue = h.shares * h.avgCost;
+    // Use effective (history-derived) position, not the stale stored fields
+    const eff = computeFromHistory(h);
+    const oldValue = eff.shares * eff.avgCost;
     const newValue = qty * price;
-    const newShares = h.shares + qty;
+    const newShares = eff.shares + qty;
     const newAvgCost = newShares>0 ? (oldValue+newValue)/newShares : price;
 
     const txDate = buyDateTime ? new Date(buyDateTime).toISOString() : new Date().toISOString();
@@ -773,6 +557,7 @@ export default function App() {
   // actually sold at that point in history, so old records match the broker.
   const recalcRealizedFIFO = () => {
     if (!window.confirm("คำนวณกำไรขายทุกรายการใหม่แบบ FIFO ให้ตรงโบรกเกอร์?\n(ตัวเลข Realized P&L ของรายการขายเก่าจะถูกเขียนทับ)")) return;
+    makeBackup("Recalc FIFO");
     let changed = 0;
     const updated = holdings.map((h:any) => {
       const buys = h.buyHistory||[], sells = h.realizedHistory||[], splits = h.splitHistory||[];
@@ -821,6 +606,7 @@ export default function App() {
     try {
       const entries = parseCSV(importText);
       if (!entries.length) { alert("ไม่พบข้อมูล"); return; }
+      makeBackup("Import holdings CSV");
       setAndSave([...holdings, ...entries]);
       setImportText(""); setShowImport(false); msg(`นำเข้า ${entries.length} รายการแล้ว ✓`);
     } catch { alert("Format: SYMBOL,จำนวนหุ้น,ต้นทุน,ราคาปัจจุบัน,กลุ่ม,หมายเหตุ"); }
@@ -831,8 +617,15 @@ export default function App() {
     const dataLines = lines.filter(l=>!/^วันที่|^date/i.test(l));
     if (!dataLines.length) { alert("ไม่พบข้อมูล"); return; }
     let updatedHoldings = holdings.map((h:any)=>({...h}));
-    let buyCount=0, sellCount=0, splitCount=0, skipCount=0, insufficientCount=0;
+    let buyCount=0, sellCount=0, splitCount=0, skipCount=0, insufficientCount=0, dupCount=0;
     const pendingSplitOut: Record<string,{qty:number,iso:string}> = {};
+    // Duplicate guards — re-pasting the same CSV must not double-record transactions
+    const isDupBuy = (h:any, iso:string, qty:number, price:number) =>
+      (h.buyHistory||[]).some((b:any)=>b.date===iso && Math.abs(b.qty-qty)<1e-9 && Math.abs(b.price-price)<1e-9);
+    const isDupSell = (h:any, iso:string, qty:number) =>
+      (h.realizedHistory||[]).some((s:any)=>s.date===iso && Math.abs(s.qty-qty)<1e-9);
+    const isDupSplit = (h:any, iso:string) =>
+      (h.splitHistory||[]).some((sp:any)=>sp.date===iso);
     for (const line of dataLines) {
       const parts = line.split(",").map((s:string)=>s.trim());
       if (parts.length < 4) { skipCount++; continue; }
@@ -855,6 +648,7 @@ export default function App() {
         const buyEntry = { date:iso, qty, price, type:"import" };
         const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
         if (idx>=0) {
+          if (isDupBuy(updatedHoldings[idx], iso, qty, price)) { dupCount++; continue; }
           updatedHoldings[idx] = { ...updatedHoldings[idx], buyHistory:[...(updatedHoldings[idx].buyHistory||[]),buyEntry] };
         } else {
           updatedHoldings.push({ id:Date.now()+Math.random(), symbol, shares:0, avgCost:0, currentPrice:0, sector:"", note:"", changePct:null, targetPct:0, realizedHistory:[], splitHistory:[], buyHistory:[buyEntry] });
@@ -865,6 +659,7 @@ export default function App() {
         if (!price||price<=0) { skipCount++; continue; }
         const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
         if (idx<0) { skipCount++; continue; }
+        if (isDupSell(updatedHoldings[idx], iso, qty)) { dupCount++; continue; }
         const eff = computeFromHistory(updatedHoldings[idx]);
         if (qty > eff.shares + 1e-9) { insufficientCount++; continue; } // จำนวนไม่พอขาย
         const avgCostAtSale = fifoBasisForSale(updatedHoldings[idx], qty); // FIFO basis of sold lots
@@ -882,6 +677,7 @@ export default function App() {
           // Has price → regular transfer-out at avgCost (zero P&L)
           const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
           if (idx<0) { skipCount++; continue; }
+          if (isDupSell(updatedHoldings[idx], iso, qty)) { dupCount++; continue; }
           const eff = computeFromHistory(updatedHoldings[idx]);
           if (qty > eff.shares + 1e-9) { insufficientCount++; continue; } // จำนวนไม่พอขาย
           const avgCostAtSale = fifoBasisForSale(updatedHoldings[idx], qty); // transfer-out at FIFO basis → zero P&L
@@ -898,6 +694,7 @@ export default function App() {
           const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
           if (idx>=0) {
             const h = updatedHoldings[idx];
+            if (isDupSplit(h, iso)) { dupCount++; continue; }
             updatedHoldings[idx] = { ...h, splitHistory:[...(h.splitHistory||[]),{date:iso,ratio:qty.toFixed(7)}] };
           }
           splitCount++;
@@ -906,6 +703,7 @@ export default function App() {
           const buyEntry = { date:iso, qty, price, type:"adjustment" };
           const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
           if (idx>=0) {
+            if (isDupBuy(updatedHoldings[idx], iso, qty, price)) { dupCount++; continue; }
             updatedHoldings[idx] = { ...updatedHoldings[idx], buyHistory:[...(updatedHoldings[idx].buyHistory||[]),buyEntry] };
           } else {
             updatedHoldings.push({ id:Date.now()+Math.random(), symbol, shares:0, avgCost:0, currentPrice:0, sector:"", note:"", changePct:null, targetPct:0, realizedHistory:[], splitHistory:[], buyHistory:[buyEntry] });
@@ -917,15 +715,17 @@ export default function App() {
         const idx = updatedHoldings.findIndex((h:any)=>h.symbol===symbol);
         if (idx<0) { skipCount++; continue; }
         const h = updatedHoldings[idx];
+        if (isDupSplit(h, iso)) { dupCount++; continue; } // re-applying would compound the split
         const eff = computeFromHistory(h);
         const newSharesCount = eff.shares * ratio;
         updatedHoldings[idx] = { ...h, splitHistory: [...(h.splitHistory||[]), { date: iso, ratio: newSharesCount.toFixed(7) }] };
         splitCount++;
       } else { skipCount++; }
     }
+    makeBackup("Import ประวัติ");
     setAndSave(updatedHoldings);
     setTxImportText(""); setShowTxImport(false);
-    msg(`นำเข้าแล้ว: ซื้อ ${buyCount} | ขาย ${sellCount}${splitCount>0?` | Split ${splitCount}`:""}${insufficientCount>0?` | จำนวนไม่พอขาย ${insufficientCount}`:""}${skipCount>0?` | ข้าม ${skipCount}`:""} ✓`, insufficientCount>0?6000:3000);
+    msg(`นำเข้าแล้ว: ซื้อ ${buyCount} | ขาย ${sellCount}${splitCount>0?` | Split ${splitCount}`:""}${dupCount>0?` | ⚠️ ซ้ำ (ข้าม) ${dupCount}`:""}${insufficientCount>0?` | จำนวนไม่พอขาย ${insufficientCount}`:""}${skipCount>0?` | ข้าม ${skipCount}`:""} ✓`, (insufficientCount>0||dupCount>0)?6000:3000);
   };
 
   const exportCSV = () => {
@@ -953,6 +753,7 @@ export default function App() {
       applied.forEach(k => { updates[k] = Math.round(updates[k]*factor*100)/100; });
       normNote = ` — ปรับรวม ${rawSum.toFixed(1)}%→100%`;
     }
+    makeBackup("วาง Target %");
     const updated = holdings.map((h:any) => { const pct = updates[h.symbol]; return pct !== undefined ? {...h, targetPct: pct} : h; });
     setHoldings(updated); saveData(updated); setAllocText(""); setShowAllocImport(false);
     msg(`ใส่ target % ให้ ${applied.length} ตัวแล้ว ✓${normNote}${notFound.length>0?` (ไม่เจอ: ${notFound.join(",")})`:"" }`);
@@ -1005,7 +806,8 @@ export default function App() {
 
   // ── Computed values ────────────────────────────────────────────────────────
   // Apply computed shares/avgCost from transaction history where available
-  const effectiveHoldings = holdings.map((h:any) => {
+  // hidden = deleted from the port but kept for its realized history (แท็บประวัติ reads raw `holdings`)
+  const effectiveHoldings = holdings.filter((h:any) => !h.hidden).map((h:any) => {
     const computed = computeFromHistory(h);
     return { ...h, shares: computed.shares, avgCost: computed.avgCost };
   });
@@ -1046,7 +848,7 @@ export default function App() {
       <div style={{background:"#1a1d2e",borderBottom:"1px solid #2d3748",padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
         <div>
           <div style={{fontSize:18,fontWeight:700,color:"#7ee8a2"}}>📈 PORT AI</div>
-          <div style={{fontSize:11,color:"#a0aec0",marginTop:2}}>{activeHoldings.length} ถืออยู่{holdings.length>activeHoldings.length?` · ขายหมด ${holdings.length-activeHoldings.length}`:""} · <span style={{color:saving?"#f6c90e":status?"#f6c90e":"#4a5568"}}>{status||(lastUpdated?`ราคา ${lastUpdated.toLocaleTimeString("th")}`:"พร้อมใช้งาน")}</span></div>
+          <div style={{fontSize:11,color:"#a0aec0",marginTop:2}}>{activeHoldings.length} ถืออยู่{effectiveHoldings.length>activeHoldings.length?` · ขายหมด ${effectiveHoldings.length-activeHoldings.length}`:""} · <span style={{color:saving?"#f6c90e":status?"#f6c90e":"#4a5568"}}>{status||(lastUpdated?`ราคา ${lastUpdated.toLocaleTimeString("th")}`:"พร้อมใช้งาน")}</span></div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
           {userEmail ? (
@@ -1417,8 +1219,10 @@ export default function App() {
                 <div style={{marginLeft:"auto",display:"flex",gap:6}}>
                   <button onClick={()=>setShowTxImport(v=>!v)} style={btn("#1a2a3a","#93c5fd",{fontSize:12,padding:"6px 12px"})}>📥 Import ประวัติ CSV</button>
                   <button onClick={recalcRealizedFIFO} style={btn("#1a3a4a","#67e8f9",{fontSize:12,padding:"6px 12px"})}>🔁 Recalc FIFO</button>
+                  <button onClick={restoreBackup} style={btn("#3a2a1a","#fbbf24",{fontSize:12,padding:"6px 12px"})}>↩️ กู้คืน backup</button>
                   <button onClick={()=>{
                     if(!window.confirm("ลบประวัติ transaction ทั้งหมด?\n(จำนวนหุ้น/ต้นทุนปัจจุบันจะถูกบันทึกไว้ก่อนลบ)")) return;
+                    makeBackup("Clear ประวัติ");
                     const updated = holdings.map((h:any)=>{
                       const eff = computeFromHistory(h);
                       return { ...h, shares: eff.shares, avgCost: eff.avgCost, buyHistory:[], realizedHistory:[], splitHistory:[] };
@@ -1697,9 +1501,11 @@ export default function App() {
         const qty = parseFloat(sellQty)||0;
         const price = parseFloat(sellPrice)||0;
         const fees = calcSellFees();
-        const grossGain = (price - h.avgCost) * qty;
+        // Preview with the same FIFO basis confirmSell will record, not the holding average
+        const basis = qty>0 ? fifoBasisForSale(h, qty) : h.avgCost;
+        const grossGain = (price - basis) * qty;
         const netGain = grossGain - fees.totalFees;
-        const netGainPct = h.avgCost>0 && qty>0 ? (netGain/(h.avgCost*qty)*100) : 0;
+        const netGainPct = basis>0 && qty>0 ? (netGain/(basis*qty)*100) : 0;
         return (
           <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16,overflowY:"auto"}} onClick={()=>setSellModalId(null)}>
             <div style={{background:"#1a1d2e",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid #2d3748",boxSizing:"border-box"}} onClick={e=>e.stopPropagation()}>
@@ -1758,6 +1564,10 @@ export default function App() {
 
               {qty>0 && price>0 && (
                 <div style={{background:"#0f1117",borderRadius:8,padding:12,marginBottom:16}}>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
+                    <span style={{color:"#718096"}}>ต้นทุนล็อตที่ขาย (FIFO)</span>
+                    <span style={{color:"#a0aec0"}}>${basis.toFixed(4)}/หุ้น</span>
+                  </div>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
                     <span style={{color:"#718096"}}>Gross P&L</span>
                     <span style={{color:"#a0aec0"}}>{grossGain>=0?"+":""}${grossGain.toFixed(2)}</span>
