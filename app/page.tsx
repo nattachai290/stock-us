@@ -980,12 +980,14 @@ export default function App() {
             {holdings.length===0?(
               <div style={{textAlign:"center",padding:"40px 20px",color:"#718096"}}><div style={{fontSize:36}}>📂</div><div style={{marginTop:8}}>ยังไม่มีหลักทรัพย์</div></div>
             ):(
-              <div style={{overflowX:"auto"}}>
+              <div style={{overflow:"auto",maxHeight:"75vh"}}>
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                   <thead>
-                    <tr style={{color:"#cbd5e0",borderBottom:"1px solid #2d3748"}}>
-                      {["หลักทรัพย์","จำนวน*","ต้นทุน*","ราคา","วันนี้","P&L %","Realized","Unrealized","มูลค่า ($)","สัดส่วน / เป้า",""].map(h=>(
-                        <th key={h} style={{padding:"8px 8px",textAlign:h==="หลักทรัพย์"||h==="สัดส่วน / เป้า"?"left":h===""?"center":"right",fontWeight:600,whiteSpace:"nowrap"}}>{h}</th>
+                    <tr style={{color:"#cbd5e0"}}>
+                      {["หลักทรัพย์","จำนวน*","ต้นทุน*","ราคา","วันนี้","P&L %","Realized","Unrealized","มูลค่า ($)","สัดส่วน / เป้า",""].map((h,ci)=>(
+                        <th key={h} style={{padding:"8px 8px",textAlign:h==="หลักทรัพย์"||h==="สัดส่วน / เป้า"?"left":h===""?"center":"right",fontWeight:600,whiteSpace:"nowrap",
+                          position:"sticky",top:0,zIndex:ci===0?3:2,background:"#12141f",borderBottom:"1px solid #2d3748",
+                          ...(ci===0?{left:0}:{})}}>{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -999,9 +1001,11 @@ export default function App() {
                       const barPct=target>0?Math.min(w/target*100,150):0;
                       const barColor=over>0?"#ff6b6b":w>0?"#7ee8a2":"#2d3748";
                       const isAlert=h.changePct!=null&&Math.abs(h.changePct)>=3;
+                      const stickyBg=isAlert?"#211f18":"#0f1117"; // opaque bg so frozen column doesn't show rows behind
+                      const isStale=h.priceTime && (Date.now()-h.priceTime > 24*3600*1000); // price older than 24h
                       return (<>
                         <tr key={h.id} style={{borderBottom:"1px solid #1e2433",background:isAlert?"rgba(255,200,0,0.04)":"transparent"}}>
-                          <td style={{padding:"8px 8px"}}>
+                          <td style={{padding:"8px 8px",position:"sticky",left:0,zIndex:1,background:stickyBg}}>
                             <div style={{display:"flex",alignItems:"center",gap:4}}>
                               {isAlert&&<span>⚡</span>}
                               {editId===h.id?<input value={h.symbol} onChange={e=>updateH(h.id,"symbol",e.target.value)} style={inp}/>:<span style={{fontWeight:700,color:"#7ee8a2"}}>{h.symbol}</span>}
@@ -1013,7 +1017,7 @@ export default function App() {
                               {editId===h.id&&f==="currentPrice"?<input type="number" value={h[f]} onChange={e=>updateH(h.id,f,e.target.value)} style={{...inp,width:72}}/>
                               :<span>{f==="shares"?Number(h[f]).toFixed(7):f==="avgCost"?Number(h[f]).toFixed(4):Number(h[f]).toLocaleString()}</span>}
                               {f==="currentPrice"&&h.priceTime&&editId!==h.id&&(
-                                <div style={{fontSize:9,color:"#4a5568",whiteSpace:"nowrap"}}>{new Date(h.priceTime).toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}</div>
+                                <div title={isStale?"ราคาเก่ากว่า 24 ชม. — กดอัพเดทราคา":undefined} style={{fontSize:9,color:isStale?"#fbbf24":"#4a5568",whiteSpace:"nowrap"}}>{isStale?"⚠ ":""}{new Date(h.priceTime).toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}</div>
                               )}
                             </td>
                           ))}
