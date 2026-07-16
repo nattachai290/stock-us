@@ -6,6 +6,9 @@ import { parseCSV, toCSV, copyToClipboard, fifoBasisForSale, computeFromHistory 
 import { setOnDriveAuthExpired, listPortfolios, loadPortfolio, savePortfolio, deletePortfolio } from "./lib/drive";
 import { btn, btnPrimary, btnGhost, inp, PIE_COLORS } from "./lib/ui";
 import Snackbar from "./components/Snackbar";
+import Sheet from "./components/Sheet";
+import HoldingsList from "./components/HoldingsList";
+import DetailSheet from "./components/DetailSheet";
 
 const PROXY_URL = "/api/price";
 const GOOGLE_CLIENT_ID = "45222114320-2r8rh69n1mt4jd4138v90vqq7ha0dgq2.apps.googleusercontent.com";
@@ -61,6 +64,11 @@ export default function App() {
   const [editTxData, setEditTxData] = useState<{symbol:string; kind:string; index:number; date:string; qty:string; price:string; commission:string; vat:string; secFee:string; tafFee:string; catFee:string; ratio:string}|null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
+  const [detailId, setDetailId] = useState<number|null>(null);
+  const [query, setQuery] = useState("");
+  const [sortBy, setSortBy] = useState<"value"|"pl"|"today"|"az"|"under">("value");
+  const [sortDesc, setSortDesc] = useState(true);
+  const [showAddSheet, setShowAddSheet] = useState(false);
   useEffect(() => {
     if (!avatarMenuOpen) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setAvatarMenuOpen(false); };
@@ -866,6 +874,29 @@ export default function App() {
   const latestPriceTime = activeHoldings.reduce((mx:number,h:any)=> h.priceTime ? Math.max(mx, new Date(h.priceTime).getTime()) : mx, 0);
   const priceAsOf = latestPriceTime>0 ? new Date(latestPriceTime) : lastUpdated;
 
+  // Search + sort over activeHoldings for the portfolio tab (§5.2) — render-only
+  // filtering/ordering, doesn't touch effectiveHoldings/activeHoldings themselves.
+  const weightOf = (h:any) => tv>0 ? (h.shares*h.currentPrice/tv*100) : 0;
+  const filteredHoldingsList = (() => {
+    let list = [...activeHoldings];
+    const q = query.trim().toUpperCase();
+    if (q) list = list.filter((h:any)=>h.symbol.toUpperCase().includes(q) || (h.sector||"").toUpperCase().includes(q));
+    if (sortBy === "under") {
+      list = list.filter((h:any)=>h.targetPct>0 && weightOf(h)<h.targetPct);
+      list.sort((a:any,b:any)=>(b.targetPct-weightOf(b))-(a.targetPct-weightOf(a)));
+      return list;
+    }
+    list.sort((a:any,b:any)=>{
+      if (sortBy==="az") { const c=a.symbol.localeCompare(b.symbol); return sortDesc?-c:c; }
+      let av=0, bv=0;
+      if (sortBy==="value") { av=a.shares*a.currentPrice; bv=b.shares*b.currentPrice; }
+      else if (sortBy==="pl") { av=a.avgCost>0?(a.currentPrice-a.avgCost)/a.avgCost:-Infinity; bv=b.avgCost>0?(b.currentPrice-b.avgCost)/b.avgCost:-Infinity; }
+      else if (sortBy==="today") { av=a.changePct==null?-Infinity:a.changePct; bv=b.changePct==null?-Infinity:b.changePct; }
+      return sortDesc ? bv-av : av-bv;
+    });
+    return list;
+  })();
+
   if (!loaded) return (
     <div style={{background:"var(--bg)",minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10}}>
       <div style={{fontSize:26,fontWeight:800,letterSpacing:"0.14em",fontFamily:'"Avenir Next",Futura,"Segoe UI",system-ui,sans-serif'}}>
@@ -947,9 +978,9 @@ export default function App() {
 
       {/* Tabs */}
       <div style={{display:"flex",borderBottom:"1px solid var(--line)",background:"var(--card)"}}>
-        {["portfolio","chart","transactions","add"].map(t=>(
+        {["portfolio","chart","transactions"].map(t=>(
           <button key={t} onClick={()=>setTab(t)} style={{padding:"10px 16px",border:"none",background:"none",cursor:"pointer",fontSize:13,fontWeight:600,color:tab===t?"var(--brass)":"var(--faint)",borderBottom:tab===t?"2px solid var(--brass)":"2px solid transparent",whiteSpace:"nowrap"}}>
-            {t==="portfolio"?"📋 รายการ":t==="chart"?"📊 Chart":t==="transactions"?"📜 ประวัติ":"➕ เพิ่ม"}
+            {t==="portfolio"?"📋 รายการ":t==="chart"?"📊 Chart":"📜 ประวัติ"}
           </button>
         ))}
       </div>
@@ -1054,9 +1085,46 @@ export default function App() {
             {holdings.length>0 && holdings.some((h:any)=>(h.buyHistory||[]).length>0||(h.realizedHistory||[]).length>0) && (
               <div style={{fontSize:11,color:"var(--faint)",marginBottom:8}}>* จำนวนและต้นทุนคำนวณจากประวัติ 🛒ซื้อ/💰ขาย ใน 📜 ประวัติ (แก้ผ่านปุ่ม ⋮ เท่านั้น)</div>
             )}
+
+            {holdings.length>0 && (<>
+              {/* Search + sort (§5.2) */}
+              <div style={{display:"flex",gap:8,marginBottom:8,flexWrap:"wrap",alignItems:"center"}}>
+                <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="ค้นหา symbol / sector..."
+                  style={{flex:1,minWidth:160,background:"var(--card)",border:"1px solid var(--line)",borderRadius:8,padding:"8px 12px",color:"var(--ink)",fontSize:13}}/>
+                <button onClick={()=>{setShowAddSheet(true);}} style={{...btnPrimary({fontSize:12,padding:"8px 14px",whiteSpace:"nowrap"})}}>+ เพิ่มหลักทรัพย์</button>
+              </div>
+              <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+                {([["value","มูลค่า"],["pl","P&L %"],["today","วันนี้"],["az","A–Z"],["under","ยังไม่ถึงเป้า"]] as const).map(([key,label])=>(
+                  <button key={key} onClick={()=>{ if(sortBy===key) setSortDesc(v=>!v); else { setSortBy(key); setSortDesc(true); } }}
+                    style={{fontSize:11,fontWeight:600,padding:"5px 11px",borderRadius:999,cursor:"pointer",
+                      background:sortBy===key?"var(--brass)":"var(--card2)", color:sortBy===key?"var(--on-brass)":"var(--mut)", border:"none"}}>
+                    {label}{sortBy===key&&key!=="under"?(sortDesc?" ↓":" ↑"):""}
+                  </button>
+                ))}
+              </div>
+            </>)}
+
             {holdings.length===0?(
-              <div style={{textAlign:"center",padding:"40px 20px",color:"var(--faint)"}}><div style={{fontSize:36}}>📂</div><div style={{marginTop:8}}>ยังไม่มีหลักทรัพย์</div></div>
-            ):(
+              <div style={{textAlign:"center",padding:"40px 20px",color:"var(--faint)"}}>
+                <div style={{fontSize:36}}>📂</div><div style={{marginTop:8}}>ยังไม่มีหลักทรัพย์</div>
+                <div style={{display:"flex",gap:8,justifyContent:"center",marginTop:14}}>
+                  <button onClick={()=>setShowAddSheet(true)} style={{...btnPrimary({fontSize:13})}}>+ เพิ่มหลักทรัพย์</button>
+                  <button onClick={()=>setShowImport(true)} style={{...btnGhost({fontSize:13})}}>Import CSV</button>
+                </div>
+              </div>
+            ):filteredHoldingsList.length===0?(
+              <div style={{textAlign:"center",padding:"40px 20px",color:"var(--faint)"}}>
+                <div style={{marginTop:8}}>{query?`ไม่พบ "${query}"`:"ทุกตัวถึงเป้าแล้ว 🎉"}</div>
+                {query && <button onClick={()=>setQuery("")} style={{...btnGhost({fontSize:12,marginTop:10})}}>ล้างการค้นหา</button>}
+              </div>
+            ):(<>
+              {/* Mobile: card list */}
+              <div className="holdings-cards">
+                <HoldingsList holdings={filteredHoldingsList} tv={tv} pc={pc} onSelect={setDetailId}/>
+              </div>
+
+              {/* Desktop: table */}
+              <div className="holdings-table-wrap">
               <div style={{overflow:"auto",maxHeight:"75vh"}}>
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                   <thead>
@@ -1069,7 +1137,7 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {[...effectiveHoldings].filter((h:any)=>h.shares>0.000001).sort((a,b)=>a.symbol.localeCompare(b.symbol)).map((h:any)=>{
+                    {filteredHoldingsList.map((h:any)=>{
                       const val=h.shares*h.currentPrice; const pp=h.avgCost>0?((h.currentPrice-h.avgCost)/h.avgCost*100):0;
                       const realized=(h.realizedHistory||[]).reduce((s:number,r:any)=>s+(r.gain||0),0);
                       const unrealized=h.shares>0?(h.currentPrice-h.avgCost)*h.shares:0;
@@ -1144,7 +1212,8 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
-            )}
+              </div>
+            </>)}
           </div>
         )}
 
@@ -1407,30 +1476,12 @@ export default function App() {
           );
         })()}
 
-        {/* ADD TAB */}
-        {tab==="add"&&(
-          <div style={{maxWidth:460}}>
-            <div style={{background:"var(--card)",borderRadius:10,padding:20,border:"1px solid var(--line)"}}>
-              <div style={{fontSize:14,fontWeight:600,marginBottom:14,color:"var(--mut)"}}>เพิ่มหลักทรัพย์</div>
-              {[{k:"symbol",l:"Symbol",p:"AAPL"},{k:"shares",l:"จำนวนหุ้น",p:"100",t:"number"},{k:"avgCost",l:"ต้นทุนเฉลี่ย ($)",p:"150.00",t:"number"},{k:"currentPrice",l:"ราคาปัจจุบัน",p:"0",t:"number"},{k:"targetPct",l:"สัดส่วนเป้าหมาย % (ไม่บังคับ)",p:"2.5",t:"number"},{k:"sector",l:"กลุ่มธุรกิจ (ไม่บังคับ)",p:"Tech"},{k:"note",l:"หมายเหตุ (ไม่บังคับ)",p:"Long term"}].map(f=>(
-                <div key={f.k} style={{marginBottom:10}}>
-                  <div style={{fontSize:11,color:"var(--mut)",marginBottom:3}}>{f.l}</div>
-                  <input type={(f as any).t||"text"} value={(newStock as any)[f.k]||""} placeholder={f.p}
-                    onChange={e=>setNewStock({...newStock,[f.k]:f.k==="symbol"?e.target.value.toUpperCase():e.target.value})}
-                    style={{width:"100%",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:6,padding:"9px 12px",color:"var(--ink)",fontSize:13}}/>
-                </div>
-              ))}
-              <button onClick={addHolding} style={{...btn("var(--brass)","var(--on-brass)"),width:"100%",padding:"11px",fontSize:14,marginTop:4}}>➕ เพิ่มหลักทรัพย์</button>
-            </div>
-          </div>
-        )}
         </div>{/* content-area */}
       </div>{/* main-layout */}
 
       {/* EDIT TRANSACTION MODAL */}
-      {editTxData && (
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16,overflowY:"auto"}} onClick={()=>setEditTxData(null)}>
-          <div style={{background:"var(--card)",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid var(--line)",boxSizing:"border-box"}} onClick={e=>e.stopPropagation()}>
+      <Sheet open={!!editTxData} onClose={()=>setEditTxData(null)} maxWidth={380}>
+        {editTxData && (<>
             <div style={{fontSize:16,fontWeight:700,color:"var(--ink)",marginBottom:4}}>
               ✏️ แก้ไข{editTxData.kind==="buy"?"การซื้อ":editTxData.kind==="sell"?"การขาย":"การแตกพาร์"} {editTxData.symbol}
             </div>
@@ -1488,25 +1539,23 @@ export default function App() {
               <button onClick={saveEditTx} style={{...btn("var(--brass)","var(--on-brass)"),flex:1,padding:"10px"}}>✅ บันทึก</button>
               <button onClick={()=>setEditTxData(null)} style={{...btn("var(--line)","var(--mut)"),flex:1,padding:"10px"}}>ยกเลิก</button>
             </div>
-          </div>
-        </div>
-      )}
+        </>)}
+      </Sheet>
 
       {/* ACTION SHEET MODAL */}
-      {actionMenuId !== null && (() => {
-        const h = effectiveHoldings.find((x:any)=>x.id===actionMenuId);
-        if (!h) return null;
-        const actions = [
-          { icon:"✏️", label:"แก้ไขข้อมูล", color:"var(--ink)", onClick:()=>{setEditId(h.id);setActionMenuId(null);} },
-          { icon:"🛒", label:"ซื้อเพิ่ม", color:"var(--gain)", onClick:()=>{openBuyModal(h.id);setActionMenuId(null);} },
-          { icon:"💰", label:"ขาย", color:"var(--warn)", onClick:()=>{openSellModal(h.id);setActionMenuId(null);} },
-          { icon:"🔀", label:"แตกพาร์", color:"var(--brass)", onClick:()=>{openSplitModal(h.id);setActionMenuId(null);} },
-          { icon:"✕", label:"ลบออกจาก Port", color:"var(--loss)", onClick:()=>{removeH(h.id);setActionMenuId(null);} },
-        ];
-        return (
-          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={()=>setActionMenuId(null)}>
-            <div style={{background:"var(--card)",borderRadius:12,padding:8,maxWidth:320,width:"100%",border:"1px solid var(--line)",overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
-              <div style={{padding:"12px 16px",borderBottom:"1px solid var(--line)",marginBottom:4}}>
+      <Sheet open={actionMenuId !== null} onClose={()=>setActionMenuId(null)} maxWidth={320}>
+        {(() => {
+          const h = effectiveHoldings.find((x:any)=>x.id===actionMenuId);
+          if (!h) return null;
+          const actions = [
+            { icon:"✏️", label:"แก้ไขข้อมูล", color:"var(--ink)", onClick:()=>{setEditId(h.id);setActionMenuId(null);} },
+            { icon:"🛒", label:"ซื้อเพิ่ม", color:"var(--gain)", onClick:()=>{openBuyModal(h.id);setActionMenuId(null);} },
+            { icon:"💰", label:"ขาย", color:"var(--warn)", onClick:()=>{openSellModal(h.id);setActionMenuId(null);} },
+            { icon:"🔀", label:"แตกพาร์", color:"var(--brass)", onClick:()=>{openSplitModal(h.id);setActionMenuId(null);} },
+            { icon:"✕", label:"ลบออกจาก Port", color:"var(--loss)", onClick:()=>{removeH(h.id);setActionMenuId(null);} },
+          ];
+          return (<>
+              <div style={{padding:"0 0 12px",borderBottom:"1px solid var(--line)",marginBottom:4}}>
                 <span style={{fontWeight:700,color:"var(--brass)",fontSize:15}}>{h.symbol}</span>
                 <span style={{fontSize:12,color:"var(--faint)",marginLeft:8}}>{h.shares.toFixed(4)} หุ้น</span>
               </div>
@@ -1516,13 +1565,13 @@ export default function App() {
                 </button>
               ))}
               <button onClick={()=>setActionMenuId(null)} style={{width:"100%",padding:"10px",marginTop:4,background:"var(--line)",border:"none",borderRadius:8,cursor:"pointer",fontSize:13,color:"var(--mut)"}}>ยกเลิก</button>
-            </div>
-          </div>
-        );
-      })()}
+          </>);
+        })()}
+      </Sheet>
 
       {/* BUY MODAL */}
-      {buyModalId !== null && (() => {
+      <Sheet open={buyModalId !== null} onClose={()=>setBuyModalId(null)} maxWidth={380}>
+        {(() => {
         const h = effectiveHoldings.find((x:any)=>x.id===buyModalId);
         if (!h) return null;
         const qty = parseFloat(buyQty)||0;
@@ -1531,9 +1580,7 @@ export default function App() {
         const newValue = qty*price;
         const newShares = h.shares+qty;
         const newAvgCost = newShares>0 ? (oldValue+newValue)/newShares : 0;
-        return (
-          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={()=>setBuyModalId(null)}>
-            <div style={{background:"var(--card)",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid var(--line)"}} onClick={e=>e.stopPropagation()}>
+        return (<>
               <div style={{fontSize:16,fontWeight:700,color:"var(--gain)",marginBottom:4}}>🛒 ซื้อเพิ่ม {h.symbol}</div>
               <div style={{fontSize:12,color:"var(--faint)",marginBottom:16}}>มีอยู่ {h.shares.toFixed(7)} หุ้น | ทุนเฉลี่ย ${h.avgCost.toFixed(4)}/หุ้น</div>
 
@@ -1573,13 +1620,13 @@ export default function App() {
                 <button onClick={confirmBuy} disabled={!qty||!price} style={{...btn("var(--brass)","var(--on-brass)"),flex:1,padding:"10px",opacity:(!qty||!price)?0.5:1}}>✅ ยืนยันซื้อเพิ่ม</button>
                 <button onClick={()=>setBuyModalId(null)} style={{...btn("var(--line)","var(--mut)"),flex:1,padding:"10px"}}>ยกเลิก</button>
               </div>
-            </div>
-          </div>
-        );
-      })()}
+        </>);
+        })()}
+      </Sheet>
 
       {/* SELL MODAL */}
-      {sellModalId !== null && (() => {
+      <Sheet open={sellModalId !== null} onClose={()=>setSellModalId(null)} maxWidth={380}>
+        {(() => {
         const h = effectiveHoldings.find((x:any)=>x.id===sellModalId);
         if (!h) return null;
         const qty = parseFloat(sellQty)||0;
@@ -1590,9 +1637,7 @@ export default function App() {
         const grossGain = (price - basis) * qty;
         const netGain = grossGain - fees.totalFees;
         const netGainPct = basis>0 && qty>0 ? (netGain/(basis*qty)*100) : 0;
-        return (
-          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16,overflowY:"auto"}} onClick={()=>setSellModalId(null)}>
-            <div style={{background:"var(--card)",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid var(--line)",boxSizing:"border-box"}} onClick={e=>e.stopPropagation()}>
+        return (<>
               <div style={{fontSize:16,fontWeight:700,color:"var(--warn)",marginBottom:4}}>💰 ขาย {h.symbol}</div>
               <div style={{fontSize:12,color:"var(--faint)",marginBottom:16}}>มีอยู่ {h.shares.toFixed(7)} หุ้น | ทุน ${h.avgCost.toFixed(4)}/หุ้น</div>
 
@@ -1677,20 +1722,18 @@ export default function App() {
                 <button onClick={confirmSell} disabled={!qty||!price||qty>h.shares} style={{...btn("var(--brass)","var(--on-brass)"),flex:1,padding:"10px",opacity:(!qty||!price||qty>h.shares)?0.5:1}}>✅ ยืนยันขาย</button>
                 <button onClick={()=>setSellModalId(null)} style={{...btn("var(--line)","var(--mut)"),flex:1,padding:"10px"}}>ยกเลิก</button>
               </div>
-            </div>
-          </div>
-        );
-      })()}
+        </>);
+        })()}
+      </Sheet>
 
       {/* SPLIT MODAL */}
-      {splitModalId !== null && (() => {
+      <Sheet open={splitModalId !== null} onClose={()=>setSplitModalId(null)} maxWidth={380}>
+        {(() => {
         const h = effectiveHoldings.find((x:any)=>x.id===splitModalId);
         if (!h) return null;
         const newShares = parseFloat(splitRatio);
         const valid = newShares > 0 && newShares !== h.shares;
-        return (
-          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={()=>setSplitModalId(null)}>
-            <div style={{background:"var(--card)",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid var(--line)"}} onClick={e=>e.stopPropagation()}>
+        return (<>
               <div style={{fontSize:16,fontWeight:700,color:"var(--brass)",marginBottom:4}}>🔀 แตกพาร์ {h.symbol}</div>
               <div style={{fontSize:12,color:"var(--faint)",marginBottom:16}}>ปัจจุบัน {h.shares.toFixed(7)} หุ้น</div>
 
@@ -1704,10 +1747,40 @@ export default function App() {
                 <button onClick={confirmSplit} disabled={!valid} style={{...btn("var(--card2)","var(--brass)"),flex:1,padding:"10px",opacity:valid?1:0.5}}>✅ ยืนยันแตกพาร์</button>
                 <button onClick={()=>setSplitModalId(null)} style={{...btn("var(--line)","var(--mut)"),flex:1,padding:"10px"}}>ยกเลิก</button>
               </div>
-            </div>
+        </>);
+        })()}
+      </Sheet>
+
+      {/* DETAIL SHEET (mobile card tap) */}
+      <DetailSheet
+        holding={effectiveHoldings.find((x:any)=>x.id===detailId) || null}
+        onClose={()=>{setDetailId(null);setEditId(null);}}
+        tv={tv}
+        pc={pc}
+        editId={editId}
+        onEditIdChange={setEditId}
+        updateH={updateH}
+        confirmEdit={confirmEdit}
+        onBuy={(id)=>{setDetailId(null);openBuyModal(id);}}
+        onSell={(id)=>{setDetailId(null);openSellModal(id);}}
+        onSplit={(id)=>{setDetailId(null);openSplitModal(id);}}
+        onHistory={(symbol)=>{setDetailId(null);setTab("transactions");setTxFilterSymbol(symbol);}}
+        onRemove={(id)=>{setDetailId(null);removeH(id);}}
+      />
+
+      {/* ADD HOLDING SHEET */}
+      <Sheet open={showAddSheet} onClose={()=>setShowAddSheet(false)} maxWidth={420}>
+        <div style={{fontSize:16,fontWeight:700,marginBottom:14,color:"var(--ink)"}}>เพิ่มหลักทรัพย์</div>
+        {[{k:"symbol",l:"Symbol",p:"AAPL"},{k:"shares",l:"จำนวนหุ้น",p:"100",t:"number"},{k:"avgCost",l:"ต้นทุนเฉลี่ย ($)",p:"150.00",t:"number"},{k:"currentPrice",l:"ราคาปัจจุบัน",p:"0",t:"number"},{k:"targetPct",l:"สัดส่วนเป้าหมาย % (ไม่บังคับ)",p:"2.5",t:"number"},{k:"sector",l:"กลุ่มธุรกิจ (ไม่บังคับ)",p:"Tech"},{k:"note",l:"หมายเหตุ (ไม่บังคับ)",p:"Long term"}].map(f=>(
+          <div key={f.k} style={{marginBottom:10}}>
+            <div style={{fontSize:11,color:"var(--mut)",marginBottom:3}}>{f.l}</div>
+            <input type={(f as any).t||"text"} value={(newStock as any)[f.k]||""} placeholder={f.p}
+              onChange={e=>setNewStock({...newStock,[f.k]:f.k==="symbol"?e.target.value.toUpperCase():e.target.value})}
+              style={{width:"100%",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:6,padding:"9px 12px",color:"var(--ink)",fontSize:13,boxSizing:"border-box"}}/>
           </div>
-        );
-      })()}
+        ))}
+        <button onClick={()=>{addHolding();setShowAddSheet(false);}} style={{...btnPrimary(),width:"100%",padding:"11px",fontSize:14,marginTop:4}}>เพิ่มหลักทรัพย์</button>
+      </Sheet>
     </div>
   );
 }
