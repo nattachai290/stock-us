@@ -61,6 +61,12 @@ export default function App() {
   const [editTxData, setEditTxData] = useState<{symbol:string; kind:string; index:number; date:string; qty:string; price:string; commission:string; vat:string; secFee:string; tafFee:string; catFee:string; ratio:string}|null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
+  useEffect(() => {
+    if (!avatarMenuOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setAvatarMenuOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [avatarMenuOpen]);
 
   const msg = (m: string, ms = 3000) => { setStatus(m); if (ms) setTimeout(() => setStatus(""), ms); };
 
@@ -894,8 +900,8 @@ export default function App() {
                   <div onClick={()=>setAvatarMenuOpen(false)} style={{position:"fixed",inset:0,zIndex:60}}/>
                   <div style={{position:"absolute",right:0,top:"calc(100% + 6px)",background:"var(--card)",border:"1px solid var(--line)",borderRadius:"var(--r-sm)",boxShadow:"var(--shadow)",padding:8,minWidth:200,zIndex:61}}>
                     <div style={{fontSize:11,color:"var(--mut)",padding:"6px 8px",wordBreak:"break-all"}}>{userEmail}</div>
-                    <button onClick={async()=>{setAvatarMenuOpen(false);setSaving(true);msg("Sync...",0);try{await saveData(holdings);}catch(e:any){msg("Sync ไม่ได้: "+e.message);}setSaving(false);}} disabled={saving||!holdings.length}
-                      style={{...btnGhost({width:"100%",textAlign:"left",fontSize:13,marginBottom:4}),opacity:(saving||!holdings.length)?0.5:1}}>
+                    <button onClick={async()=>{setAvatarMenuOpen(false);setSaving(true);msg("Sync...",0);try{await saveData(holdings);}catch(e:any){msg("Sync ไม่ได้: "+e.message);}setSaving(false);}} disabled={saving||!holdings.length||!token}
+                      style={{...btnGhost({width:"100%",textAlign:"left",fontSize:13,marginBottom:4}),opacity:(!token||saving||!holdings.length)?0.5:1}}>
                       {saving?"กำลัง Sync...":"Sync → Drive"}
                     </button>
                     <button onClick={()=>{setAvatarMenuOpen(false);handleLogout();}} style={{...btnGhost({width:"100%",textAlign:"left",fontSize:13,color:"var(--loss)"})}}>ออกจากระบบ</button>
@@ -910,45 +916,6 @@ export default function App() {
           )}
         </div>
       </div>
-
-      {/* Hero summary card */}
-      {tab==="portfolio" && (
-        <div style={{maxWidth:1020,margin:"0 auto",padding:"16px 20px 0"}}>
-          <div style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:"var(--r-lg)",padding:18,boxShadow:"var(--shadow)"}}>
-            <div style={{fontSize:10.5,color:"var(--faint)",textTransform:"uppercase",letterSpacing:"0.14em"}}>มูลค่าพอร์ต</div>
-            <div style={{fontSize:27,fontWeight:800,color:"var(--ink)",marginTop:4}}>${tv.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-            <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
-              <span style={{fontSize:12,fontWeight:700,color:todayPct>=0?"var(--gain)":"var(--loss)",background:"var(--card2)",borderRadius:999,padding:"3px 10px"}}>
-                {todayPct>=0?"▲":"▼"} วันนี้ {todayPct>=0?"+":""}{todayPct.toFixed(2)}%
-              </span>
-              <span style={{fontSize:12,fontWeight:700,color:pc(pnl),background:"var(--card2)",borderRadius:999,padding:"3px 10px"}}>
-                รวม {pnlPct>=0?"+":""}{pnlPct.toFixed(1)}%
-              </span>
-            </div>
-            <div style={{display:"flex",gap:16,marginTop:14,paddingTop:12,borderTop:"1px solid var(--line)",flexWrap:"wrap"}}>
-              <div>
-                <div style={{fontSize:10,color:"var(--faint)"}}>Unrealized</div>
-                <div style={{fontSize:13,fontWeight:700,color:pc(pnl)}}>{pnl>=0?"+":""}${pnl.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-              </div>
-              <div>
-                <div style={{fontSize:10,color:"var(--faint)"}}>Realized</div>
-                <div style={{fontSize:13,fontWeight:700,color:pc(totalRealizedAll)}}>{totalRealizedAll>=0?"+":""}${totalRealizedAll.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-              </div>
-              <div>
-                <div style={{fontSize:10,color:"var(--faint)"}}>ถืออยู่</div>
-                <div style={{fontSize:13,fontWeight:700,color:"var(--ink)"}}>{activeHoldings.length} ตัว{effectiveHoldings.length>activeHoldings.length?` · ขายหมด ${effectiveHoldings.length-activeHoldings.length}`:""}</div>
-              </div>
-            </div>
-            <button onClick={refreshPrices} disabled={refreshing||!holdings.length}
-              style={{...btnPrimary({width:"100%",marginTop:14}),opacity:(refreshing||!holdings.length)?0.6:1}}>
-              {refreshing ? (status||"กำลังดึงราคา...") : "อัพเดทราคา"}
-            </button>
-            <div style={{fontSize:11,color:"var(--faint)",marginTop:8,textAlign:"center"}}>
-              {priceAsOf ? `ราคาเมื่อ ${priceAsOf.toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})} · Cboe + CNBC` : "ยังไม่เคยอัพเดทราคา — กดปุ่มด้านบน"}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Portfolio Selector */}
       {userEmail && (
@@ -1014,6 +981,41 @@ export default function App() {
         {/* PORTFOLIO TAB */}
         {tab==="portfolio"&&(
           <div>
+
+            {/* Hero summary card */}
+            <div style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:"var(--r-lg)",padding:18,boxShadow:"var(--shadow)",marginBottom:12}}>
+              <div style={{fontSize:10.5,color:"var(--faint)",textTransform:"uppercase",letterSpacing:"0.14em"}}>มูลค่าพอร์ต</div>
+              <div style={{fontSize:27,fontWeight:800,color:"var(--ink)",marginTop:4}}>${tv.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+              <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
+                <span style={{fontSize:12,fontWeight:700,color:todayPct>=0?"var(--gain)":"var(--loss)",background:"var(--card2)",borderRadius:999,padding:"3px 10px"}}>
+                  {todayPct>=0?"▲":"▼"} วันนี้ {todayPct>=0?"+":""}{todayPct.toFixed(2)}%
+                </span>
+                <span style={{fontSize:12,fontWeight:700,color:pc(pnl),background:"var(--card2)",borderRadius:999,padding:"3px 10px"}}>
+                  รวม {pnlPct>=0?"+":""}{pnlPct.toFixed(1)}%
+                </span>
+              </div>
+              <div style={{display:"flex",gap:16,marginTop:14,paddingTop:12,borderTop:"1px solid var(--line)",flexWrap:"wrap"}}>
+                <div>
+                  <div style={{fontSize:10,color:"var(--faint)"}}>Unrealized</div>
+                  <div style={{fontSize:13,fontWeight:700,color:pc(pnl)}}>{pnl>=0?"+":""}${pnl.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                </div>
+                <div>
+                  <div style={{fontSize:10,color:"var(--faint)"}}>Realized</div>
+                  <div style={{fontSize:13,fontWeight:700,color:pc(totalRealizedAll)}}>{totalRealizedAll>=0?"+":""}${totalRealizedAll.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                </div>
+                <div>
+                  <div style={{fontSize:10,color:"var(--faint)"}}>ถืออยู่</div>
+                  <div style={{fontSize:13,fontWeight:700,color:"var(--ink)"}}>{activeHoldings.length} ตัว{effectiveHoldings.length>activeHoldings.length?` · ขายหมด ${effectiveHoldings.length-activeHoldings.length}`:""}</div>
+                </div>
+              </div>
+              <button onClick={refreshPrices} disabled={refreshing||!holdings.length}
+                style={{...btnPrimary({width:"100%",marginTop:14}),opacity:(refreshing||!holdings.length)?0.6:1}}>
+                {refreshing ? (status||"กำลังดึงราคา...") : "อัพเดทราคา"}
+              </button>
+              <div style={{fontSize:11,color:"var(--faint)",marginTop:8,textAlign:"center"}}>
+                {priceAsOf ? `ราคาเมื่อ ${priceAsOf.toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})} · Cboe + CNBC` : "ยังไม่เคยอัพเดทราคา — กดปุ่มด้านบน"}
+              </div>
+            </div>
 
             {showAllocImport&&(
               <div style={{background:"var(--card)",borderRadius:8,padding:16,marginBottom:12,border:"1px solid var(--brass)"}}>
