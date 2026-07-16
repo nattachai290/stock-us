@@ -1,0 +1,752 @@
+<title>ข้อเสนอรีดีไซน์ · Portfolio App</title>
+<style>
+  :root{
+    --bg:#F2F4F6; --card:#FFFFFF; --card2:#EAEEF1; --line:#DCE3E8;
+    --ink:#16212A; --mut:#5D6E7B; --faint:#8CA0AD;
+    --brass:#8F7434; --brass-ink:#6E5822; --brass-soft:#F0E7D2;
+    --gain:#1E8E5A; --loss:#C2453E; --warn:#B07818;
+    --shadow:0 1px 2px rgba(22,33,42,.06),0 8px 28px rgba(22,33,42,.07);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0C1014; --card:#141A20; --card2:#1B232B; --line:#26313B;
+      --ink:#E9EEF3; --mut:#8FA1AF; --faint:#5C6B77;
+      --brass:#C9A566; --brass-ink:#DDBE85; --brass-soft:#2A2417;
+      --gain:#4CC38A; --loss:#E5655E; --warn:#E2A33C;
+      --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 32px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0C1014; --card:#141A20; --card2:#1B232B; --line:#26313B;
+    --ink:#E9EEF3; --mut:#8FA1AF; --faint:#5C6B77;
+    --brass:#C9A566; --brass-ink:#DDBE85; --brass-soft:#2A2417;
+    --gain:#4CC38A; --loss:#E5655E; --warn:#E2A33C;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 32px rgba(0,0,0,.35);
+  }
+  :root[data-theme="light"]{
+    --bg:#F2F4F6; --card:#FFFFFF; --card2:#EAEEF1; --line:#DCE3E8;
+    --ink:#16212A; --mut:#5D6E7B; --faint:#8CA0AD;
+    --brass:#8F7434; --brass-ink:#6E5822; --brass-soft:#F0E7D2;
+    --gain:#1E8E5A; --loss:#C2453E; --warn:#B07818;
+    --shadow:0 1px 2px rgba(22,33,42,.06),0 8px 28px rgba(22,33,42,.07);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI","Noto Sans Thai",sans-serif;
+    line-height:1.65; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:760px;margin:0 auto;padding:56px 20px 80px}
+  .eyebrow{
+    font-size:12px;font-weight:700;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--brass);margin:0 0 14px;
+  }
+  h1{
+    font-family:"Avenir Next",Futura,"Segoe UI",system-ui,"Noto Sans Thai",sans-serif;
+    font-size:clamp(30px,6vw,44px);line-height:1.15;margin:0 0 12px;font-weight:800;
+    letter-spacing:-.01em;text-wrap:balance;
+  }
+  .dek{color:var(--mut);font-size:16.5px;max-width:56ch;margin:0 0 8px}
+  h2{
+    font-size:13px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--faint);margin:64px 0 18px;display:flex;align-items:center;gap:12px;
+  }
+  h2::after{content:"";flex:1;height:1px;background:var(--line)}
+  .num{font-variant-numeric:tabular-nums}
+
+  /* ── name options ── */
+  .names{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+  .name{
+    background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:18px 16px 14px;position:relative;box-shadow:var(--shadow);
+  }
+  .name .mark{
+    font-family:"Avenir Next",Futura,system-ui,sans-serif;
+    font-weight:800;font-size:21px;letter-spacing:.12em;
+  }
+  .name .thai{color:var(--brass);font-size:13px;font-weight:600;margin-top:2px}
+  .name p{margin:8px 0 0;font-size:13px;color:var(--mut);line-height:1.55}
+  .name.pick{border-color:var(--brass)}
+  .name.pick .badge{
+    position:absolute;top:-9px;right:12px;background:var(--brass);color:var(--bg);
+    font-size:10.5px;font-weight:800;letter-spacing:.08em;padding:2px 9px;border-radius:99px;
+  }
+
+  /* ── tokens ── */
+  .tokens{display:flex;flex-wrap:wrap;gap:10px}
+  .sw{
+    display:flex;align-items:center;gap:9px;background:var(--card);
+    border:1px solid var(--line);border-radius:99px;padding:6px 14px 6px 7px;
+    font-size:12.5px;color:var(--mut);box-shadow:var(--shadow);
+  }
+  .sw i{width:22px;height:22px;border-radius:50%;display:block;border:1px solid var(--line)}
+  .note{font-size:13.5px;color:var(--mut);margin-top:14px;max-width:60ch}
+  .note b{color:var(--ink);font-weight:600}
+
+  /* ── phone frames strip ── */
+  .frames-outer{width:min(1060px,calc(100vw - 8px));margin:0 calc((min(1060px,100vw - 8px) - 100%)/-2)}
+  .frames{
+    display:flex;gap:22px;overflow-x:auto;padding:10px 20px 26px;
+    scroll-snap-type:x mandatory;
+  }
+  .fcol{scroll-snap-align:center;flex:0 0 auto}
+  .fcap{
+    text-align:center;font-size:13px;color:var(--mut);margin-top:12px;max-width:300px;
+  }
+  .fcap b{color:var(--ink);font-weight:700}
+
+  /* the app UI is deliberately dark-first — shared tokens for phone & desktop mocks */
+  .phone,.desktop{
+    --p-bg:#0C1014; --p-card:#151C23; --p-card2:#1C252E; --p-line:#242F39;
+    --p-ink:#EAEFF4; --p-mut:#90A2B0; --p-faint:#5F6E7A;
+    --p-brass:#D2AE6C; --p-gain:#4CC38A; --p-loss:#E5655E; --p-warn:#E2A33C;
+    --c1:#3987e5; --c2:#c98500; --c3:#d55181; --c4:#9085e9; --c5:#199e70; --c6:#5F6E7A;
+    color:var(--p-ink);
+  }
+  .phone{
+    width:302px;height:648px;background:var(--p-bg);border-radius:34px;
+    border:1px solid #2E3944;box-shadow:0 24px 60px rgba(0,0,0,.45),0 0 0 6px #06090C;
+    overflow:hidden;display:flex;flex-direction:column;
+    font-size:12.5px;line-height:1.5;
+  }
+  .statusbar{display:flex;justify-content:space-between;padding:10px 20px 4px;font-size:10.5px;color:var(--p-faint);font-weight:600}
+  .appbar{display:flex;align-items:center;gap:8px;padding:8px 16px 10px}
+  .logo{
+    font-family:"Avenir Next",Futura,system-ui,sans-serif;font-weight:800;
+    font-size:15.5px;letter-spacing:.14em;
+  }
+  .logo b{color:var(--p-brass);font-weight:800}
+  .portchip{
+    margin-left:auto;display:flex;align-items:center;gap:5px;
+    background:var(--p-card2);border:1px solid var(--p-line);border-radius:99px;
+    padding:3px 10px;font-size:11px;color:var(--p-mut);font-weight:600;
+  }
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--p-gain)}
+  .avatar{width:24px;height:24px;border-radius:50%;background:var(--p-card2);border:1px solid var(--p-line);
+    display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--p-brass);font-weight:800}
+  .pbody{flex:1;overflow-y:auto;padding:0 12px;scrollbar-width:none}
+  .pbody::-webkit-scrollbar{display:none}
+
+  .hero{
+    background:linear-gradient(160deg,var(--p-card) 0%,var(--p-card2) 100%);
+    border:1px solid var(--p-line);border-radius:16px;padding:14px 16px 12px;
+  }
+  .hero .lbl{font-size:10.5px;color:var(--p-faint);letter-spacing:.14em;text-transform:uppercase;font-weight:700}
+  .hero .val{font-size:27px;font-weight:800;letter-spacing:-.01em;margin:1px 0 2px}
+  .chip{display:inline-flex;align-items:center;gap:4px;border-radius:99px;padding:1.5px 9px;font-size:11px;font-weight:700}
+  .chip.g{background:rgba(76,195,138,.13);color:var(--p-gain)}
+  .chip.r{background:rgba(229,101,94,.13);color:var(--p-loss)}
+  .stats{display:flex;margin-top:11px;border-top:1px solid var(--p-line);padding-top:9px}
+  .stat{flex:1}
+  .stat .k{font-size:10px;color:var(--p-faint)}
+  .stat .v{font-size:12.5px;font-weight:700}
+  .refresh{
+    margin-top:11px;display:flex;align-items:center;justify-content:center;gap:7px;
+    background:var(--p-brass);color:#161006;border-radius:10px;padding:8px;
+    font-weight:800;font-size:12.5px;
+  }
+  .lastupd{text-align:center;font-size:10px;color:var(--p-faint);margin-top:6px}
+
+  .searchrow{display:flex;gap:7px;margin:12px 0 4px}
+  .search{
+    flex:1;display:flex;align-items:center;gap:7px;background:var(--p-card);
+    border:1px solid var(--p-line);border-radius:10px;padding:7px 11px;color:var(--p-faint);
+  }
+  .sorts{display:flex;gap:6px;margin:8px 0 10px;overflow:hidden}
+  .sort{
+    background:var(--p-card);border:1px solid var(--p-line);border-radius:99px;
+    padding:3.5px 11px;font-size:11px;color:var(--p-mut);font-weight:600;white-space:nowrap;
+  }
+  .sort.on{background:var(--p-brass);border-color:var(--p-brass);color:#161006;font-weight:800}
+
+  .row{
+    background:var(--p-card);border:1px solid var(--p-line);border-radius:13px;
+    padding:10px 13px;margin-bottom:8px;position:relative;
+  }
+  .row.mover::before{
+    content:"";position:absolute;left:0;top:12px;bottom:12px;width:3px;
+    border-radius:0 3px 3px 0;background:var(--p-warn);
+  }
+  .r1{display:flex;align-items:baseline;gap:7px}
+  .sym{font-weight:800;font-size:13.5px;letter-spacing:.02em}
+  .sec{font-size:9.5px;color:var(--p-faint);border:1px solid var(--p-line);border-radius:5px;padding:0 5px}
+  .r1 .px{margin-left:auto;font-weight:700}
+  .r2{display:flex;align-items:center;gap:7px;margin-top:3px;font-size:11px;color:var(--p-mut)}
+  .r2 .pl{margin-left:auto;font-weight:700}
+  .g{color:var(--p-gain)} .r{color:var(--p-loss)} .w{color:var(--p-warn)}
+  .wbar{width:52px;height:3.5px;background:var(--p-line);border-radius:3px;overflow:hidden;align-self:center}
+  .wbar i{display:block;height:100%;background:var(--p-brass);border-radius:3px}
+  .stale{font-size:9px;color:var(--p-warn);margin-top:3px}
+
+  .tabbar{
+    display:flex;border-top:1px solid var(--p-line);background:var(--p-card);
+    padding:7px 6px 14px;
+  }
+  .tab{flex:1;text-align:center;font-size:9.5px;color:var(--p-faint);font-weight:600}
+  .tab svg{display:block;margin:0 auto 2px}
+  .tab.on{color:var(--p-brass)}
+
+  /* sheet mock */
+  .scrim{position:relative;flex:1;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end;background:rgba(4,7,10,.55)}
+  .sheet{
+    background:var(--p-card);border-radius:18px 18px 0 0;border:1px solid var(--p-line);border-bottom:none;
+    padding:10px 16px 16px;
+  }
+  .grab{width:36px;height:4px;border-radius:99px;background:var(--p-line);margin:0 auto 10px}
+  .sh-head{display:flex;align-items:baseline;gap:8px}
+  .sh-head .px{margin-left:auto;font-weight:800;font-size:15px}
+  .kv{display:flex;justify-content:space-between;font-size:12px;padding:5.5px 0;border-bottom:1px dashed var(--p-line)}
+  .kv .k{color:var(--p-mut)} .kv .v{font-weight:700}
+  .kv .sub{font-size:9.5px;color:var(--p-faint);font-weight:400}
+  .target{margin:10px 0 4px}
+  .target .tl{display:flex;justify-content:space-between;font-size:11px;color:var(--p-mut);margin-bottom:4px}
+  .tbar{height:5px;background:var(--p-line);border-radius:4px;overflow:hidden}
+  .tbar i{display:block;height:100%;width:42%;background:var(--p-brass)}
+  .buyhint{font-size:11px;color:var(--p-gain);font-weight:600;margin-top:5px}
+  .actions{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:7px;margin-top:13px}
+  .act{
+    text-align:center;background:var(--p-card2);border:1px solid var(--p-line);border-radius:10px;
+    padding:8px 0;font-size:11px;font-weight:700;
+  }
+  .act.buy{background:var(--p-brass);border-color:var(--p-brass);color:#161006}
+  .snack{
+    position:absolute;left:14px;right:14px;bottom:14px;
+    background:#212B35;border:1px solid var(--p-line);border-radius:11px;
+    padding:9px 13px;font-size:11.5px;display:flex;align-items:center;gap:8px;
+    box-shadow:0 8px 24px rgba(0,0,0,.5);
+  }
+  .snack .undo{margin-left:auto;color:var(--p-brass);font-weight:800}
+
+  /* AI hub */
+  .ai-card{
+    background:var(--p-card);border:1px solid var(--p-line);border-radius:13px;
+    padding:12px 14px;margin-bottom:9px;display:flex;gap:11px;align-items:flex-start;
+  }
+  .ai-ic{
+    width:30px;height:30px;border-radius:9px;background:var(--p-card2);flex:0 0 auto;
+    display:flex;align-items:center;justify-content:center;color:var(--p-brass);
+  }
+  .ai-card .t{font-weight:800;font-size:12.5px}
+  .ai-card .d{font-size:10.5px;color:var(--p-mut);line-height:1.45;margin-top:1px}
+  .ai-card .go{margin-left:auto;align-self:center;color:var(--p-brass);font-weight:800;font-size:14px}
+  .ai-note{font-size:10px;color:var(--p-faint);text-align:center;margin:10px 4px 0;line-height:1.5}
+
+  /* ── charts (mock) ── */
+  .cardp{background:var(--p-card);border:1px solid var(--p-line);border-radius:13px;padding:12px 14px;margin-bottom:10px}
+  .cardp .ct{font-weight:800;font-size:12px;margin-bottom:2px}
+  .cardp .cd{font-size:10px;color:var(--p-faint);margin-bottom:10px}
+  .stack{display:flex;gap:2px;height:14px;border-radius:5px;overflow:hidden}
+  .stack i{display:block;height:100%}
+  .lg{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+  .lgr{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--p-mut)}
+  .lgr i{width:9px;height:9px;border-radius:3px;flex:0 0 auto}
+  .lgr .pv{margin-left:auto;font-weight:700;color:var(--p-ink)}
+  .lgr .pd{width:44px;text-align:right;color:var(--p-mut);font-weight:400}
+  .hbar{display:flex;align-items:center;gap:8px;font-size:11px;margin-bottom:7px;color:var(--p-mut)}
+  .hbar .hl{width:44px;font-weight:700;color:var(--p-ink)}
+  .hbar .tr{flex:1;height:9px;background:var(--p-card2);border-radius:4px;overflow:hidden}
+  .hbar .tr i{display:block;height:100%;background:var(--p-brass);border-radius:4px 0 0 4px}
+  .hbar .hv{width:36px;text-align:right;font-weight:600}
+  .hbar.gg .tr i{background:var(--p-gain)}
+  .hbar.rr .tr i{background:var(--p-loss)}
+  .mini-note{font-size:9.5px;color:var(--p-faint);margin-top:8px;line-height:1.5}
+
+  /* ── history rows ── */
+  .mo{font-size:10.5px;color:var(--p-faint);font-weight:700;letter-spacing:.1em;margin:12px 2px 7px;text-transform:uppercase}
+  .tx{
+    background:var(--p-card);border:1px solid var(--p-line);border-radius:12px;
+    padding:9px 12px;margin-bottom:7px;display:flex;gap:10px;align-items:center;
+  }
+  .tx-ic{width:26px;height:26px;border-radius:8px;background:var(--p-card2);flex:0 0 auto;
+    display:flex;align-items:center;justify-content:center}
+  .tx .tt{font-weight:800;font-size:12px}
+  .tx .td{font-size:10px;color:var(--p-mut);margin-top:1px}
+  .tx .tr2{margin-left:auto;text-align:right}
+  .tx .amt{font-weight:700;font-size:11.5px}
+  .tx .when{font-size:9.5px;color:var(--p-faint)}
+  .badge-sp{font-size:9px;background:rgba(144,133,233,.15);color:#B0A7F2;border-radius:5px;padding:0 6px;font-weight:700}
+
+  /* ── desktop mock ── */
+  .desk-outer{width:min(1060px,calc(100vw - 8px));margin:0 calc((min(1060px,100vw - 8px) - 100%)/-2);overflow-x:auto;padding:10px 20px 8px}
+  .desktop{
+    min-width:920px;max-width:1020px;margin:0 auto;background:var(--p-bg);
+    border:1px solid #2E3944;border-radius:16px;overflow:hidden;
+    display:grid;grid-template-columns:184px 1fr;font-size:12px;line-height:1.5;
+    box-shadow:0 24px 60px rgba(0,0,0,.4);
+  }
+  .side{background:var(--p-card);border-right:1px solid var(--p-line);padding:16px 12px;display:flex;flex-direction:column;gap:4px}
+  .side .logo{margin:2px 6px 14px}
+  .nav{
+    display:flex;align-items:center;gap:9px;border-radius:9px;padding:8px 10px;
+    color:var(--p-mut);font-weight:600;font-size:12px;
+  }
+  .nav.on{background:var(--p-card2);color:var(--p-brass);font-weight:800}
+  .side .spacer{flex:1}
+  .side .portsw{border-top:1px solid var(--p-line);padding-top:10px;display:flex;align-items:center;gap:7px;font-size:11px;color:var(--p-mut)}
+  .main{padding:14px 18px 18px;min-width:0}
+  .topbar{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .topbar .search{max-width:260px;font-size:11.5px}
+  .topbar .refresh{margin:0;padding:7px 14px;border-radius:9px}
+  .topbar .lastu{margin-left:auto;font-size:10.5px;color:var(--p-faint)}
+  .cards4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+  .c4{background:var(--p-card);border:1px solid var(--p-line);border-radius:12px;padding:10px 13px}
+  .c4 .k{font-size:10px;color:var(--p-faint)}
+  .c4 .v{font-size:16px;font-weight:800;margin-top:1px}
+  .dt{background:var(--p-card);border:1px solid var(--p-line);border-radius:13px;overflow:hidden}
+  .dr{display:grid;grid-template-columns:120px 86px 86px 86px 70px 76px 90px 1fr 34px;
+    align-items:center;padding:8px 12px;border-bottom:1px solid var(--p-line);font-size:11.5px}
+  .dr:last-child{border-bottom:none}
+  .dr.h{color:var(--p-faint);font-size:10px;font-weight:700;letter-spacing:.06em;background:var(--p-card2)}
+  .dr > span{text-align:right}
+  .dr > span:first-child{text-align:left}
+  .dr .sy{font-weight:800}
+  .dr .sc{display:block;font-size:9px;color:var(--p-faint);font-weight:400}
+  .dr .tgt{display:flex;align-items:center;gap:7px;justify-content:flex-end;color:var(--p-mut);font-size:10.5px}
+  .dr .wbar{width:64px}
+  .dr .dots{color:var(--p-faint);text-align:center}
+  .dcap{text-align:center;font-size:13px;color:var(--mut);margin:12px auto 0;max-width:64ch}
+  .dcap b{color:var(--ink);font-weight:700}
+
+  /* responsive spec cards */
+  .bp{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+  .bp .b{
+    background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px 16px;
+    box-shadow:var(--shadow);
+  }
+  .bp .bw{font-size:11px;font-weight:800;letter-spacing:.08em;color:var(--brass);text-transform:uppercase}
+  .bp .bt{font-weight:700;font-size:14.5px;margin:3px 0 4px}
+  .bp .bd{font-size:12.5px;color:var(--mut);line-height:1.55}
+
+  /* before/after */
+  .ba{display:flex;flex-direction:column;gap:10px}
+  .ba-row{
+    display:grid;grid-template-columns:1fr 22px 1fr;gap:12px;align-items:center;
+    background:var(--card);border:1px solid var(--line);border-radius:13px;padding:13px 16px;
+    box-shadow:var(--shadow);
+  }
+  .ba-row .from{color:var(--mut);font-size:13.5px}
+  .ba-row .to{font-size:13.5px;font-weight:600}
+  .ba-row .arr{color:var(--brass);font-weight:800;text-align:center}
+  @media (max-width:520px){
+    .ba-row{grid-template-columns:1fr;gap:4px}
+    .ba-row .arr{text-align:left}
+  }
+
+  /* plan */
+  .plan{display:flex;flex-direction:column;gap:10px;counter-reset:ph}
+  .ph{
+    background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px 16px;
+    display:flex;gap:14px;box-shadow:var(--shadow);
+  }
+  .ph::before{
+    counter-increment:ph;content:counter(ph);
+    width:26px;height:26px;border-radius:50%;background:var(--brass-soft);color:var(--brass-ink);
+    font-weight:800;font-size:13px;display:flex;align-items:center;justify-content:center;flex:0 0 auto;
+    margin-top:2px;
+  }
+  .ph .t{font-weight:700;font-size:14.5px}
+  .ph .d{font-size:13px;color:var(--mut);margin-top:2px}
+  .foot{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);font-size:13px;color:var(--faint)}
+</style>
+
+<div class="wrap">
+  <p class="eyebrow">Design Proposal · ยังไม่แตะโค้ด · v2</p>
+  <h1>รีดีไซน์แอปพอร์ต<br>ให้เป็นเครื่องมือระดับมืออาชีพ</h1>
+  <p class="dek">ทิศทางใหม่: จาก "เขียวสะท้อนแสง + อีโมจิ" ไปเป็นลุค private banking — พื้นเข้มนิ่ง สีทองเหลือง (brass) เป็นสีแบรนด์เดียว ปล่อยให้เขียว/แดงทำหน้าที่เดียวคือบอกกำไร-ขาดทุน ตัวเลขทุกช่องเรียงตรงกัน มือถือใช้การ์ดแตะขยาย จอกว้างใช้ตารางเต็ม — component เดียวกัน สลับตามขนาดจอ</p>
+
+  <h2>1 · ชื่อใหม่</h2>
+  <div class="names">
+    <div class="name pick"><span class="badge">แนะนำ</span>
+      <div class="mark">SASOM</div><div class="thai">สะสม</div>
+      <p>ตรงหัวใจของพอร์ตนี้ที่สุด — DCA คือการสะสม อ่านเป็นสากลได้ เป็นคำของเราเอง ไม่ซ้ำใคร</p>
+    </div>
+    <div class="name">
+      <div class="mark">COMPOUND</div><div class="thai">ทบต้น</div>
+      <p>ปรัชญาดอกเบี้ยทบต้น สื่อการลงทุนระยะยาวชัด แต่เป็นคำที่ fintech ใช้กันเยอะ</p>
+    </div>
+    <div class="name">
+      <div class="mark">HARBOR</div><div class="thai">ท่าเรือ</div>
+      <p>เล่นคำจาก "พอร์ต" (ท่าเรือ) และแปลว่าที่พักพิงปลอดภัย — ลุคสุขุม</p>
+    </div>
+    <div class="name">
+      <div class="mark">FOLIO</div><div class="thai">โฟลิโอ</div>
+      <p>สั้น สากล ตัดมาจาก portfolio ตรงตัว — ปลอดภัยแต่ generic กว่าตัวอื่น</p>
+    </div>
+  </div>
+
+  <h2>2 · สี &amp; ตัวอักษร</h2>
+  <div class="tokens">
+    <span class="sw"><i style="background:#0C1014"></i>พื้น Slate #0C1014</span>
+    <span class="sw"><i style="background:#151C23"></i>การ์ด #151C23</span>
+    <span class="sw"><i style="background:#D2AE6C"></i>Brass (แบรนด์) #D2AE6C</span>
+    <span class="sw"><i style="background:#4CC38A"></i>กำไร #4CC38A</span>
+    <span class="sw"><i style="background:#E5655E"></i>ขาดทุน #E5655E</span>
+    <span class="sw"><i style="background:#E2A33C"></i>เตือน/ราคาเก่า #E2A33C</span>
+  </div>
+  <p class="note"><b>กติกาสี:</b> ทอง brass ใช้กับสิ่งที่เป็น "แบรนด์และการกระทำ" เท่านั้น (โลโก้ ปุ่มหลัก แท็บที่เลือก) — เขียว/แดงไม่ใช้ตกแต่ง ใช้บอกกำไร-ขาดทุนอย่างเดียว ส่วนกราฟหมวดหมู่ (sector) ใช้ชุดสีแยกอีกชุดที่ผ่านการตรวจตาบอดสีแล้ว และ<b>ไม่มีเขียว</b>ในชุด เพื่อไม่ให้ชนกับความหมายกำไร<br><br>
+  <b>ตัวอักษร:</b> หัวเรื่อง/โลโก้ใช้ตระกูล geometric หนา ตัวเลขทั้งแอปเปิด <span class="num" style="font-weight:600">tabular-nums</span> ให้หลักเรียงตรงกันทุกแถว และลดทศนิยมที่แสดง (จำนวนหุ้น 4 ตำแหน่ง ราคา 2 ตำแหน่ง) — ค่าเต็มยังเก็บครบ เห็นตอนแตะขยาย</p>
+
+  <h2>3 · หน้าจอมือถือ (แตะเลื่อนดูได้ 5 จอ)</h2>
+  <div class="frames-outer"><div class="frames">
+
+    <!-- ── Frame 1: Portfolio home ── -->
+    <div class="fcol">
+      <div class="phone">
+        <div class="statusbar"><span>21:19</span><span>5G ▂▄▆</span></div>
+        <div class="appbar">
+          <span class="logo"><b>SA</b>SOM</span>
+          <span class="portchip"><span class="dot"></span>portfolio ▾</span>
+          <span class="avatar">N</span>
+        </div>
+        <div class="pbody">
+          <div class="hero">
+            <div class="lbl">มูลค่าพอร์ต</div>
+            <div class="val num">$5,930.42</div>
+            <span class="chip g">▲ วันนี้ +0.42%</span>
+            <span class="chip g">รวม +46.4%</span>
+            <div class="stats">
+              <div class="stat"><div class="k">Unrealized</div><div class="v g num">+$1,846</div></div>
+              <div class="stat"><div class="k">Realized</div><div class="v g num">+$716</div></div>
+              <div class="stat"><div class="k">ถืออยู่</div><div class="v num">89 ตัว</div></div>
+            </div>
+            <div class="refresh">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg>
+              อัพเดทราคา
+            </div>
+            <div class="lastupd">ราคาเมื่อ 15/07 22:59 · Cboe + CNBC</div>
+          </div>
+
+          <div class="searchrow">
+            <div class="search">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+              ค้นหาหุ้นในพอร์ต…
+            </div>
+          </div>
+          <div class="sorts">
+            <span class="sort on">มูลค่า ↓</span><span class="sort">P&amp;L %</span><span class="sort">วันนี้</span><span class="sort">A–Z</span><span class="sort">ยังไม่ถึงเป้า</span>
+          </div>
+
+          <div class="row mover">
+            <div class="r1"><span class="sym">ALAB</span><span class="sec">Semi</span><span class="px num">$345.00</span></div>
+            <div class="r2"><span class="num">$42 · 0.8%</span><span class="wbar"><i style="width:80%"></i></span><span class="pl r num">วันนี้ −4.64% · P&amp;L +207%</span></div>
+          </div>
+          <div class="row">
+            <div class="r1"><span class="sym">NVDA</span><span class="sec">Semi</span><span class="px num">$194.44</span></div>
+            <div class="r2"><span class="num">$89 · 1.7%</span><span class="wbar"><i style="width:28%"></i></span><span class="pl g num">P&amp;L +93.0%</span></div>
+          </div>
+          <div class="row">
+            <div class="r1"><span class="sym">CRWD</span><span class="sec">Cyber</span><span class="px num">$106.13</span></div>
+            <div class="r2"><span class="num">$56 · 1.1%</span><span class="wbar"><i style="width:55%"></i></span><span class="pl g num">P&amp;L +4.7%</span></div>
+          </div>
+          <div class="row">
+            <div class="r1"><span class="sym">LLY</span><span class="sec">Pharma</span><span class="px num">$1,212.48</span></div>
+            <div class="r2"><span class="num">$106 · 2.0%</span><span class="wbar"><i style="width:90%"></i></span><span class="pl g num">P&amp;L +46.9%</span></div>
+          </div>
+          <div class="row">
+            <div class="r1"><span class="sym">EOSE</span><span class="sec">Energy</span><span class="px num">$7.94</span></div>
+            <div class="r2"><span class="num">$30 · 0.6%</span><span class="wbar"><i style="width:100%"></i></span><span class="pl r num">P&amp;L −38.9%</span></div>
+            <div class="stale">⚠ ราคาเมื่อ 13/07 — เก่ากว่า 24 ชม.</div>
+          </div>
+          <div class="row">
+            <div class="r1"><span class="sym">META</span><span class="sec">Tech</span><span class="px num">$584.88</span></div>
+            <div class="r2"><span class="num">$61 · 1.2%</span><span class="wbar"><i style="width:33%"></i></span><span class="pl r num">P&amp;L −0.5%</span></div>
+          </div>
+        </div>
+        <div class="tabbar">
+          <div class="tab on"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>พอร์ต</div>
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg>กราฟ</div>
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>ประวัติ</div>
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg>AI</div>
+        </div>
+      </div>
+      <p class="fcap"><b>หน้าพอร์ต</b> — สรุปก่อน รายละเอียดทีหลัง: การ์ดมูลค่ารวม + ปุ่มอัพเดทเด่นชัด, ค้นหา/เรียงได้, แต่ละตัวเหลือ 2 บรรทัด แถบทองเล็กๆ คือความคืบหน้าเทียบเป้า</p>
+    </div>
+
+    <!-- ── Frame 2: detail sheet ── -->
+    <div class="fcol">
+      <div class="phone">
+        <div class="statusbar"><span>21:20</span><span>5G ▂▄▆</span></div>
+        <div class="scrim">
+          <div class="snack">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4CC38A" stroke-width="3"><path d="M4 12l5 5L20 7"/></svg>
+            อัพเดทราคาแล้ว 89 ตัว
+            <span class="undo">ปิด</span>
+          </div>
+          <div class="sheet">
+            <div class="grab"></div>
+            <div class="sh-head">
+              <span class="sym" style="font-size:17px">CRWD</span><span class="sec">Cybersecurity</span>
+              <span class="px num">$106.13 <span class="chip g" style="font-size:10px">+0.08%</span></span>
+            </div>
+            <div style="height:8px"></div>
+            <div class="kv"><span class="k">จำนวนหุ้น</span><span class="v num">0.5311 <span class="sub">(0.5311213)</span></span></div>
+            <div class="kv"><span class="k">ต้นทุน/หุ้น <span class="sub">FIFO ตรงโบรก</span></span><span class="v num">$101.36</span></div>
+            <div class="kv"><span class="k">มูลค่า</span><span class="v num">$56.37</span></div>
+            <div class="kv"><span class="k">Unrealized</span><span class="v g num">+$2.53 (+4.7%)</span></div>
+            <div class="kv"><span class="k">Realized สะสม</span><span class="v g num">+$23.83</span></div>
+            <div class="target">
+              <div class="tl"><span>น้ำหนัก 1.1% / เป้า 2.5%</span><span class="num">42%</span></div>
+              <div class="tbar"><i></i></div>
+              <div class="buyhint">ซื้อเพิ่ม ~$84.20 ถึงเป้า</div>
+            </div>
+            <div class="actions">
+              <div class="act buy">ซื้อ</div><div class="act">ขาย</div><div class="act">แตกพาร์</div><div class="act">ประวัติ</div>
+            </div>
+          </div>
+        </div>
+        <div class="tabbar">
+          <div class="tab on"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>พอร์ต</div>
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg>กราฟ</div>
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>ประวัติ</div>
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg>AI</div>
+        </div>
+      </div>
+      <p class="fcap"><b>แตะหุ้น → sheet รายละเอียด</b> — ทศนิยมเต็มอยู่ตรงนี้, ต้นทุน FIFO, เป้า + "ซื้อเพิ่มอีกเท่าไหร่", ปุ่มทำรายการนิ้วเดียวถึง และ snackbar แจ้งผลลอยล่างจอ</p>
+    </div>
+
+    <!-- ── Frame 3: Chart tab ── -->
+    <div class="fcol">
+      <div class="phone">
+        <div class="statusbar"><span>21:21</span><span>5G ▂▄▆</span></div>
+        <div class="appbar"><span class="logo"><b>SA</b>SOM</span><span class="portchip"><span class="dot"></span>portfolio ▾</span><span class="avatar">N</span></div>
+        <div class="pbody">
+          <div style="font-weight:800;font-size:16px;margin:6px 2px 10px">กราฟ</div>
+
+          <div class="cardp">
+            <div class="ct">สัดส่วนตาม Sector</div>
+            <div class="cd">จากมูลค่าปัจจุบัน · 89 ตัว</div>
+            <div class="stack">
+              <i style="width:28%;background:var(--c1)"></i><i style="width:19%;background:var(--c2)"></i><i style="width:16%;background:var(--c3)"></i><i style="width:10%;background:var(--c4)"></i><i style="width:9%;background:var(--c5)"></i><i style="width:18%;background:var(--c6)"></i>
+            </div>
+            <div class="lg">
+              <div class="lgr"><i style="background:var(--c1)"></i>Technology<span class="pv num">$1,684</span><span class="pd num">28.4%</span></div>
+              <div class="lgr"><i style="background:var(--c2)"></i>Semiconductor<span class="pv num">$1,116</span><span class="pd num">18.8%</span></div>
+              <div class="lgr"><i style="background:var(--c3)"></i>Healthcare<span class="pv num">$927</span><span class="pd num">15.6%</span></div>
+              <div class="lgr"><i style="background:var(--c4)"></i>Financials<span class="pv num">$583</span><span class="pd num">9.8%</span></div>
+              <div class="lgr"><i style="background:var(--c5)"></i>Consumer<span class="pv num">$518</span><span class="pd num">8.7%</span></div>
+              <div class="lgr"><i style="background:var(--c6)"></i>อื่นๆ (5 กลุ่ม)<span class="pv num">$1,102</span><span class="pd num">18.7%</span></div>
+            </div>
+            <div class="mini-note">แตะแท่ง/แถว = กรองรายการหุ้นตาม sector นั้น</div>
+          </div>
+
+          <div class="cardp">
+            <div class="ct">Top 10 น้ำหนักพอร์ต</div>
+            <div class="cd">เทียบเป้า — แตะเพื่อเปิดรายละเอียด</div>
+            <div class="hbar"><span class="hl">PANW</span><span class="tr"><i style="width:100%"></i></span><span class="hv num">3.1%</span></div>
+            <div class="hbar"><span class="hl">NUE</span><span class="tr"><i style="width:87%"></i></span><span class="hv num">2.7%</span></div>
+            <div class="hbar"><span class="hl">GOOGL</span><span class="tr"><i style="width:74%"></i></span><span class="hv num">2.3%</span></div>
+            <div class="hbar"><span class="hl">INTC</span><span class="tr"><i style="width:74%"></i></span><span class="hv num">2.3%</span></div>
+            <div class="hbar"><span class="hl">AMD</span><span class="tr"><i style="width:74%"></i></span><span class="hv num">2.3%</span></div>
+            <div class="hbar"><span class="hl">LLY</span><span class="tr"><i style="width:65%"></i></span><span class="hv num">2.0%</span></div>
+          </div>
+
+          <div class="cardp">
+            <div class="ct">กำไร / ขาดทุนสูงสุด (P&amp;L %)</div>
+            <div class="cd">ต่อหุ้นที่ยังถืออยู่</div>
+            <div class="hbar gg"><span class="hl">INTC</span><span class="tr"><i style="width:100%"></i></span><span class="hv g num">+400%</span></div>
+            <div class="hbar gg"><span class="hl">ALAB</span><span class="tr"><i style="width:52%"></i></span><span class="hv g num">+207%</span></div>
+            <div class="hbar gg"><span class="hl">TSM</span><span class="tr"><i style="width:41%"></i></span><span class="hv g num">+163%</span></div>
+            <div class="hbar rr"><span class="hl">EOSE</span><span class="tr"><i style="width:39%"></i></span><span class="hv r num">−38.9%</span></div>
+            <div class="hbar rr"><span class="hl">CRCL</span><span class="tr"><i style="width:38%"></i></span><span class="hv r num">−37.6%</span></div>
+            <div class="hbar rr"><span class="hl">ACHR</span><span class="tr"><i style="width:32%"></i></span><span class="hv r num">−32.1%</span></div>
+          </div>
+
+          <div class="mini-note" style="text-align:center;margin-bottom:10px">เฟสถัดไป: กราฟมูลค่าพอร์ตย้อนหลัง (ต้องเริ่มเก็บ snapshot รายวันก่อน)</div>
+        </div>
+        <div class="tabbar">
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>พอร์ต</div>
+          <div class="tab on"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg>กราฟ</div>
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>ประวัติ</div>
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg>AI</div>
+        </div>
+      </div>
+      <p class="fcap"><b>แท็บกราฟ</b> — เลิกวงกลม 15 สี: sector เป็นแท่งสัดส่วน + ตารางอ่านง่าย (ชุดสีผ่านเช็คตาบอดสี ไม่มีเขียวกันสับสนกับกำไร), Top 10 และ กำไร/ขาดทุนสูงสุดเป็นแท่งแนวนอน แตะแล้วกรอง/เปิดหุ้นได้</p>
+    </div>
+
+    <!-- ── Frame 4: History tab ── -->
+    <div class="fcol">
+      <div class="phone">
+        <div class="statusbar"><span>21:22</span><span>5G ▂▄▆</span></div>
+        <div class="appbar"><span class="logo"><b>SA</b>SOM</span><span class="portchip"><span class="dot"></span>portfolio ▾</span><span class="avatar">N</span></div>
+        <div class="pbody">
+          <div style="display:flex;align-items:center;margin:6px 2px 10px">
+            <span style="font-weight:800;font-size:16px">ประวัติ</span>
+            <span style="margin-left:auto;font-size:10.5px;color:var(--p-brass);font-weight:700">เครื่องมือ ⋯</span>
+          </div>
+
+          <div class="hero" style="padding:11px 14px">
+            <div class="stats" style="border:none;margin:0;padding:0">
+              <div class="stat"><div class="k">Realized รวม</div><div class="v g num">+$716.42</div></div>
+              <div class="stat"><div class="k">Win rate</div><div class="v num">78% <span style="font-size:9px;color:var(--p-faint)">(18W/5L)</span></div></div>
+              <div class="stat"><div class="k">ธุรกรรม</div><div class="v num">231</div></div>
+            </div>
+          </div>
+
+          <div class="searchrow" style="margin-top:10px">
+            <div class="search"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>กรองตามชื่อหุ้น…</div>
+          </div>
+          <div class="sorts">
+            <span class="sort on">ทั้งหมด</span><span class="sort">ซื้อ</span><span class="sort">ขาย</span><span class="sort">แตกพาร์</span>
+          </div>
+
+          <div class="mo">กรกฎาคม 2026</div>
+          <div class="tx">
+            <div class="tx-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#E5655E" stroke-width="2.4"><path d="M12 19V5m0 0-5 5m5-5 5 5"/></svg></div>
+            <div><div class="tt">ขาย RBRK</div><div class="td num">0.2239 หุ้น @ $89.12</div></div>
+            <div class="tr2"><div class="amt g num">+$4.06 (+25.6%)</div><div class="when">15/07 · 08:00</div></div>
+          </div>
+          <div class="tx">
+            <div class="tx-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4CC38A" stroke-width="2.4"><path d="M12 5v14m0 0-5-5m5 5 5-5"/></svg></div>
+            <div><div class="tt">ซื้อ GRBK</div><div class="td num">0.0416 หุ้น @ $71.95</div></div>
+            <div class="tr2"><div class="amt num">ทุนเฉลี่ย $65.83</div><div class="when">14/07 · 21:07</div></div>
+          </div>
+          <div class="tx">
+            <div class="tx-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#B0A7F2" stroke-width="2.2"><path d="M8 3H5v18h3M16 3h3v18h-3"/></svg></div>
+            <div><div class="tt">แตกพาร์ CRWD <span class="badge-sp">1 : 4</span></div><div class="td num">0.1328 → 0.5311 หุ้น</div></div>
+            <div class="tr2"><div class="when">02/07 · 15:05</div></div>
+          </div>
+          <div class="tx">
+            <div class="tx-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#E5655E" stroke-width="2.4"><path d="M12 19V5m0 0-5 5m5-5 5 5"/></svg></div>
+            <div><div class="tt">ขาย HPQ</div><div class="td num">0.5746 หุ้น @ $21.89</div></div>
+            <div class="tr2"><div class="amt r num">−$1.19 (−8.6%)</div><div class="when">01/07 · 20:21</div></div>
+          </div>
+
+          <div class="mo">มิถุนายน 2026</div>
+          <div class="tx">
+            <div class="tx-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4CC38A" stroke-width="2.4"><path d="M12 5v14m0 0-5-5m5 5 5-5"/></svg></div>
+            <div><div class="tt">ซื้อ ASTS</div><div class="td num">0.0459 หุ้น @ $64.75</div></div>
+            <div class="tr2"><div class="amt num">ทุนเฉลี่ย $66.87</div><div class="when">26/06 · 14:16</div></div>
+          </div>
+          <div class="tx">
+            <div class="tx-ic"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4CC38A" stroke-width="2.4"><path d="M12 5v14m0 0-5-5m5 5 5-5"/></svg></div>
+            <div><div class="tt">ซื้อ PRCT</div><div class="td num">0.1447 หุ้น @ $20.60</div></div>
+            <div class="tr2"><div class="amt num">ทุนเฉลี่ย $27.34</div><div class="when">25/06 · 14:20</div></div>
+          </div>
+        </div>
+        <div class="tabbar">
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>พอร์ต</div>
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg>กราฟ</div>
+          <div class="tab on"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>ประวัติ</div>
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg>AI</div>
+        </div>
+      </div>
+      <p class="fcap"><b>แท็บประวัติ</b> — timeline จัดกลุ่มตามเดือน: ซื้อ=ลูกศรลง ขาย=ลูกศรขึ้น+ชิปกำไร แตกพาร์=ป้ายม่วง, สรุป Realized/Win rate อยู่บนสุด, เครื่องมือเสี่ยง (Import / Recalc FIFO / กู้คืน / ล้าง) เก็บในเมนู ⋯ ไม่เกะกะ</p>
+    </div>
+
+    <!-- ── Frame 5: AI hub ── -->
+    <div class="fcol">
+      <div class="phone">
+        <div class="statusbar"><span>21:23</span><span>5G ▂▄▆</span></div>
+        <div class="appbar"><span class="logo"><b>SA</b>SOM</span><span class="portchip"><span class="dot"></span>portfolio ▾</span><span class="avatar">N</span></div>
+        <div class="pbody">
+          <div style="font-weight:800;font-size:16px;margin:6px 2px 2px">ผู้ช่วยวิเคราะห์</div>
+          <div style="font-size:10.5px;color:var(--p-mut);margin:0 2px 12px">สร้างพรอมป์จากข้อมูลพอร์ตจริง → วางใน Claude แล้วนำผลกลับมาวาง</div>
+
+          <div class="ai-card">
+            <div class="ai-ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg></div>
+            <div><div class="t">วิเคราะห์พอร์ต</div><div class="d">ภาพรวม + หาตัวที่ควรขายจริงๆ ตามพื้นฐาน</div></div>
+            <div class="go">›</div>
+          </div>
+          <div class="ai-card">
+            <div class="ai-ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg></div>
+            <div><div class="t">ตัวผิดปกติวันนี้ <span class="chip r" style="font-size:9px;padding:0 6px">3 ตัว</span></div><div class="d">หุ้นขยับ ±3% — ค้นข่าวแล้ววิเคราะห์ว่าพื้นฐานเปลี่ยนไหม</div></div>
+            <div class="go">›</div>
+          </div>
+          <div class="ai-card" style="border-color:var(--p-brass)">
+            <div class="ai-ic" style="background:rgba(210,174,108,.14)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 21v-4l14-14 4 4L7 21H3z"/></svg></div>
+            <div><div class="t">จัดทัพพอร์ต</div><div class="d">แม่ทัพ / รองแม่ทัพ / ทหารเสริม → ได้ตาราง % พร้อมวางกลับ</div></div>
+            <div class="go">›</div>
+          </div>
+          <div class="ai-card">
+            <div class="ai-ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg></div>
+            <div><div class="t">แนะนำหุ้นใหม่</div><div class="d">หาหุ้นพื้นฐานดีที่ยังไม่มีในพอร์ต 3–5 ตัว</div></div>
+            <div class="go">›</div>
+          </div>
+          <div class="ai-card">
+            <div class="ai-ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 16V4m0 12-4-4m4 4 4-4"/><path d="M4 20h16"/></svg></div>
+            <div><div class="t">วางผลจัดทัพ (Target %)</div><div class="d">แปะตารางจาก Claude — ระบบตรวจรวม 100% ให้อัตโนมัติ</div></div>
+            <div class="go">›</div>
+          </div>
+          <div class="ai-note">ทุกพรอมป์นับเฉพาะหุ้นที่ถืออยู่จริง ไม่รวมตัวที่ขายหมด/ลบแล้ว</div>
+        </div>
+        <div class="tabbar">
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>พอร์ต</div>
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg>กราฟ</div>
+          <div class="tab"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>ประวัติ</div>
+          <div class="tab on"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg>AI</div>
+        </div>
+      </div>
+      <p class="fcap"><b>แท็บ AI</b> — ปุ่ม copy-prompt 5 ตัวที่เคยซ่อนใน hamburger กลายเป็นการ์ดมีคำอธิบาย รู้ว่ากดแล้วได้อะไร ไอคอนชุดเดียวกันทั้งแอป ไม่มีอีโมจิปน</p>
+    </div>
+
+  </div></div>
+
+  <h2>4 · จอกว้าง (PC) — responsive จริง ไม่ใช่มือถือขยาย</h2>
+  <div class="desk-outer">
+    <div class="desktop">
+      <div class="side">
+        <span class="logo"><b>SA</b>SOM</span>
+        <div class="nav on"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>พอร์ต</div>
+        <div class="nav"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg>กราฟ</div>
+        <div class="nav"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>ประวัติ</div>
+        <div class="nav"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/></svg>ผู้ช่วย AI</div>
+        <div class="spacer"></div>
+        <div class="portsw"><span class="dot"></span>portfolio ▾</div>
+        <div class="portsw" style="border:none;padding-top:6px"><span class="avatar">N</span> nattachai…@gmail.com</div>
+      </div>
+      <div class="main">
+        <div class="topbar">
+          <div class="search"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>ค้นหา (กด /)</div>
+          <div class="refresh"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg>อัพเดทราคา</div>
+          <span class="lastu">ราคาเมื่อ 15/07 22:59 · Cboe + CNBC</span>
+        </div>
+        <div class="cards4">
+          <div class="c4"><div class="k">มูลค่าพอร์ต</div><div class="v num">$5,930.42</div><span class="chip g" style="font-size:10px">▲ +0.42% วันนี้</span></div>
+          <div class="c4"><div class="k">Unrealized</div><div class="v g num">+$1,846.20</div><span class="chip g" style="font-size:10px">+45.2%</span></div>
+          <div class="c4"><div class="k">Realized</div><div class="v g num">+$716.42</div><span style="font-size:10px;color:var(--p-faint)">78% win</span></div>
+          <div class="c4"><div class="k">ถืออยู่</div><div class="v num">89 ตัว</div><span style="font-size:10px;color:var(--p-faint)">ขายหมด 11</span></div>
+        </div>
+        <div class="dt">
+          <div class="dr h"><span>หลักทรัพย์</span><span>จำนวน</span><span>ต้นทุน</span><span>ราคา</span><span>วันนี้</span><span>P&amp;L %</span><span>มูลค่า</span><span style="text-align:right">น้ำหนัก / เป้า</span><span></span></div>
+          <div class="dr"><span><span class="sy">NVDA</span><span class="sc">Semiconductor</span></span><span class="num">0.4578</span><span class="num">$100.74</span><span class="num">$194.44</span><span class="r num">−0.20%</span><span class="g num">+93.0%</span><span class="num">$89.01</span><span class="tgt"><span class="num">1.7 / 6.0%</span><span class="wbar"><i style="width:28%"></i></span></span><span class="dots">⋯</span></div>
+          <div class="dr"><span><span class="sy">LLY</span><span class="sc">Pharma</span></span><span class="num">0.0874</span><span class="num">$825.20</span><span class="num">$1,212.48</span><span class="r num">−0.12%</span><span class="g num">+46.9%</span><span class="num">$106.01</span><span class="tgt"><span class="num">2.0 / 3.0%</span><span class="wbar"><i style="width:67%"></i></span></span><span class="dots">⋯</span></div>
+          <div class="dr"><span><span class="sy">CRWD</span><span class="sc">Cybersecurity</span></span><span class="num">0.5311</span><span class="num">$101.36</span><span class="num">$106.13</span><span class="g num">+0.08%</span><span class="g num">+4.7%</span><span class="num">$56.37</span><span class="tgt"><span class="num">1.1 / 2.5%</span><span class="wbar"><i style="width:42%"></i></span></span><span class="dots">⋯</span></div>
+          <div class="dr"><span><span class="sy">ALAB</span><span class="sc">Semiconductor</span></span><span class="num">0.1055</span><span class="num">$132.60</span><span class="num">$345.00</span><span class="r num">−4.64%</span><span class="g num">+207%</span><span class="num">$42.30</span><span class="tgt"><span class="num">0.8 / 1.0%</span><span class="wbar"><i style="width:80%"></i></span></span><span class="dots">⋯</span></div>
+          <div class="dr"><span><span class="sy">EOSE</span><span class="sc">Energy</span></span><span class="num">1.3929</span><span class="num">$12.99</span><span class="num">$7.94 <span class="w" style="font-size:9px">⚠13/07</span></span><span class="num" style="color:var(--p-faint)">—</span><span class="r num">−38.9%</span><span class="num">$30.42</span><span class="tgt"><span class="num">0.6 / 0.5%</span><span class="wbar"><i style="width:100%"></i></span></span><span class="dots">⋯</span></div>
+          <div class="dr"><span><span class="sy">META</span><span class="sc">Technology</span></span><span class="num">0.1043</span><span class="num">$588.02</span><span class="num">$584.88</span><span class="g num">+0.34%</span><span class="r num">−0.5%</span><span class="num">$61.02</span><span class="tgt"><span class="num">1.2 / 3.5%</span><span class="wbar"><i style="width:33%"></i></span></span><span class="dots">⋯</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="dcap"><b>จอกว้าง ≥900px</b> — แถบนำทางย้ายไปซ้าย, ตารางเต็มกลับมา (หัวตาราง + คอลัมน์แรกยังตรึงเหมือนเดิม, ตัวเลขชิดขวา tabular ทุกคอลัมน์), การ์ดสรุป 4 ใบเรียงบน, ค้นหากด <b>/</b> ได้ — ข้อมูลชุดเดียวกับมือถือ แค่เปลี่ยนการจัดวาง</p>
+
+  <div style="height:26px"></div>
+  <div class="bp">
+    <div class="b"><div class="bw">&lt; 900px · มือถือ/แท็บเล็ตตั้ง</div><div class="bt">การ์ด + แถบล่าง</div><div class="bd">รายการหุ้นเป็นการ์ด 2 บรรทัด, นำทางล่างจอ, รายละเอียดเป็น bottom sheet, เครื่องมือเก็บในเมนู ⋯</div></div>
+    <div class="b"><div class="bw">≥ 900px · แท็บเล็ตนอน/PC</div><div class="bt">Sidebar + ตารางเต็ม</div><div class="bd">นำทางซ้าย, ตาราง 9 คอลัมน์พร้อม sticky, sheet เปลี่ยนเป็น side panel ด้านขวา, กราฟวาง 2 คอลัมน์</div></div>
+    <div class="b"><div class="bw">ทุกขนาด</div><div class="bt">Component เดียวกัน</div><div class="bd">การ์ดสรุป, ชิปเรียง, snackbar, ปุ่ม, สี, ตัวเลข — โค้ดชุดเดียว จัดวางใหม่ด้วย CSS breakpoint เดียวที่ 900px</div></div>
+  </div>
+
+  <h2>5 · สิ่งที่เปลี่ยน</h2>
+  <div class="ba">
+    <div class="ba-row"><span class="from">"📈 PORT AI" + อีโมจิปนทุกปุ่ม</span><span class="arr">→</span><span class="to">Wordmark ใหม่ + ไอคอน SVG ชุดเดียว น้ำหนักเส้นเท่ากันทั้งแอป</span></div>
+    <div class="ba-row"><span class="from">เขียวนีออนเป็นทั้งแบรนด์ ปุ่ม และกำไร ปนกันหมด</span><span class="arr">→</span><span class="to">Brass = แบรนด์/ปุ่มหลัก · เขียว/แดง = กำไร/ขาดทุนเท่านั้น</span></div>
+    <div class="ba-row"><span class="from">ตาราง 11 คอลัมน์ เลื่อนซ้ายขวาบนมือถือ</span><span class="arr">→</span><span class="to">มือถือ: การ์ดแตะขยาย · จอกว้าง: ตารางเต็ม — สลับอัตโนมัติที่ 900px</span></div>
+    <div class="ba-row"><span class="from">ไม่มีค้นหา/เรียง — 89 ตัวไล่หาเอง</span><span class="arr">→</span><span class="to">ช่องค้นหา + ชิปเรียง (มูลค่า / P&amp;L / วันนี้ / ยังไม่ถึงเป้า)</span></div>
+    <div class="ba-row"><span class="from">กราฟวงกลม 15 สี อ่านแทบไม่ออก</span><span class="arr">→</span><span class="to">แท่งสัดส่วน sector + Top 10 + กำไร/ขาดทุนสูงสุด ชุดสีผ่านเช็คตาบอดสี</span></div>
+    <div class="ba-row"><span class="from">ประวัติ: อีโมจิ 🛒💰🔀 + ปุ่มเครื่องมือเรียงเต็มแถว</span><span class="arr">→</span><span class="to">Timeline จัดกลุ่มรายเดือน + สรุป Realized/Win rate · เครื่องมือเสี่ยงเก็บในเมนู ⋯</span></div>
+    <div class="ba-row"><span class="from">ทศนิยม 7 ตำแหน่งรกทุกแถว</span><span class="arr">→</span><span class="to">แสดงย่อ + tabular-nums หลักตรงกัน — ค่าเต็มอยู่ในหน้ารายละเอียด</span></div>
+    <div class="ba-row"><span class="from">ข้อความแจ้งผลเป็นตัวจิ๋วบนหัวเพจ</span><span class="arr">→</span><span class="to">Snackbar ลอยล่างจอ + ปุ่ม undo ในตัว</span></div>
+  </div>
+
+  <h2>6 · แผนลงมือ (แยกเฟส อนุมัติทีละขั้นได้)</h2>
+  <div class="plan">
+    <div class="ph"><div><div class="t">ฐานดีไซน์ + หัวใหม่</div><div class="d">ตั้ง design tokens (สี/ระยะ/ตัวอักษร), เปลี่ยนชื่อ-โลโก้, การ์ดสรุปบนสุด, snackbar — โครงสร้างข้อมูลไม่แตะเลย</div></div></div>
+    <div class="ph"><div><div class="t">รายการหุ้น: การ์ด (มือถือ) / ตาราง (PC) + ค้นหา/เรียง + sheet รายละเอียด</div><div class="d">ส่วนที่เปลี่ยนประสบการณ์มากที่สุด — breakpoint เดียวที่ 900px</div></div></div>
+    <div class="ph"><div><div class="t">นำทางใหม่ + แท็บ AI</div><div class="d">มือถือ: แถบล่าง · PC: sidebar ซ้าย · ย้าย copy-prompt จาก hamburger มาเป็นการ์ดพร้อมคำอธิบาย</div></div></div>
+    <div class="ph"><div><div class="t">กราฟ + ประวัติโฉมใหม่</div><div class="d">แท่ง sector/Top10/P&amp;L แทนวงกลม 15 สี, timeline ประวัติรายเดือน, เครื่องมือเสี่ยงเข้าเมนู ⋯</div></div></div>
+  </div>
+
+  <p class="foot">ยังไม่มีการแก้โค้ดใดๆ — ตอบกลับได้เลยว่า ①เลือกชื่อไหน (หรือเสนอชื่ออื่น) ②โทนสี brass โอเคไหม ③อยากเริ่มเฟสไหนก่อน แล้วผมลงมือทำจริงทีละเฟสครับ</p>
+</div>
