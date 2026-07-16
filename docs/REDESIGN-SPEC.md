@@ -1,8 +1,14 @@
-# SASOM — UI/UX Redesign Spec (v1.0)
+# SASOM — UI/UX Redesign Spec (v1.1)
 
 > สเปคฉบับเต็มสำหรับ implement รีดีไซน์แอปพอร์ต "PORT AI" → **SASOM (สะสม)**
-> Mockup อ้างอิง (อนุมัติแล้ว): https://claude.ai/code/artifact/6804c843-cf56-41c2-93e9-39c684442bc1
+> **Mockup อ้างอิง (อนุมัติแล้ว): เปิดไฟล์ `docs/redesign-mockup.html` ในเบราว์เซอร์** — มีทั้ง 5 จอมือถือ + จอ PC พร้อม SVG path ของไอคอนทุกตัวและสไตล์จริงที่ก๊อปได้ตรงๆ (สำเนาออนไลน์: https://claude.ai/code/artifact/6804c843-cf56-41c2-93e9-39c684442bc1)
 > เจ้าของอนุมัติ: ชื่อ SASOM + โทนสี brass ตาม mockup · ทำทีละเฟส (มี 4 เฟส) · **แต่ละเฟสต้อง build ผ่านและ commit แยก**
+
+## Quick start สำหรับ dev
+1. อ่าน §0 (กติกาเหล็ก) ให้จบก่อน
+2. เปิด `docs/redesign-mockup.html` ในเบราว์เซอร์คู่กันไว้ตลอด — นี่คือ visual source of truth
+3. ทำตามเฟสใน §7 ทีละเฟส · จบเฟสรัน checklist §8 · commit + PR แยกเฟส
+4. ติดคำถามเรื่อง behavior เดิม: ดูโค้ดปัจจุบันเป็นคำตอบ — redesign นี้เปลี่ยนแค่หน้าตา
 
 ---
 
@@ -162,7 +168,23 @@ body{
 ### 4.1 ไอคอน (inline SVG, stroke=currentColor, stroke-width 2.2, fill none, viewBox 0 0 24 24)
 สร้าง `app/components/icons.tsx` — ชุดนี้เท่านั้น:
 `grid` (พอร์ต), `bars` (กราฟ), `clock` (ประวัติ), `spark` (AI), `search`, `refresh`, `arrow-down` (ซื้อ), `arrow-up` (ขาย), `split`, `dots` (⋯), `check`, `alert`, `x`, `plus`, `chev-right`, `edit`, `trash`
-(path อ้างอิงจาก mockup — ดูในไฟล์ artifact)
+
+**SVG path พร้อมใช้** (จาก mockup — ตัวที่เหลือดูใน `docs/redesign-mockup.html` หรือวาดสไตล์เดียวกัน):
+```
+grid:    <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
+bars:    <path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>
+clock:   <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>
+spark:   <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>
+search:  <circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>
+refresh: <path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/>
+arrow-down: <path d="M12 5v14m0 0-5-5m5 5 5-5"/>
+arrow-up:   <path d="M12 19V5m0 0-5 5m5-5 5 5"/>
+split:   <path d="M8 3H5v18h3M16 3h3v18h-3"/>
+check:   <path d="M4 12l5 5L20 7"/>
+zap(ตัวผิดปกติ): <path d="M13 2 4 14h6l-1 8 9-12h-6z"/>
+paste:   <path d="M12 16V4m0 12-4-4m4 4 4-4"/><path d="M4 20h16"/>
+pencil(จัดทัพ): <path d="M3 21v-4l14-14 4 4L7 21H3z"/>
+```
 
 ### 4.2 ปุ่ม (แก้ `app/lib/ui.ts`)
 - `btnPrimary` — พื้น `--brass` ตัว `--on-brass` weight 800 radius `--r-sm`
@@ -259,6 +281,23 @@ body{
   5. วางผลจัดทัพ (Target %) — "แปะตารางจาก Claude — ระบบตรวจรวม 100% ให้อัตโนมัติ" → เปิดแผง textarea + `parseAndApplyAllocation()`
 - กดการ์ด copy แล้ว: snackbar "คัดลอกพรอมป์แล้ว — เปิด Claude แล้ววาง ✓"
 - ท้าย: หมายเหตุ `--faint` "ทุกพรอมป์นับเฉพาะหุ้นที่ถืออยู่จริง ไม่รวมตัวที่ขายหมด/ลบแล้ว"
+
+### 5.9 Empty states & micro-states (ทุกอันพื้นโปร่ง ไอคอน `--faint` 28px + ข้อความ `--mut` + ปุ่มถ้าระบุ)
+
+| ที่ | เงื่อนไข | แสดง |
+|---|---|---|
+| แท็บพอร์ต | `holdings.length===0` | ไอคอน grid · "ยังไม่มีหลักทรัพย์" · ปุ่ม primary "+ เพิ่มหลักทรัพย์" + ปุ่ม ghost "Import CSV" |
+| แท็บพอร์ต | ค้นหา/กรองแล้วว่าง | "ไม่พบ \"{query}\"" · ปุ่ม ghost "ล้างการค้นหา" |
+| แท็บพอร์ต | ชิป "ยังไม่ถึงเป้า" แล้วว่าง | "ทุกตัวถึงเป้าแล้ว 🎉" (ข้อความเฉยๆ ไม่มีปุ่ม — อีโมจิใน copy ได้ ไม่ใช่ chrome) |
+| แท็บกราฟ | `activeHoldings.length===0` | "ยังไม่มีข้อมูลให้แสดง — เพิ่มหุ้นก่อน" |
+| แท็บประวัติ | ไม่มีธุรกรรม | ไอคอน clock · "ยังไม่มีประวัติ" · ปุ่ม ghost "Import ประวัติ CSV" |
+| แท็บประวัติ | กรองแล้วว่าง | "ไม่พบธุรกรรมตามเงื่อนไข" · ปุ่ม ghost "ล้างตัวกรอง" |
+| แท็บ AI | `holdings.length===0` | การ์ดทั้งหมด disabled + ข้อความ "เพิ่มหุ้นก่อนถึงจะวิเคราะห์ได้" |
+| ราคายังไม่เคยดึง | `priceTime` ไม่มีทั้งพอร์ต | Hero บรรทัดล่างแสดง "ยังไม่เคยอัพเดทราคา — กดปุ่มด้านบน" |
+| Sector ไม่ระบุ | holding ไม่มี sector | จัดกลุ่ม "ไม่ระบุ" ในกราฟ (ตาม `sectorData` เดิม) และไม่แสดงป้าย sector บนการ์ด |
+| กำลังโหลดแอป | `!loaded` | จอ loading §1 |
+
+**Dropdown/เมนูทุกตัว** (port chip, avatar, เครื่องมือ ⋯, action ⋯): ปิดเมื่อคลิกนอก/กด Esc · รายการสูง ≥40px · รายการอันตราย (ลบ/เคลียร์) สี `--loss` แยกโซนล่างด้วยเส้น `--line`
 
 ---
 
