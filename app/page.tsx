@@ -815,8 +815,11 @@ export default function App() {
   // but must be excluded from analysis/allocation prompts.
   const activeHoldings = effectiveHoldings.filter((h:any) => h.shares > 0.000001);
 
+  // Use effective (FIFO history-derived) values for both, so the summary matches
+  // the per-row unrealized in the table. Raw holdings.shares/avgCost go stale after
+  // sells/splits and include hidden (deleted) positions.
   const tv=effectiveHoldings.reduce((s:number,h:any)=>s+h.shares*h.currentPrice,0);
-  const tc=holdings.reduce((s:number,h:any)=>s+h.shares*h.avgCost,0);
+  const tc=effectiveHoldings.reduce((s:number,h:any)=>s+h.shares*h.avgCost,0);
   const pnl=tv-tc; const pnlPct=tc>0?pnl/tc*100:0;
   const pc=(v:number)=>v>=0?"#7ee8a2":"#ff6b6b";
   const moversCount=activeHoldings.filter((h:any)=>h.changePct!=null&&Math.abs(h.changePct)>=3).length;
