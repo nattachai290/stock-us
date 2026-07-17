@@ -1017,6 +1017,10 @@ export default function App() {
               </div>
               <div style={{display:"flex",gap:16,marginTop:14,paddingTop:12,borderTop:"1px solid var(--line)",flexWrap:"wrap"}}>
                 <div>
+                  <div style={{fontSize:10,color:"var(--faint)"}}>ต้นทุนรวม</div>
+                  <div style={{fontSize:13,fontWeight:700,color:"var(--ink)"}}>${tc.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                </div>
+                <div>
                   <div style={{fontSize:10,color:"var(--faint)"}}>Unrealized</div>
                   <div style={{fontSize:13,fontWeight:700,color:pc(pnl)}}>{pnl>=0?"+":""}${pnl.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
                 </div>
