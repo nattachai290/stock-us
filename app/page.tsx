@@ -18,6 +18,33 @@ const PROXY_URL = "/api/price";
 const GOOGLE_CLIENT_ID = "45222114320-2r8rh69n1mt4jd4138v90vqq7ha0dgq2.apps.googleusercontent.com";
 const SCOPES = "https://www.googleapis.com/auth/drive.file";
 
+// A quote for a symbol is the same no matter which portfolio holds it, but each
+// portfolio is stored as its own blob with its own price fields. This shared cache
+// (keyed by symbol) lets a refresh in one port carry over to the others: when a
+// portfolio loads, cached quotes are overlaid onto its holdings by symbol, but only
+// when the cached quote is strictly newer than what that holding already has.
+const PRICE_CACHE_KEY = "priceCache";
+type CachedQuote = { price: number; changePct: number | null; priceTime: number | null };
+const readPriceCache = (): Record<string, CachedQuote> => {
+  try { return JSON.parse(localStorage.getItem(PRICE_CACHE_KEY) || "{}"); } catch { return {}; }
+};
+const writePriceCache = (results: any[]) => {
+  if (!results?.length) return;
+  const cache = readPriceCache();
+  results.forEach((r: any) => { if (!r.error && r.symbol && r.price != null) cache[r.symbol] = { price: r.price, changePct: r.changePct, priceTime: r.marketTime }; });
+  try { localStorage.setItem(PRICE_CACHE_KEY, JSON.stringify(cache)); } catch {}
+};
+const applyPriceCache = (list: any[]): any[] => {
+  if (!Array.isArray(list)) return list;
+  const cache = readPriceCache();
+  return list.map((h: any) => {
+    const c = cache[h.symbol];
+    return (c && c.price != null && (c.priceTime || 0) > (h.priceTime || 0))
+      ? { ...h, currentPrice: c.price, changePct: c.changePct, priceTime: c.priceTime }
+      : h;
+  });
+};
+
 
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
@@ -165,7 +192,7 @@ export default function App() {
       if (savedPortId) setCurrentPortId(savedPortId);
       if (savedPortName) setCurrentPortName(savedPortName);
     }
-    if (savedHoldings) { try { setHoldings(JSON.parse(savedHoldings)); } catch {} }
+    if (savedHoldings) { try { setHoldings(applyPriceCache(JSON.parse(savedHoldings))); } catch {} }
     setLoaded(true);
 
     // Auto-refresh portfolios list if token exists
@@ -215,7 +242,7 @@ export default function App() {
           setPortfolios(ports);
           if (ports.length > 0) {
             const first = ports[0];
-            const data = await loadPortfolio(t, first.id);
+            const data = applyPriceCache(await loadPortfolio(t, first.id));
             setHoldings(data); setCurrentPortId(first.id); setCurrentPortName(first.name);
             localStorage.setItem("currentPortId", first.id);
             localStorage.setItem("currentPortName", first.name);
@@ -241,11 +268,11 @@ export default function App() {
     localStorage.setItem("currentPortId", portId);
     localStorage.setItem("currentPortName", portName);
     const cached = localStorage.getItem(`holdings-${portId}`);
-    if (cached) { setHoldings(JSON.parse(cached)); }
+    if (cached) { try { setHoldings(applyPriceCache(JSON.parse(cached))); } catch {} }
     if (token) {
       msg(`กำลังโหลด "${portName}"...`, 0);
       try {
-        const data = await loadPortfolio(token, portId);
+        const data = applyPriceCache(await loadPortfolio(token, portId));
         setHoldings(data);
         localStorage.setItem(`holdings-${portId}`, JSON.stringify(data));
         msg(`โหลด "${portName}" แล้ว ✓`);
@@ -344,6 +371,8 @@ export default function App() {
             if (r.error) errors.push(`${r.symbol}: ${r.error}`);
             else updated = updated.map((h:any) => h.symbol===r.symbol ? {...h, currentPrice:r.price, changePct:r.changePct, priceTime:r.marketTime} : h);
           });
+          // Share these quotes with the other portfolios (overlaid by symbol on load)
+          writePriceCache(data.results || []);
         } catch (e:any) {
           errors.push(`batch ${batchNo}: ${e.name === "AbortError" ? "timeout" : e.message}`);
         }
@@ -987,6 +1016,10 @@ export default function App() {
                 </span>
               </div>
               <div style={{display:"flex",gap:16,marginTop:14,paddingTop:12,borderTop:"1px solid var(--line)",flexWrap:"wrap"}}>
+                <div>
+                  <div style={{fontSize:10,color:"var(--faint)"}}>ต้นทุนรวม</div>
+                  <div style={{fontSize:13,fontWeight:700,color:"var(--ink)"}}>${tc.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                </div>
                 <div>
                   <div style={{fontSize:10,color:"var(--faint)"}}>Unrealized</div>
                   <div style={{fontSize:13,fontWeight:700,color:pc(pnl)}}>{pnl>=0?"+":""}${pnl.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
