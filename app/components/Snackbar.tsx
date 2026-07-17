@@ -16,7 +16,7 @@ export default function Snackbar({ status, onClose }: { status: string; onClose:
         background: "#212B35", border: "1px solid var(--line)", borderRadius: "var(--r-sm)",
         boxShadow: "var(--shadow)", color: "var(--ink)",
         display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", fontSize: 13,
-        zIndex: 500,
+        zIndex: 1200,
       }}
     >
       <span style={{ color: isWarn ? "var(--warn)" : "var(--gain)", flexShrink: 0, display: "flex" }}>

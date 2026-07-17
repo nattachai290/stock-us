@@ -33,7 +33,7 @@ export default function HoldingsList({ holdings, tv, pc, onSelect }: {
 
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-                <span style={{ fontSize: 11, color: "var(--mut)" }}>${val.toLocaleString("en", { maximumFractionDigits: 0 })} · {w.toFixed(1)}%</span>
+                <span style={{ fontSize: 11, color: "var(--mut)" }}>${val.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · {w.toFixed(1)}%</span>
                 {target > 0 && (
                   <span style={{ display: "inline-block", width: 52, height: 3.5, borderRadius: 2, background: "var(--line)", overflow: "hidden" }}>
                     <span style={{ display: "block", width: `${barPct}%`, height: "100%", background: "var(--brass)" }} />

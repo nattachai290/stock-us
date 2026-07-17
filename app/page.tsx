@@ -1095,7 +1095,7 @@ export default function App() {
               </div>
               <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
                 {([["value","มูลค่า"],["pl","P&L %"],["today","วันนี้"],["az","A–Z"],["under","ยังไม่ถึงเป้า"]] as const).map(([key,label])=>(
-                  <button key={key} onClick={()=>{ if(sortBy===key) setSortDesc(v=>!v); else { setSortBy(key); setSortDesc(true); } }}
+                  <button key={key} onClick={()=>{ if(sortBy===key) setSortDesc(v=>!v); else { setSortBy(key); setSortDesc(key!=="az"); } }}
                     style={{fontSize:11,fontWeight:600,padding:"5px 11px",borderRadius:999,cursor:"pointer",
                       background:sortBy===key?"var(--brass)":"var(--card2)", color:sortBy===key?"var(--on-brass)":"var(--mut)", border:"none"}}>
                     {label}{sortBy===key&&key!=="under"?(sortDesc?" ↓":" ↑"):""}
@@ -1114,7 +1114,7 @@ export default function App() {
               </div>
             ):filteredHoldingsList.length===0?(
               <div style={{textAlign:"center",padding:"40px 20px",color:"var(--faint)"}}>
-                <div style={{marginTop:8}}>{query?`ไม่พบ "${query}"`:"ทุกตัวถึงเป้าแล้ว 🎉"}</div>
+                <div style={{marginTop:8}}>{query?`ไม่พบ "${query}"`:sortBy==="under"?"ทุกตัวถึงเป้าแล้ว 🎉":"ไม่มีหุ้นที่ถืออยู่ — ตัวที่ขายหมดยังดูได้ในแท็บประวัติ"}</div>
                 {query && <button onClick={()=>setQuery("")} style={{...btnGhost({fontSize:12,marginTop:10})}}>ล้างการค้นหา</button>}
               </div>
             ):(<>
@@ -1779,7 +1779,7 @@ export default function App() {
               style={{width:"100%",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:6,padding:"9px 12px",color:"var(--ink)",fontSize:13,boxSizing:"border-box"}}/>
           </div>
         ))}
-        <button onClick={()=>{addHolding();setShowAddSheet(false);}} style={{...btnPrimary(),width:"100%",padding:"11px",fontSize:14,marginTop:4}}>เพิ่มหลักทรัพย์</button>
+        <button onClick={()=>{if(!newStock.symbol){msg("ใส่ Symbol ก่อน");return;}addHolding();setShowAddSheet(false);}} style={{...btnPrimary(),width:"100%",padding:"11px",fontSize:14,marginTop:4}}>เพิ่มหลักทรัพย์</button>
       </Sheet>
     </div>
   );
