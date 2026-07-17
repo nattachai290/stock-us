@@ -63,83 +63,31 @@ body {
   .holdings-table-wrap { display: block; }
 }
 
-/* ── Sidebar layout (เดิม — ลบใน Phase 3 เมื่อ AppShell ใหม่เข้าแทน) ── */
-.main-layout { display: flex; align-items: flex-start; }
-.content-area { flex: 1; min-width: 0; padding: 16px; }
+/* ── App shell layout (§3): left sidebar nav on desktop, bottom tab bar on mobile ── */
+.app-body { display: flex; align-items: flex-start; }
+.content-area { flex: 1; min-width: 0; padding: 16px; padding-bottom: 84px; }
 
-.action-sidebar {
-  width: 224px;
-  flex-shrink: 0;
-  padding: 14px 12px;
-  border-left: 1px solid var(--line);
-  background: var(--card);
+.app-sidebar { display: none; }
+.app-bottom-tabs {
   display: flex;
-  flex-direction: column;
-  gap: 7px;
-  position: sticky;
-  top: 0;
-  max-height: 100vh;
-  overflow-y: auto;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 150;
+  background: var(--card); border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
 }
-.action-sidebar button:not(.sidebar-close-btn) { width: 100% !important; padding: 9px 10px !important; font-size: 12px !important; text-align: left; }
-.action-sidebar.hidden { display: none; }
-.sidebar-section-label { font-size: 10px; font-weight: 600; color: var(--faint); letter-spacing: .07em; text-transform: uppercase; margin-top: 6px; padding-bottom: 4px; border-bottom: 1px solid var(--card2); }
-.sidebar-close-btn { display: none; }
 
-.hamburger-fab { display: none; }
-.sidebar-overlay { display: none; }
-
-@media (max-width: 768px) {
-  .action-sidebar {
-    position: fixed;
-    right: 0;
-    top: 0;
-    height: 100dvh;
-    width: 272px;
-    z-index: 200;
-    transform: translateX(110%);
-    transition: transform 0.25s cubic-bezier(.4,0,.2,1);
-    border-left: 1px solid var(--line);
-    padding-top: 64px;
-    max-height: 100dvh;
-  }
-  .action-sidebar.open { transform: translateX(0); }
-  .hamburger-fab {
+@media (min-width: 900px) {
+  .content-area { padding-bottom: 16px; }
+  .app-bottom-tabs { display: none; }
+  .app-sidebar {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    position: fixed;
-    bottom: 28px;
-    right: 20px;
-    width: 54px;
-    height: 54px;
-    border-radius: 50%;
-    background: var(--card2);
-    border: 2px solid var(--brass);
-    color: var(--brass);
-    font-size: 22px;
-    cursor: pointer;
-    z-index: 300;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
-  }
-  .sidebar-overlay {
-    display: block;
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.55);
-    z-index: 199;
-    backdrop-filter: blur(2px);
-  }
-  .sidebar-close-btn {
-    display: block;
-    position: absolute;
-    top: 14px;
-    right: 14px;
-    background: none;
-    border: none;
-    color: var(--mut);
-    font-size: 22px;
-    cursor: pointer;
-    padding: 4px 8px;
+    flex-direction: column;
+    width: 184px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    height: 100vh;
+    background: var(--card);
+    border-right: 1px solid var(--line);
   }
 }

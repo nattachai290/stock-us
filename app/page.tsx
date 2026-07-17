@@ -9,6 +9,9 @@ import Snackbar from "./components/Snackbar";
 import Sheet from "./components/Sheet";
 import HoldingsList from "./components/HoldingsList";
 import DetailSheet from "./components/DetailSheet";
+import AppShell from "./components/AppShell";
+import AiTab from "./components/AiTab";
+import ToolsMenu from "./components/ToolsMenu";
 
 const PROXY_URL = "/api/price";
 const GOOGLE_CLIENT_ID = "45222114320-2r8rh69n1mt4jd4138v90vqq7ha0dgq2.apps.googleusercontent.com";
@@ -62,7 +65,6 @@ export default function App() {
   const [actionMenuId, setActionMenuId] = useState<number|null>(null);
   const [txFilterSymbol, setTxFilterSymbol] = useState("ALL");
   const [editTxData, setEditTxData] = useState<{symbol:string; kind:string; index:number; date:string; qty:string; price:string; commission:string; vat:string; secFee:string; tafFee:string; catFee:string; ratio:string}|null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
   const [detailId, setDetailId] = useState<number|null>(null);
   const [query, setQuery] = useState("");
@@ -976,36 +978,9 @@ export default function App() {
         </div>
       )}
 
-      {/* Tabs */}
-      <div style={{display:"flex",borderBottom:"1px solid var(--line)",background:"var(--card)"}}>
-        {["portfolio","chart","transactions"].map(t=>(
-          <button key={t} onClick={()=>setTab(t)} style={{padding:"10px 16px",border:"none",background:"none",cursor:"pointer",fontSize:13,fontWeight:600,color:tab===t?"var(--brass)":"var(--faint)",borderBottom:tab===t?"2px solid var(--brass)":"2px solid transparent",whiteSpace:"nowrap"}}>
-            {t==="portfolio"?"📋 รายการ":t==="chart"?"📊 Chart":"📜 ประวัติ"}
-          </button>
-        ))}
-      </div>
+      <div className="app-body" style={{maxWidth:1320,margin:"0 auto"}}>
 
-      {/* Mobile hamburger FAB */}
-      {tab==="portfolio"&&<button className="hamburger-fab" onClick={()=>setSidebarOpen(o=>!o)} aria-label="เมนู">{sidebarOpen?"✕":"☰"}</button>}
-      {tab==="portfolio"&&sidebarOpen&&<div className="sidebar-overlay" onClick={()=>setSidebarOpen(false)}/>}
-
-      <div className="main-layout" style={{maxWidth:1320,margin:"0 auto"}}>
-
-        {/* ── Right action sidebar ── */}
-        <div className={`action-sidebar${sidebarOpen?" open":""}${tab!=="portfolio"?" hidden":""}`}>
-          <button className="sidebar-close-btn" onClick={()=>setSidebarOpen(false)}>✕</button>
-          <div className="sidebar-section-label">ข้อมูล</div>
-          <button onClick={()=>{setShowImport(v=>!v);setSidebarOpen(false);}} style={btn("var(--line)","var(--mut)")}>📥 Import CSV</button>
-          <button onClick={()=>{exportCSV();setSidebarOpen(false);}} style={btn("var(--line)","var(--mut)")}>📤 Export CSV</button>
-          <div className="sidebar-section-label">วิเคราะห์ด้วย AI</div>
-          <button onClick={()=>{copyForAnalysis();setSidebarOpen(false);}} disabled={!holdings.length} style={btn("var(--card2)","var(--mut)")}>📋 วิเคราะห์ Port</button>
-          <button onClick={()=>{copyMoversAnalysis();setSidebarOpen(false);}} disabled={moversCount===0} style={btn("var(--card2)","var(--mut)",{opacity:moversCount===0?0.4:1})}>⚡ ตัวผิดปกติ ({moversCount})</button>
-          <button onClick={()=>{copyAllocationAnalysis();setSidebarOpen(false);}} disabled={!holdings.length} style={btn("var(--card2)","var(--brass)")}>🎯 จัดทัพ Port</button>
-          <button onClick={()=>{setShowAllocImport(v=>!v);setSidebarOpen(false);}} disabled={!holdings.length} style={btn("var(--card2)","var(--brass)")}>📥 Paste Target % จาก Claude</button>
-          <button onClick={()=>{copyNewIdeas();setSidebarOpen(false);}} disabled={!holdings.length} style={btn("var(--card2)","var(--brass)")}>💡 แนะนำหุ้นใหม่</button>
-          <div className="sidebar-section-label">อื่นๆ</div>
-          <button onClick={()=>{if(window.confirm(`ลบทั้งหมด ${holdings.length} รายการ?`)){setAndSave([]);setSidebarOpen(false);}}} disabled={!holdings.length} style={btn("var(--card2)","var(--loss)")}>🗑️ เคลียข้อมูลทั้งหมด</button>
-        </div>
+        <AppShell tab={tab} onTabChange={setTab}/>
 
         <div className="content-area">
 
@@ -1048,18 +1023,6 @@ export default function App() {
               </div>
             </div>
 
-            {showAllocImport&&(
-              <div style={{background:"var(--card)",borderRadius:8,padding:16,marginBottom:12,border:"1px solid var(--brass)"}}>
-                <div style={{fontSize:13,fontWeight:600,color:"var(--gain)",marginBottom:6}}>📥 Paste ผลวิเคราะห์จาก Claude</div>
-                <div style={{fontSize:12,color:"var(--mut)",marginBottom:8}}>รองรับ: <code style={{color:"var(--brass)"}}>SYMBOL | ประเภท | %</code> หรือ table format จาก Claude</div>
-                <textarea value={allocText} onChange={e=>setAllocText(e.target.value)} placeholder={"AAPL | Satellite | 0.9%\nNVDA | Core | 6.0%\nOXY | ตัดออก | 0%"} style={{width:"100%",minHeight:160,background:"var(--bg)",color:"var(--ink)",border:"1px solid var(--brass)",borderRadius:6,padding:10,fontSize:13,resize:"vertical",fontFamily:"monospace"}}/>
-                <div style={{display:"flex",gap:8,marginTop:8}}>
-                  <button onClick={parseAndApplyAllocation} disabled={!allocText.trim()} style={btn("var(--brass)","var(--on-brass)",{opacity:!allocText.trim()?0.5:1})}>✅ ใส่ Target % ทั้งหมด</button>
-                  <button onClick={()=>{setShowAllocImport(false);setAllocText("");}} style={btn("var(--line)","var(--mut)")}>ยกเลิก</button>
-                </div>
-              </div>
-            )}
-
             {!userEmail&&(
               <div style={{background:"var(--card)",border:"1px solid var(--brass)",borderRadius:8,padding:"10px 14px",marginBottom:12,fontSize:12,color:"var(--brass)"}}>
                 💡 Login Google Drive เพื่อให้ข้อมูลซิงค์ทุกเครื่อง และรองรับหลาย Portfolio
@@ -1092,6 +1055,11 @@ export default function App() {
                 <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="ค้นหา symbol / sector..."
                   style={{flex:1,minWidth:160,background:"var(--card)",border:"1px solid var(--line)",borderRadius:8,padding:"8px 12px",color:"var(--ink)",fontSize:13}}/>
                 <button onClick={()=>{setShowAddSheet(true);}} style={{...btnPrimary({fontSize:12,padding:"8px 14px",whiteSpace:"nowrap"})}}>+ เพิ่มหลักทรัพย์</button>
+                <ToolsMenu items={[
+                  { label:"Import CSV", onClick:()=>setShowImport(v=>!v) },
+                  { label:"Export CSV", onClick:exportCSV },
+                  { label:"เคลียข้อมูลทั้งหมด", danger:true, disabled:!holdings.length, onClick:()=>{ if(window.confirm(`ลบทั้งหมด ${holdings.length} รายการ?`)) setAndSave([]); } },
+                ]}/>
               </div>
               <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
                 {([["value","มูลค่า"],["pl","P&L %"],["today","วันนี้"],["az","A–Z"],["under","ยังไม่ถึงเป้า"]] as const).map(([key,label])=>(
@@ -1369,19 +1337,21 @@ export default function App() {
                   {allSymbols.map(s=><option key={s} value={s}>{s}</option>)}
                 </select>
                 {txFilterSymbol!=="ALL" && <button onClick={()=>setTxFilterSymbol("ALL")} style={{fontSize:12,color:"var(--loss)",background:"none",border:"none",cursor:"pointer"}}>✕ ล้าง</button>}
-                <div style={{marginLeft:"auto",display:"flex",gap:6}}>
-                  <button onClick={()=>setShowTxImport(v=>!v)} style={btn("var(--card2)","var(--brass)",{fontSize:12,padding:"6px 12px"})}>📥 Import ประวัติ CSV</button>
-                  <button onClick={recalcRealizedFIFO} style={btn("var(--card2)","var(--brass)",{fontSize:12,padding:"6px 12px"})}>🔁 Recalc FIFO</button>
-                  <button onClick={restoreBackup} style={btn("var(--card2)","var(--warn)",{fontSize:12,padding:"6px 12px"})}>↩️ กู้คืน backup</button>
-                  <button onClick={()=>{
-                    if(!window.confirm("ลบประวัติ transaction ทั้งหมด?\n(จำนวนหุ้น/ต้นทุนปัจจุบันจะถูกบันทึกไว้ก่อนลบ)")) return;
-                    makeBackup("Clear ประวัติ");
-                    const updated = holdings.map((h:any)=>{
-                      const eff = computeFromHistory(h);
-                      return { ...h, shares: eff.shares, avgCost: eff.avgCost, buyHistory:[], realizedHistory:[], splitHistory:[] };
-                    });
-                    setAndSave(updated); msg("ลบประวัติทั้งหมดแล้ว ✓");
-                  }} style={btn("var(--card2)","var(--loss)",{fontSize:12,padding:"6px 12px"})}>🗑️ Clear ประวัติ</button>
+                <div style={{marginLeft:"auto"}}>
+                  <ToolsMenu items={[
+                    { label:"Import ประวัติ CSV", onClick:()=>setShowTxImport(v=>!v) },
+                    { label:"Recalc FIFO", onClick:recalcRealizedFIFO },
+                    { label:"กู้คืน backup", onClick:restoreBackup },
+                    { label:"Clear ประวัติ", danger:true, onClick:()=>{
+                        if(!window.confirm("ลบประวัติ transaction ทั้งหมด?\n(จำนวนหุ้น/ต้นทุนปัจจุบันจะถูกบันทึกไว้ก่อนลบ)")) return;
+                        makeBackup("Clear ประวัติ");
+                        const updated = holdings.map((h:any)=>{
+                          const eff = computeFromHistory(h);
+                          return { ...h, shares: eff.shares, avgCost: eff.avgCost, buyHistory:[], realizedHistory:[], splitHistory:[] };
+                        });
+                        setAndSave(updated); msg("ลบประวัติทั้งหมดแล้ว ✓");
+                      } },
+                  ]}/>
                 </div>
               </div>
 
@@ -1476,8 +1446,26 @@ export default function App() {
           );
         })()}
 
+        {/* AI TAB */}
+        {tab==="ai"&&(
+          <AiTab
+            hasHoldings={holdings.length>0}
+            moversCount={moversCount}
+            onAnalyze={copyForAnalysis}
+            onMovers={copyMoversAnalysis}
+            onAllocation={copyAllocationAnalysis}
+            onNewIdeas={copyNewIdeas}
+            showAllocImport={showAllocImport}
+            onTogglePasteTarget={()=>setShowAllocImport(v=>!v)}
+            allocText={allocText}
+            setAllocText={setAllocText}
+            onApplyAllocation={parseAndApplyAllocation}
+            onCancelPasteTarget={()=>{setShowAllocImport(false);setAllocText("");}}
+          />
+        )}
+
         </div>{/* content-area */}
-      </div>{/* main-layout */}
+      </div>{/* app-body */}
 
       {/* EDIT TRANSACTION MODAL */}
       <Sheet open={!!editTxData} onClose={()=>setEditTxData(null)} maxWidth={380}>
