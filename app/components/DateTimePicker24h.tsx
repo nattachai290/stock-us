@@ -76,14 +76,14 @@ export default function DateTimePicker24h({ value, onChange }: { value: string; 
           }}
           placeholder="DD/MM/YYYY HH:mm"
           style={{
-            flex:1, background:"#0f1117", border:"1px solid #4a5568", borderRadius:6,
-            padding:"10px 12px", color:"#e2e8f0", fontSize:14, boxSizing:"border-box",
+            flex:1, background:"var(--bg)", border:"1px solid var(--line)", borderRadius:6,
+            padding:"10px 12px", color:"var(--ink)", fontSize:14, boxSizing:"border-box",
             outline:"none", minWidth:0
           }}
         />
         <button onClick={()=>setOpen(!open)} type="button" style={{
-          background:"#1a1d2e", border:"1px solid #4a5568", borderRadius:6,
-          padding:"10px 12px", color:"#67e8f9", fontSize:14, cursor:"pointer", flexShrink:0
+          background:"var(--card)", border:"1px solid var(--line)", borderRadius:6,
+          padding:"10px 12px", color:"var(--brass)", fontSize:14, cursor:"pointer", flexShrink:0
         }}>
           📅{open?"▲":"▼"}
         </button>
@@ -92,21 +92,21 @@ export default function DateTimePicker24h({ value, onChange }: { value: string; 
       {open && (
         <div style={{
           position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, zIndex: 100,
-          background: "#1a1d2e", border: "1px solid #2d3748", borderRadius: 10, padding: 14,
+          background: "var(--card)", border: "1px solid var(--line)", borderRadius: 10, padding: 14,
           boxShadow: "0 8px 24px rgba(0,0,0,0.5)"
         }}>
           {/* Month/Year nav */}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
             <button type="button" onClick={()=>{ if(viewMonth===0){setViewMonth(11);setViewYear(viewYear-1);} else setViewMonth(viewMonth-1); }}
-              style={{background:"#2d3748",border:"none",borderRadius:5,color:"#e2e8f0",cursor:"pointer",padding:"4px 10px",fontSize:14}}>‹</button>
-            <div style={{fontSize:13,fontWeight:600,color:"#e2e8f0"}}>{monthNames[viewMonth]} {viewYear}</div>
+              style={{background:"var(--line)",border:"none",borderRadius:5,color:"var(--ink)",cursor:"pointer",padding:"4px 10px",fontSize:14}}>‹</button>
+            <div style={{fontSize:13,fontWeight:600,color:"var(--ink)"}}>{monthNames[viewMonth]} {viewYear}</div>
             <button type="button" onClick={()=>{ if(viewMonth===11){setViewMonth(0);setViewYear(viewYear+1);} else setViewMonth(viewMonth+1); }}
-              style={{background:"#2d3748",border:"none",borderRadius:5,color:"#e2e8f0",cursor:"pointer",padding:"4px 10px",fontSize:14}}>›</button>
+              style={{background:"var(--line)",border:"none",borderRadius:5,color:"var(--ink)",cursor:"pointer",padding:"4px 10px",fontSize:14}}>›</button>
           </div>
 
           {/* Day headers */}
           <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:4,marginBottom:4}}>
-            {dayNames.map(dn=>(<div key={dn} style={{textAlign:"center",fontSize:11,color:"#718096",padding:"2px 0"}}>{dn}</div>))}
+            {dayNames.map(dn=>(<div key={dn} style={{textAlign:"center",fontSize:11,color:"var(--faint)",padding:"2px 0"}}>{dn}</div>))}
           </div>
 
           {/* Day grid */}
@@ -117,9 +117,9 @@ export default function DateTimePicker24h({ value, onChange }: { value: string; 
               const isSelected = selectedDay===day;
               return (
                 <button key={day} type="button" onClick={()=>selectDate(day)} style={{
-                  background: isSelected?"#2f6b4f":"transparent",
-                  border: isToday(day)&&!isSelected?"1px solid #67e8f9":"none",
-                  borderRadius: 6, color: isSelected?"#7ee8a2":"#e2e8f0", cursor:"pointer",
+                  background: isSelected?"var(--brass)":"transparent",
+                  border: isToday(day)&&!isSelected?"1px solid var(--brass)":"none",
+                  borderRadius: 6, color: isSelected?"var(--on-brass)":"var(--ink)", cursor:"pointer",
                   padding:"6px 0", fontSize:13, fontWeight: isSelected?700:400
                 }}>{day}</button>
               );
@@ -127,19 +127,19 @@ export default function DateTimePicker24h({ value, onChange }: { value: string; 
           </div>
 
           {/* Time picker */}
-          <div style={{display:"flex",alignItems:"center",gap:8,paddingTop:10,borderTop:"1px solid #2d3748"}}>
-            <span style={{fontSize:12,color:"#a0aec0"}}>เวลา</span>
+          <div style={{display:"flex",alignItems:"center",gap:8,paddingTop:10,borderTop:"1px solid var(--line)"}}>
+            <span style={{fontSize:12,color:"var(--mut)"}}>เวลา</span>
             <select value={hh} onChange={e=>setTime(e.target.value,mm)} disabled={!d}
-              style={{background:"#0f1117",border:"1px solid #4a5568",borderRadius:5,color:"#e2e8f0",fontSize:13,padding:"6px 8px"}}>
+              style={{background:"var(--bg)",border:"1px solid var(--line)",borderRadius:5,color:"var(--ink)",fontSize:13,padding:"6px 8px"}}>
               {Array.from({length:24}).map((_,i)=>(<option key={i} value={String(i).padStart(2,"0")}>{String(i).padStart(2,"0")}</option>))}
             </select>
-            <span style={{color:"#718096"}}>:</span>
+            <span style={{color:"var(--faint)"}}>:</span>
             <select value={mm} onChange={e=>setTime(hh,e.target.value)} disabled={!d}
-              style={{background:"#0f1117",border:"1px solid #4a5568",borderRadius:5,color:"#e2e8f0",fontSize:13,padding:"6px 8px"}}>
+              style={{background:"var(--bg)",border:"1px solid var(--line)",borderRadius:5,color:"var(--ink)",fontSize:13,padding:"6px 8px"}}>
               {Array.from({length:60}).map((_,i)=>(<option key={i} value={String(i).padStart(2,"0")}>{String(i).padStart(2,"0")}</option>))}
             </select>
-            <span style={{fontSize:11,color:"#4a5568"}}>(24h)</span>
-            <button type="button" onClick={()=>setOpen(false)} style={{marginLeft:"auto",background:"#2f6b4f",border:"none",borderRadius:5,color:"#7ee8a2",cursor:"pointer",padding:"6px 14px",fontSize:12,fontWeight:600}}>เสร็จ</button>
+            <span style={{fontSize:11,color:"var(--line)"}}>(24h)</span>
+            <button type="button" onClick={()=>setOpen(false)} style={{marginLeft:"auto",background:"var(--brass)",border:"none",borderRadius:5,color:"var(--on-brass)",cursor:"pointer",padding:"6px 14px",fontSize:12,fontWeight:600}}>เสร็จ</button>
           </div>
         </div>
       )}

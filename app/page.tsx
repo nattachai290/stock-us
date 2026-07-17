@@ -1,10 +1,18 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import DateTimePicker24h from "./components/DateTimePicker24h";
 import { parseCSV, toCSV, copyToClipboard, fifoBasisForSale, computeFromHistory } from "./lib/portfolio";
 import { setOnDriveAuthExpired, listPortfolios, loadPortfolio, savePortfolio, deletePortfolio } from "./lib/drive";
-import { btn, inp, PIE_COLORS } from "./lib/ui";
+import { btn, btnPrimary, btnGhost, inp } from "./lib/ui";
+import Snackbar from "./components/Snackbar";
+import Sheet from "./components/Sheet";
+import HoldingsList from "./components/HoldingsList";
+import DetailSheet from "./components/DetailSheet";
+import AppShell from "./components/AppShell";
+import AiTab from "./components/AiTab";
+import ToolsMenu from "./components/ToolsMenu";
+import ChartsTab from "./components/ChartsTab";
+import HistoryTab from "./components/HistoryTab";
 
 const PROXY_URL = "/api/price";
 const GOOGLE_CLIENT_ID = "45222114320-2r8rh69n1mt4jd4138v90vqq7ha0dgq2.apps.googleusercontent.com";
@@ -58,7 +66,18 @@ export default function App() {
   const [actionMenuId, setActionMenuId] = useState<number|null>(null);
   const [txFilterSymbol, setTxFilterSymbol] = useState("ALL");
   const [editTxData, setEditTxData] = useState<{symbol:string; kind:string; index:number; date:string; qty:string; price:string; commission:string; vat:string; secFee:string; tafFee:string; catFee:string; ratio:string}|null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
+  const [detailId, setDetailId] = useState<number|null>(null);
+  const [query, setQuery] = useState("");
+  const [sortBy, setSortBy] = useState<"value"|"pl"|"today"|"az"|"under">("value");
+  const [sortDesc, setSortDesc] = useState(true);
+  const [showAddSheet, setShowAddSheet] = useState(false);
+  useEffect(() => {
+    if (!avatarMenuOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setAvatarMenuOpen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [avatarMenuOpen]);
 
   const msg = (m: string, ms = 3000) => { setStatus(m); if (ms) setTimeout(() => setStatus(""), ms); };
 
@@ -821,121 +840,133 @@ export default function App() {
   const tv=effectiveHoldings.reduce((s:number,h:any)=>s+h.shares*h.currentPrice,0);
   const tc=effectiveHoldings.reduce((s:number,h:any)=>s+h.shares*h.avgCost,0);
   const pnl=tv-tc; const pnlPct=tc>0?pnl/tc*100:0;
-  const pc=(v:number)=>v>=0?"#7ee8a2":"#ff6b6b";
+  const pc=(v:number)=>v>=0?"var(--gain)":"var(--loss)";
   const moversCount=activeHoldings.filter((h:any)=>h.changePct!=null&&Math.abs(h.changePct)>=3).length;
 
   // Realized P&L across all holdings (persists even after fully sold/removed... well, only while holding exists)
   const totalRealizedAll = holdings.reduce((s:number,h:any) => s + (h.realizedHistory||[]).reduce((s2:number,r:any)=>s2+r.gain,0), 0);
   const realizedTxCount = holdings.reduce((s:number,h:any) => s + (h.realizedHistory||[]).length, 0);
 
-  // Pie chart data by sector
-  const sectorData = (() => {
-    const map: Record<string,number> = {};
-    holdings.forEach((h:any) => {
-      const val = h.shares * h.currentPrice;
-      if (val > 0) { const s = h.sector || "ไม่ระบุ"; map[s] = (map[s]||0) + val; }
+  // Today's % across the whole portfolio, derived from each position's already-fetched changePct
+  // (per-share prev-close implied by currentPrice/changePct) — purely a render-time aggregate, no new data source.
+  const todayBase = activeHoldings.reduce((s:number,h:any)=>{
+    const prev = h.changePct!=null ? h.currentPrice/(1+h.changePct/100) : h.currentPrice;
+    return s + h.shares*prev;
+  }, 0);
+  const todayChange = activeHoldings.reduce((s:number,h:any)=>{
+    const prev = h.changePct!=null ? h.currentPrice/(1+h.changePct/100) : h.currentPrice;
+    return s + h.shares*(h.currentPrice-prev);
+  }, 0);
+  const todayPct = todayBase>0 ? todayChange/todayBase*100 : 0;
+
+  const latestPriceTime = activeHoldings.reduce((mx:number,h:any)=> h.priceTime ? Math.max(mx, new Date(h.priceTime).getTime()) : mx, 0);
+  const priceAsOf = latestPriceTime>0 ? new Date(latestPriceTime) : lastUpdated;
+
+  // Search + sort over activeHoldings for the portfolio tab (§5.2) — render-only
+  // filtering/ordering, doesn't touch effectiveHoldings/activeHoldings themselves.
+  const weightOf = (h:any) => tv>0 ? (h.shares*h.currentPrice/tv*100) : 0;
+  const filteredHoldingsList = (() => {
+    let list = [...activeHoldings];
+    const q = query.trim().toUpperCase();
+    if (q) list = list.filter((h:any)=>h.symbol.toUpperCase().includes(q) || (h.sector||"").toUpperCase().includes(q));
+    if (sortBy === "under") {
+      list = list.filter((h:any)=>h.targetPct>0 && weightOf(h)<h.targetPct);
+      list.sort((a:any,b:any)=>(b.targetPct-weightOf(b))-(a.targetPct-weightOf(a)));
+      return list;
+    }
+    list.sort((a:any,b:any)=>{
+      if (sortBy==="az") { const c=a.symbol.localeCompare(b.symbol); return sortDesc?-c:c; }
+      let av=0, bv=0;
+      if (sortBy==="value") { av=a.shares*a.currentPrice; bv=b.shares*b.currentPrice; }
+      else if (sortBy==="pl") { av=a.avgCost>0?(a.currentPrice-a.avgCost)/a.avgCost:-Infinity; bv=b.avgCost>0?(b.currentPrice-b.avgCost)/b.avgCost:-Infinity; }
+      else if (sortBy==="today") { av=a.changePct==null?-Infinity:a.changePct; bv=b.changePct==null?-Infinity:b.changePct; }
+      return sortDesc ? bv-av : av-bv;
     });
-    return Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([name, value]) => ({ name, value: parseFloat((value/tv*100).toFixed(1)) }));
+    return list;
   })();
 
-  // Top 10 holdings for pie
-  const top10Data = [...effectiveHoldings].sort((a,b)=>(b.shares*b.currentPrice)-(a.shares*a.currentPrice)).slice(0,10).map((h:any)=>{
-    const val=h.shares*h.currentPrice; return { name: h.symbol, value: parseFloat((val/tv*100).toFixed(1)) };
-  });
-
-  if (!loaded) return <div style={{background:"#0f1117",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#7ee8a2"}}>กำลังโหลด...</div>;
+  if (!loaded) return (
+    <div style={{background:"var(--bg)",minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10}}>
+      <div style={{fontSize:26,fontWeight:800,letterSpacing:"0.14em",fontFamily:'"Avenir Next",Futura,"Segoe UI",system-ui,sans-serif'}}>
+        <span style={{color:"var(--brass)"}}>SA</span><span style={{color:"var(--ink)"}}>SOM</span>
+      </div>
+      <div style={{fontSize:13,color:"var(--mut)"}}>กำลังโหลด...</div>
+    </div>
+  );
 
   return (
-    <div style={{background:"#0f1117",minHeight:"100vh"}}>
-      {/* Header */}
-      <div style={{background:"#1a1d2e",borderBottom:"1px solid #2d3748",padding:"12px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-        <div>
-          <div style={{fontSize:18,fontWeight:700,color:"#7ee8a2"}}>📈 PORT AI</div>
-          <div style={{fontSize:11,color:"#a0aec0",marginTop:2}}>{activeHoldings.length} ถืออยู่{effectiveHoldings.length>activeHoldings.length?` · ขายหมด ${effectiveHoldings.length-activeHoldings.length}`:""} · <span style={{color:saving?"#f6c90e":status?"#f6c90e":"#4a5568"}}>{status||(lastUpdated?`ราคา ${lastUpdated.toLocaleTimeString("th")}`:"พร้อมใช้งาน")}</span></div>
+    <div style={{background:"var(--bg)",minHeight:"100vh"}}>
+      <Snackbar status={status} onClose={()=>setStatus("")}/>
+      {/* App bar */}
+      <div style={{background:"var(--card)",borderBottom:"1px solid var(--line)",padding:"10px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+        <div className="appbar-wordmark" style={{fontSize:17,fontWeight:800,letterSpacing:"0.14em",fontFamily:'"Avenir Next",Futura,"Segoe UI",system-ui,sans-serif'}}>
+          <span style={{color:"var(--brass)"}}>SA</span><span style={{color:"var(--ink)"}}>SOM</span>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",position:"relative"}}>
+          {userEmail && (
+            <span style={{fontSize:11,color:"var(--mut)"}}>
+              <span style={{display:"inline-block",width:6,height:6,borderRadius:"50%",background:saving?"var(--warn)":"var(--gain)",marginRight:5}}/>
+              {currentPortName}
+            </span>
+          )}
           {userEmail ? (
-            <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <span style={{fontSize:11,color:"#7ee8a2"}}>☁️ {userEmail}</span>
-              <button onClick={handleLogout} style={btn("#2d3748","#a0aec0",{fontSize:11,padding:"4px 8px"})}>ออก</button>
+            <div style={{position:"relative"}}>
+              <button onClick={()=>setAvatarMenuOpen(v=>!v)} aria-label="บัญชี" style={{width:30,height:30,borderRadius:"50%",background:"var(--brass)",color:"var(--on-brass)",border:"none",fontWeight:800,fontSize:13,cursor:"pointer"}}>
+                {userEmail.charAt(0).toUpperCase()}
+              </button>
+              {avatarMenuOpen && (
+                <>
+                  <div onClick={()=>setAvatarMenuOpen(false)} style={{position:"fixed",inset:0,zIndex:60}}/>
+                  <div style={{position:"absolute",right:0,top:"calc(100% + 6px)",background:"var(--card)",border:"1px solid var(--line)",borderRadius:"var(--r-sm)",boxShadow:"var(--shadow)",padding:8,minWidth:200,zIndex:61}}>
+                    <div style={{fontSize:11,color:"var(--mut)",padding:"6px 8px",wordBreak:"break-all"}}>{userEmail}</div>
+                    <button onClick={async()=>{setAvatarMenuOpen(false);setSaving(true);msg("Sync...",0);try{await saveData(holdings);}catch(e:any){msg("Sync ไม่ได้: "+e.message);}setSaving(false);}} disabled={saving||!holdings.length||!token}
+                      style={{...btnGhost({width:"100%",textAlign:"left",fontSize:13,marginBottom:4}),opacity:(!token||saving||!holdings.length)?0.5:1}}>
+                      {saving?"กำลัง Sync...":"Sync → Drive"}
+                    </button>
+                    <button onClick={()=>{setAvatarMenuOpen(false);handleLogout();}} style={{...btnGhost({width:"100%",textAlign:"left",fontSize:13,color:"var(--loss)"})}}>ออกจากระบบ</button>
+                  </div>
+                </>
+              )}
             </div>
           ) : (
-            <button onClick={handleGoogleLogin} disabled={googleLoading} style={btn("#1a3a5f","#63b3ed",{opacity:googleLoading?0.6:1,fontSize:12})}>
-              {googleLoading?"⏳ กำลัง Login...":"☁️ Login Google Drive"}
+            <button onClick={handleGoogleLogin} disabled={googleLoading} style={{...btnGhost({opacity:googleLoading?0.6:1,fontSize:12})}}>
+              {googleLoading?"กำลัง Login...":"Login Google Drive"}
             </button>
           )}
-          <div style={{textAlign:"right"}}>
-            <div style={{fontSize:20,fontWeight:700,color:"#e2e8f0"}}>${tv.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-            <div style={{fontSize:12,color:pc(pnl),fontWeight:600}}>{pnl>=0?"▲":"▼"} {Math.abs(pnlPct).toFixed(2)}% ({pnl>=0?"+":""}${pnl.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})})</div>
-            {realizedTxCount>0 && (
-              <div style={{fontSize:10,color:"#718096",marginTop:2}}>
-                📊 Unreal {pnl>=0?"+":""}${pnl.toFixed(0)} · 📜 Real {totalRealizedAll>=0?"+":""}${totalRealizedAll.toFixed(0)}
-              </div>
-            )}
-          </div>
         </div>
       </div>
 
       {/* Portfolio Selector */}
       {userEmail && (
-        <div style={{background:"#141720",borderBottom:"1px solid #2d3748",padding:"8px 20px",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <span style={{fontSize:12,color:"#718096"}}>Port:</span>
+        <div style={{background:"var(--card)",borderBottom:"1px solid var(--line)",padding:"8px 20px",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+          <span style={{fontSize:12,color:"var(--faint)"}}>Port:</span>
           {portfolios.map(p=>(
             <div key={p.id} style={{display:"flex",alignItems:"center",gap:4}}>
               <button onClick={()=>switchPort(p.id,p.name)}
-                style={btn(currentPortId===p.id?"#2f6b4f":"#1e2433", currentPortId===p.id?"#7ee8a2":"#a0aec0",{fontSize:12,padding:"4px 10px"})}>
+                style={btn(currentPortId===p.id?"var(--brass)":"var(--card2)", currentPortId===p.id?"var(--on-brass)":"var(--mut)",{fontSize:12,padding:"4px 10px"})}>
                 {p.name}
               </button>
-              {portfolios.length > 1 && <button onClick={()=>deletePort(p.id,p.name)} style={{background:"none",border:"none",color:"#4a5568",cursor:"pointer",fontSize:12}}>✕</button>}
+              {portfolios.length > 1 && <button onClick={()=>deletePort(p.id,p.name)} style={{background:"none",border:"none",color:"var(--faint)",cursor:"pointer",fontSize:12}}>✕</button>}
             </div>
           ))}
           {showNewPort ? (
             <div style={{display:"flex",gap:6,alignItems:"center"}}>
               <input value={newPortName} onChange={e=>setNewPortName(e.target.value)} placeholder="ชื่อ port" onKeyDown={e=>e.key==="Enter"&&createPort()}
-                style={{background:"#0f1117",border:"1px solid #4a5568",borderRadius:4,color:"#e2e8f0",fontSize:12,padding:"4px 8px",width:120}}/>
-              <button onClick={createPort} style={btn("#2f6b4f","#7ee8a2",{fontSize:12,padding:"4px 10px"})}>สร้าง</button>
-              <button onClick={()=>setShowNewPort(false)} style={btn("#2d3748","#a0aec0",{fontSize:12,padding:"4px 8px"})}>ยกเลิก</button>
+                style={{background:"var(--bg)",border:"1px solid var(--line)",borderRadius:4,color:"var(--ink)",fontSize:12,padding:"4px 8px",width:120}}/>
+              <button onClick={createPort} style={btn("var(--brass)","var(--on-brass)",{fontSize:12,padding:"4px 10px"})}>สร้าง</button>
+              <button onClick={()=>setShowNewPort(false)} style={btn("var(--line)","var(--mut)",{fontSize:12,padding:"4px 8px"})}>ยกเลิก</button>
             </div>
           ) : (
-            <button onClick={()=>setShowNewPort(true)} style={btn("#1e2433","#718096",{fontSize:12,padding:"4px 10px"})}>+ สร้าง Port ใหม่</button>
+            <button onClick={()=>setShowNewPort(true)} style={btn("var(--card2)","var(--faint)",{fontSize:12,padding:"4px 10px"})}>+ สร้าง Port ใหม่</button>
           )}
           <button onClick={()=>{ if(token){ msg("กำลังรีเฟรช...",0); listPortfolios(token).then(ps=>{setPortfolios(ps);msg("รีเฟรชแล้ว ✓");}).catch((e:any)=>msg("รีเฟรชไม่ได้: "+e.message)); } }}
-            style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#718096",padding:"4px 6px"}} title="รีเฟรชรายการ Port">🔄</button>
+            style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"var(--faint)",padding:"4px 6px"}} title="รีเฟรชรายการ Port">🔄</button>
         </div>
       )}
 
-      {/* Tabs */}
-      <div style={{display:"flex",borderBottom:"1px solid #2d3748",background:"#1a1d2e"}}>
-        {["portfolio","chart","transactions","add"].map(t=>(
-          <button key={t} onClick={()=>setTab(t)} style={{padding:"10px 16px",border:"none",background:"none",cursor:"pointer",fontSize:13,fontWeight:600,color:tab===t?"#7ee8a2":"#718096",borderBottom:tab===t?"2px solid #7ee8a2":"2px solid transparent",whiteSpace:"nowrap"}}>
-            {t==="portfolio"?"📋 รายการ":t==="chart"?"📊 Chart":t==="transactions"?"📜 ประวัติ":"➕ เพิ่ม"}
-          </button>
-        ))}
-      </div>
+      <div className="app-body" style={{maxWidth:1320,margin:"0 auto"}}>
 
-      {/* Mobile hamburger FAB */}
-      {tab==="portfolio"&&<button className="hamburger-fab" onClick={()=>setSidebarOpen(o=>!o)} aria-label="เมนู">{sidebarOpen?"✕":"☰"}</button>}
-      {tab==="portfolio"&&sidebarOpen&&<div className="sidebar-overlay" onClick={()=>setSidebarOpen(false)}/>}
-
-      <div className="main-layout" style={{maxWidth:1320,margin:"0 auto"}}>
-
-        {/* ── Right action sidebar ── */}
-        <div className={`action-sidebar${sidebarOpen?" open":""}${tab!=="portfolio"?" hidden":""}`}>
-          <button className="sidebar-close-btn" onClick={()=>setSidebarOpen(false)}>✕</button>
-          <div className="sidebar-section-label">ข้อมูล</div>
-          <button onClick={()=>{refreshPrices();setSidebarOpen(false);}} disabled={refreshing||!holdings.length} style={btn("#1e3a5f","#63b3ed",{opacity:refreshing?0.6:1})}>{refreshing?"⏳ ดึงราคา...":"🔄 อัพเดทราคา"}</button>
-          <button onClick={async()=>{setSaving(true);msg("Sync...",0);try{await saveData(holdings);}catch(e:any){msg("Sync ไม่ได้: "+e.message);}setSaving(false);setSidebarOpen(false);}} disabled={saving||!holdings.length||!token} style={btn("#1a3a2a","#7ee8a2",{opacity:(!token||saving||!holdings.length)?0.5:1})}>{saving?"⏳ Syncing...":"☁️ Sync → Drive"}</button>
-          <button onClick={()=>{setShowImport(v=>!v);setSidebarOpen(false);}} style={btn("#2d3748","#a0aec0")}>📥 Import CSV</button>
-          <button onClick={()=>{exportCSV();setSidebarOpen(false);}} style={btn("#2d3748","#a0aec0")}>📤 Export CSV</button>
-          <div className="sidebar-section-label">วิเคราะห์ด้วย AI</div>
-          <button onClick={()=>{copyForAnalysis();setSidebarOpen(false);}} disabled={!holdings.length} style={btn("#3d2a6b","#c084fc")}>📋 วิเคราะห์ Port</button>
-          <button onClick={()=>{copyMoversAnalysis();setSidebarOpen(false);}} disabled={moversCount===0} style={btn("#4a2800","#fb923c",{opacity:moversCount===0?0.4:1})}>⚡ ตัวผิดปกติ ({moversCount})</button>
-          <button onClick={()=>{copyAllocationAnalysis();setSidebarOpen(false);}} disabled={!holdings.length} style={btn("#1a3a4a","#67e8f9")}>🎯 จัดทัพ Port</button>
-          <button onClick={()=>{setShowAllocImport(v=>!v);setSidebarOpen(false);}} disabled={!holdings.length} style={btn("#1a3a1a","#86efac")}>📥 Paste Target % จาก Claude</button>
-          <button onClick={()=>{copyNewIdeas();setSidebarOpen(false);}} disabled={!holdings.length} style={btn("#1a2a3a","#93c5fd")}>💡 แนะนำหุ้นใหม่</button>
-          <div className="sidebar-section-label">อื่นๆ</div>
-          <button onClick={()=>{if(window.confirm(`ลบทั้งหมด ${holdings.length} รายการ?`)){setAndSave([]);setSidebarOpen(false);}}} disabled={!holdings.length} style={btn("#4a1515","#fc8181")}>🗑️ เคลียข้อมูลทั้งหมด</button>
-        </div>
+        <AppShell tab={tab} onTabChange={setTab}/>
 
         <div className="content-area">
 
@@ -943,59 +974,124 @@ export default function App() {
         {tab==="portfolio"&&(
           <div>
 
-            {showAllocImport&&(
-              <div style={{background:"#1a1d2e",borderRadius:8,padding:16,marginBottom:12,border:"1px solid #2f6b4f"}}>
-                <div style={{fontSize:13,fontWeight:600,color:"#86efac",marginBottom:6}}>📥 Paste ผลวิเคราะห์จาก Claude</div>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:8}}>รองรับ: <code style={{color:"#67e8f9"}}>SYMBOL | ประเภท | %</code> หรือ table format จาก Claude</div>
-                <textarea value={allocText} onChange={e=>setAllocText(e.target.value)} placeholder={"AAPL | Satellite | 0.9%\nNVDA | Core | 6.0%\nOXY | ตัดออก | 0%"} style={{width:"100%",minHeight:160,background:"#0f1117",color:"#e2e8f0",border:"1px solid #2f6b4f",borderRadius:6,padding:10,fontSize:13,resize:"vertical",fontFamily:"monospace"}}/>
-                <div style={{display:"flex",gap:8,marginTop:8}}>
-                  <button onClick={parseAndApplyAllocation} disabled={!allocText.trim()} style={btn("#2f6b4f","#86efac",{opacity:!allocText.trim()?0.5:1})}>✅ ใส่ Target % ทั้งหมด</button>
-                  <button onClick={()=>{setShowAllocImport(false);setAllocText("");}} style={btn("#2d3748","#a0aec0")}>ยกเลิก</button>
+            {/* Hero summary card */}
+            <div style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:"var(--r-lg)",padding:18,boxShadow:"var(--shadow)",marginBottom:12}}>
+              <div style={{fontSize:10.5,color:"var(--faint)",textTransform:"uppercase",letterSpacing:"0.14em"}}>มูลค่าพอร์ต</div>
+              <div style={{fontSize:27,fontWeight:800,color:"var(--ink)",marginTop:4}}>${tv.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+              <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
+                <span style={{fontSize:12,fontWeight:700,color:todayPct>=0?"var(--gain)":"var(--loss)",background:"var(--card2)",borderRadius:999,padding:"3px 10px"}}>
+                  {todayPct>=0?"▲":"▼"} วันนี้ {todayPct>=0?"+":""}{todayPct.toFixed(2)}%
+                </span>
+                <span style={{fontSize:12,fontWeight:700,color:pc(pnl),background:"var(--card2)",borderRadius:999,padding:"3px 10px"}}>
+                  รวม {pnlPct>=0?"+":""}{pnlPct.toFixed(1)}%
+                </span>
+              </div>
+              <div style={{display:"flex",gap:16,marginTop:14,paddingTop:12,borderTop:"1px solid var(--line)",flexWrap:"wrap"}}>
+                <div>
+                  <div style={{fontSize:10,color:"var(--faint)"}}>Unrealized</div>
+                  <div style={{fontSize:13,fontWeight:700,color:pc(pnl)}}>{pnl>=0?"+":""}${pnl.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                </div>
+                <div>
+                  <div style={{fontSize:10,color:"var(--faint)"}}>Realized</div>
+                  <div style={{fontSize:13,fontWeight:700,color:pc(totalRealizedAll)}}>{totalRealizedAll>=0?"+":""}${totalRealizedAll.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                </div>
+                <div>
+                  <div style={{fontSize:10,color:"var(--faint)"}}>ถืออยู่</div>
+                  <div style={{fontSize:13,fontWeight:700,color:"var(--ink)"}}>{activeHoldings.length} ตัว{effectiveHoldings.length>activeHoldings.length?` · ขายหมด ${effectiveHoldings.length-activeHoldings.length}`:""}</div>
                 </div>
               </div>
-            )}
+              <button onClick={refreshPrices} disabled={refreshing||!holdings.length}
+                style={{...btnPrimary({width:"100%",marginTop:14}),opacity:(refreshing||!holdings.length)?0.6:1}}>
+                {refreshing ? (status||"กำลังดึงราคา...") : "อัพเดทราคา"}
+              </button>
+              <div style={{fontSize:11,color:"var(--faint)",marginTop:8,textAlign:"center"}}>
+                {priceAsOf ? `ราคาเมื่อ ${priceAsOf.toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})} · Cboe + CNBC` : "ยังไม่เคยอัพเดทราคา — กดปุ่มด้านบน"}
+              </div>
+            </div>
 
             {!userEmail&&(
-              <div style={{background:"#1a2a1a",border:"1px solid #2d5a2d",borderRadius:8,padding:"10px 14px",marginBottom:12,fontSize:12,color:"#7ee8a2"}}>
+              <div style={{background:"var(--card)",border:"1px solid var(--brass)",borderRadius:8,padding:"10px 14px",marginBottom:12,fontSize:12,color:"var(--brass)"}}>
                 💡 Login Google Drive เพื่อให้ข้อมูลซิงค์ทุกเครื่อง และรองรับหลาย Portfolio
               </div>
             )}
 
             {priceErrors.length>0&&(
-              <div style={{background:"#2d1515",border:"1px solid #7c2d2d",borderRadius:8,padding:12,marginBottom:12,color:"#fc8181"}}>
+              <div style={{background:"var(--card)",border:"1px solid var(--loss)",borderRadius:8,padding:12,marginBottom:12,color:"var(--loss)"}}>
                 <div style={{fontWeight:700,fontSize:13,marginBottom:6}}>⚠️ ดึงราคาไม่ได้ ({priceErrors.length} ตัว)</div>
                 {priceErrors.map((e,i)=><div key={i} style={{fontSize:11,wordBreak:"break-all",marginBottom:2}}>• {e}</div>)}
-                <button onClick={()=>setPriceErrors([])} style={{marginTop:8,background:"none",border:"1px solid #7c2d2d",borderRadius:4,color:"#fc8181",fontSize:11,cursor:"pointer",padding:"2px 8px"}}>✕ ปิด</button>
+                <button onClick={()=>setPriceErrors([])} style={{marginTop:8,background:"none",border:"1px solid var(--loss)",borderRadius:4,color:"var(--loss)",fontSize:11,cursor:"pointer",padding:"2px 8px"}}>✕ ปิด</button>
               </div>
             )}
 
             {showImport&&(
-              <div style={{background:"#1a1d2e",borderRadius:8,padding:16,marginBottom:12,border:"1px solid #2d3748"}}>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:8}}>Format: SYMBOL,จำนวนหุ้น,ต้นทุน,ราคาปัจจุบัน,กลุ่ม,หมายเหตุ</div>
-                <textarea value={importText} onChange={e=>setImportText(e.target.value)} placeholder={"AAPL,100,150.00,175.00,Tech\nTSLA,50,200.00,404.00,EV"} style={{width:"100%",minHeight:100,background:"#0f1117",color:"#e2e8f0",border:"1px solid #4a5568",borderRadius:6,padding:10,fontSize:13,resize:"vertical"}}/>
-                <button onClick={importCSV} style={{...btn("#2f6b4f","#7ee8a2"),marginTop:8}}>นำเข้า</button>
+              <div style={{background:"var(--card)",borderRadius:8,padding:16,marginBottom:12,border:"1px solid var(--line)"}}>
+                <div style={{fontSize:12,color:"var(--mut)",marginBottom:8}}>Format: SYMBOL,จำนวนหุ้น,ต้นทุน,ราคาปัจจุบัน,กลุ่ม,หมายเหตุ</div>
+                <textarea value={importText} onChange={e=>setImportText(e.target.value)} placeholder={"AAPL,100,150.00,175.00,Tech\nTSLA,50,200.00,404.00,EV"} style={{width:"100%",minHeight:100,background:"var(--bg)",color:"var(--ink)",border:"1px solid var(--line)",borderRadius:6,padding:10,fontSize:13,resize:"vertical"}}/>
+                <button onClick={importCSV} style={{...btn("var(--brass)","var(--on-brass)"),marginTop:8}}>นำเข้า</button>
               </div>
             )}
 
             {holdings.length>0 && holdings.some((h:any)=>(h.buyHistory||[]).length>0||(h.realizedHistory||[]).length>0) && (
-              <div style={{fontSize:11,color:"#718096",marginBottom:8}}>* จำนวนและต้นทุนคำนวณจากประวัติ 🛒ซื้อ/💰ขาย ใน 📜 ประวัติ (แก้ผ่านปุ่ม ⋮ เท่านั้น)</div>
+              <div style={{fontSize:11,color:"var(--faint)",marginBottom:8}}>* จำนวนและต้นทุนคำนวณจากประวัติ 🛒ซื้อ/💰ขาย ใน 📜 ประวัติ (แก้ผ่านปุ่ม ⋮ เท่านั้น)</div>
             )}
+
+            {holdings.length>0 && (<>
+              {/* Search + sort (§5.2) */}
+              <div style={{display:"flex",gap:8,marginBottom:8,flexWrap:"wrap",alignItems:"center"}}>
+                <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="ค้นหา symbol / sector..."
+                  style={{flex:1,minWidth:160,background:"var(--card)",border:"1px solid var(--line)",borderRadius:8,padding:"8px 12px",color:"var(--ink)",fontSize:13}}/>
+                <button onClick={()=>{setShowAddSheet(true);}} style={{...btnPrimary({fontSize:12,padding:"8px 14px",whiteSpace:"nowrap"})}}>+ เพิ่มหลักทรัพย์</button>
+                <ToolsMenu items={[
+                  { label:"Import CSV", onClick:()=>setShowImport(v=>!v) },
+                  { label:"Export CSV", onClick:exportCSV },
+                  { label:"เคลียข้อมูลทั้งหมด", danger:true, disabled:!holdings.length, onClick:()=>{ if(window.confirm(`ลบทั้งหมด ${holdings.length} รายการ?`)) setAndSave([]); } },
+                ]}/>
+              </div>
+              <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+                {([["value","มูลค่า"],["pl","P&L %"],["today","วันนี้"],["az","A–Z"],["under","ยังไม่ถึงเป้า"]] as const).map(([key,label])=>(
+                  <button key={key} onClick={()=>{ if(sortBy===key) setSortDesc(v=>!v); else { setSortBy(key); setSortDesc(key!=="az"); } }}
+                    style={{fontSize:11,fontWeight:600,padding:"5px 11px",borderRadius:999,cursor:"pointer",
+                      background:sortBy===key?"var(--brass)":"var(--card2)", color:sortBy===key?"var(--on-brass)":"var(--mut)", border:"none"}}>
+                    {label}{sortBy===key&&key!=="under"?(sortDesc?" ↓":" ↑"):""}
+                  </button>
+                ))}
+              </div>
+            </>)}
+
             {holdings.length===0?(
-              <div style={{textAlign:"center",padding:"40px 20px",color:"#718096"}}><div style={{fontSize:36}}>📂</div><div style={{marginTop:8}}>ยังไม่มีหลักทรัพย์</div></div>
-            ):(
+              <div style={{textAlign:"center",padding:"40px 20px",color:"var(--faint)"}}>
+                <div style={{fontSize:36}}>📂</div><div style={{marginTop:8}}>ยังไม่มีหลักทรัพย์</div>
+                <div style={{display:"flex",gap:8,justifyContent:"center",marginTop:14}}>
+                  <button onClick={()=>setShowAddSheet(true)} style={{...btnPrimary({fontSize:13})}}>+ เพิ่มหลักทรัพย์</button>
+                  <button onClick={()=>setShowImport(true)} style={{...btnGhost({fontSize:13})}}>Import CSV</button>
+                </div>
+              </div>
+            ):filteredHoldingsList.length===0?(
+              <div style={{textAlign:"center",padding:"40px 20px",color:"var(--faint)"}}>
+                <div style={{marginTop:8}}>{query?`ไม่พบ "${query}"`:sortBy==="under"?"ทุกตัวถึงเป้าแล้ว 🎉":"ไม่มีหุ้นที่ถืออยู่ — ตัวที่ขายหมดยังดูได้ในแท็บประวัติ"}</div>
+                {query && <button onClick={()=>setQuery("")} style={{...btnGhost({fontSize:12,marginTop:10})}}>ล้างการค้นหา</button>}
+              </div>
+            ):(<>
+              {/* Mobile: card list */}
+              <div className="holdings-cards">
+                <HoldingsList holdings={filteredHoldingsList} tv={tv} pc={pc} onSelect={setDetailId}/>
+              </div>
+
+              {/* Desktop: table */}
+              <div className="holdings-table-wrap">
               <div style={{overflow:"auto",maxHeight:"75vh"}}>
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                   <thead>
-                    <tr style={{color:"#cbd5e0"}}>
+                    <tr style={{color:"var(--ink)"}}>
                       {["หลักทรัพย์","จำนวน*","ต้นทุน*","ราคา","วันนี้","P&L %","Realized","Unrealized","มูลค่า ($)","สัดส่วน / เป้า",""].map((h,ci)=>(
                         <th key={h} style={{padding:"8px 8px",textAlign:h==="หลักทรัพย์"||h==="สัดส่วน / เป้า"?"left":h===""?"center":"right",fontWeight:600,whiteSpace:"nowrap",
-                          position:"sticky",top:0,zIndex:ci===0?3:2,background:"#12141f",borderBottom:"1px solid #2d3748",
+                          position:"sticky",top:0,zIndex:ci===0?3:2,background:"var(--card)",borderBottom:"1px solid var(--line)",
                           ...(ci===0?{left:0}:{})}}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {[...effectiveHoldings].filter((h:any)=>h.shares>0.000001).sort((a,b)=>a.symbol.localeCompare(b.symbol)).map((h:any)=>{
+                    {filteredHoldingsList.map((h:any)=>{
                       const val=h.shares*h.currentPrice; const pp=h.avgCost>0?((h.currentPrice-h.avgCost)/h.avgCost*100):0;
                       const realized=(h.realizedHistory||[]).reduce((s:number,r:any)=>s+(r.gain||0),0);
                       const unrealized=h.shares>0?(h.currentPrice-h.avgCost)*h.shares:0;
@@ -1004,64 +1100,64 @@ export default function App() {
                       // $ to buy so this position reaches target weight (buying also grows total value)
                       const underNeed=(target>0&&target<100&&w<target)?((target/100*tv-val)/(1-target/100)):0;
                       const barPct=target>0?Math.min(w/target*100,150):0;
-                      const barColor=over>0?"#ff6b6b":w>0?"#7ee8a2":"#2d3748";
+                      const barColor=over>0?"var(--loss)":w>0?"var(--brass)":"var(--line)";
                       const isAlert=h.changePct!=null&&Math.abs(h.changePct)>=3;
-                      const stickyBg=isAlert?"#211f18":"#0f1117"; // opaque bg so frozen column doesn't show rows behind
+                      const stickyBg=isAlert?"var(--card2)":"var(--bg)"; // opaque bg so frozen column doesn't show rows behind
                       const isStale=h.priceTime && (Date.now()-h.priceTime > 24*3600*1000); // price older than 24h
                       return (<>
-                        <tr key={h.id} style={{borderBottom:"1px solid #1e2433",background:isAlert?"rgba(255,200,0,0.04)":"transparent"}}>
+                        <tr key={h.id} style={{borderBottom:"1px solid var(--card2)",background:isAlert?"rgba(255,200,0,0.04)":"transparent"}}>
                           <td style={{padding:"8px 8px",position:"sticky",left:0,zIndex:1,background:stickyBg}}>
                             <div style={{display:"flex",alignItems:"center",gap:4}}>
                               {isAlert&&<span>⚡</span>}
-                              {editId===h.id?<input value={h.symbol} onChange={e=>updateH(h.id,"symbol",e.target.value)} style={inp}/>:<span style={{fontWeight:700,color:"#7ee8a2"}}>{h.symbol}</span>}
+                              {editId===h.id?<input value={h.symbol} onChange={e=>updateH(h.id,"symbol",e.target.value)} style={inp}/>:<span style={{fontWeight:700,color:"var(--brass)"}}>{h.symbol}</span>}
                             </div>
-                            {h.sector&&<div style={{fontSize:10,color:"#a0aec0"}}>{h.sector}</div>}
+                            {h.sector&&<div style={{fontSize:10,color:"var(--mut)"}}>{h.sector}</div>}
                           </td>
                           {["shares","avgCost","currentPrice"].map(f=>(
-                            <td key={f} style={{padding:"8px 8px",textAlign:"right",color:"#e2e8f0"}}>
+                            <td key={f} style={{padding:"8px 8px",textAlign:"right",color:"var(--ink)"}}>
                               {editId===h.id&&f==="currentPrice"?<input type="number" value={h[f]} onChange={e=>updateH(h.id,f,e.target.value)} style={{...inp,width:72}}/>
                               :<span>{f==="shares"?Number(h[f]).toFixed(7):f==="avgCost"?Number(h[f]).toFixed(4):Number(h[f]).toLocaleString()}</span>}
                               {f==="currentPrice"&&h.priceTime&&editId!==h.id&&(
-                                <div title={isStale?"ราคาเก่ากว่า 24 ชม. — กดอัพเดทราคา":undefined} style={{fontSize:9,color:isStale?"#fbbf24":"#4a5568",whiteSpace:"nowrap"}}>{isStale?"⚠ ":""}{new Date(h.priceTime).toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}</div>
+                                <div title={isStale?"ราคาเก่ากว่า 24 ชม. — กดอัพเดทราคา":undefined} style={{fontSize:9,color:isStale?"var(--warn)":"var(--faint)",whiteSpace:"nowrap"}}>{isStale?"⚠ ":""}{new Date(h.priceTime).toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}</div>
                               )}
                             </td>
                           ))}
-                          <td style={{padding:"8px 8px",textAlign:"right",color:h.changePct==null?"#4a5568":pc(h.changePct),fontWeight:600,fontSize:11}}>
+                          <td style={{padding:"8px 8px",textAlign:"right",color:h.changePct==null?"var(--faint)":pc(h.changePct),fontWeight:600,fontSize:11}}>
                             {h.changePct==null?"—":`${h.changePct>0?"+":""}${h.changePct}%`}
                           </td>
                           <td style={{padding:"8px 8px",textAlign:"right",color:pc(pp),fontWeight:600}}>{pp>=0?"+":""}{pp.toFixed(2)}%</td>
                           <td style={{padding:"8px 8px",textAlign:"right",color:pc(realized),fontWeight:600,fontSize:11}}>{realized===0?"—":`${realized>=0?"+":""}$${realized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}`}</td>
                           <td style={{padding:"8px 8px",textAlign:"right",color:pc(unrealized),fontWeight:600,fontSize:11}}>{unrealized===0?"—":`${unrealized>=0?"+":""}$${unrealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}`}</td>
                           <td style={{padding:"8px 8px",textAlign:"right"}}>
-                            <div style={{color:"#e2e8f0"}}>${val.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                            {h.avgCost>0&&val>0&&(()=>{const cost=h.shares*h.avgCost;const diff=val-cost;return <div style={{fontSize:10,color:diff>=0?"#7ee8a2":"#ff6b6b",fontWeight:600}}>{diff>=0?"+":""}{diff.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} ({pp>=0?"+":""}{pp.toFixed(2)}%)</div>;})()}
+                            <div style={{color:"var(--ink)"}}>${val.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                            {h.avgCost>0&&val>0&&(()=>{const cost=h.shares*h.avgCost;const diff=val-cost;return <div style={{fontSize:10,color:diff>=0?"var(--gain)":"var(--loss)",fontWeight:600}}>{diff>=0?"+":""}{diff.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} ({pp>=0?"+":""}{pp.toFixed(2)}%)</div>;})()}
                           </td>
                           <td style={{padding:"8px 8px",minWidth:150}}>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2}}>
-                              <span style={{fontSize:11,color:over>0?"#ff6b6b":"#e2e8f0",fontWeight:600}}>{w.toFixed(1)}%</span>
+                              <span style={{fontSize:11,color:over>0?"var(--loss)":"var(--ink)",fontWeight:600}}>{w.toFixed(1)}%</span>
                               {editId===h.id?(
                                 <div style={{display:"flex",alignItems:"center",gap:3}}>
-                                  <span style={{fontSize:10,color:"#718096"}}>เป้า</span>
+                                  <span style={{fontSize:10,color:"var(--faint)"}}>เป้า</span>
                                   <input type="number" value={h.targetPct!=null?h.targetPct:""} placeholder="-" onChange={e=>updateH(h.id,"targetPct",e.target.value)} style={{...inp,width:44,fontSize:11,padding:"2px 4px"}}/>
-                                  <span style={{fontSize:10,color:"#718096"}}>%</span>
+                                  <span style={{fontSize:10,color:"var(--faint)"}}>%</span>
                                 </div>
                               ):h.targetPct===0&&target===0&&holdings.some((x:any)=>x.id===h.id&&typeof x.targetPct==="number"&&x.targetPct===0&&x.targetPct!==undefined)?(
-                                <span style={{fontSize:10,color:"#fc8181",fontWeight:600}}>❌ ตัดออก</span>
+                                <span style={{fontSize:10,color:"var(--loss)",fontWeight:600}}>❌ ตัดออก</span>
                               ):target>0?(
-                                <span style={{fontSize:10,color:"#718096"}}>/ {target}%</span>
+                                <span style={{fontSize:10,color:"var(--faint)"}}>/ {target}%</span>
                               ):(
-                                <span style={{fontSize:10,color:"#4a5568"}}>ไม่ได้ตั้ง</span>
+                                <span style={{fontSize:10,color:"var(--faint)"}}>ไม่ได้ตั้ง</span>
                               )}
                             </div>
-                            {target>0&&<div style={{background:"#2d3748",borderRadius:3,height:4,overflow:"hidden"}}><div style={{width:`${Math.min(barPct,100)}%`,height:"100%",background:barColor,borderRadius:3}}/></div>}
-                            {over>0&&<div style={{fontSize:10,color:"#ff6b6b",marginTop:1}}>เกิน +${overAmt.toFixed(2)}</div>}
-                            {underNeed>0&&<div style={{fontSize:10,color:"#7ee8a2",marginTop:1}}>ซื้อเพิ่ม ~${underNeed.toLocaleString("en",{maximumFractionDigits:2})} ถึงเป้า</div>}
+                            {target>0&&<div style={{background:"var(--line)",borderRadius:3,height:4,overflow:"hidden"}}><div style={{width:`${Math.min(barPct,100)}%`,height:"100%",background:barColor,borderRadius:3}}/></div>}
+                            {over>0&&<div style={{fontSize:10,color:"var(--loss)",marginTop:1}}>เกิน +${overAmt.toFixed(2)}</div>}
+                            {underNeed>0&&<div style={{fontSize:10,color:"var(--gain)",marginTop:1}}>ซื้อเพิ่ม ~${underNeed.toLocaleString("en",{maximumFractionDigits:2})} ถึงเป้า</div>}
                           </td>
                           <td style={{padding:"8px 4px",textAlign:"center",whiteSpace:"nowrap"}}>
                             {editId===h.id?(
-                              <button onClick={confirmEdit} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#7ee8a2",padding:"2px 4px"}}>✓ บันทึก</button>
+                              <button onClick={confirmEdit} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"var(--brass)",padding:"2px 4px"}}>✓ บันทึก</button>
                             ):(
-                              <button onClick={()=>setActionMenuId(h.id)} style={{background:"#2d3748",border:"none",borderRadius:5,cursor:"pointer",fontSize:14,color:"#a0aec0",padding:"4px 10px"}}>⋮</button>
+                              <button onClick={()=>setActionMenuId(h.id)} style={{background:"var(--line)",border:"none",borderRadius:5,cursor:"pointer",fontSize:14,color:"var(--mut)",padding:"4px 10px"}}>⋮</button>
                             )}
                           </td>
                         </tr>
@@ -1070,324 +1166,99 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
-            )}
+              </div>
+            </>)}
           </div>
         )}
 
         {/* CHART TAB */}
         {tab==="chart"&&(
-          <div>
-            {tv===0?(
-              <div style={{textAlign:"center",padding:"40px 20px",color:"#718096"}}><div style={{fontSize:36}}>📊</div><div style={{marginTop:8}}>กด 🔄 อัพเดทราคาก่อน</div></div>
-            ):(
-              <div style={{display:"flex",flexDirection:"column",gap:16}}>
-                {/* Summary stats */}
-                <div style={{background:"#1a1d2e",borderRadius:10,padding:16,border:"1px solid #2d3748",display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-                  {[
-                    {label:"มูลค่ารวม",value:`$${tv.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}`,color:"#e2e8f0"},
-                    {label:"ต้นทุนรวม",value:`$${tc.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}`,color:"#a0aec0"},
-                    {label:"กำไร/ขาดทุน",value:`${pnl>=0?"+":""}$${pnl.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}`,color:pc(pnl)},
-                    {label:"Return %",value:`${pnl>=0?"+":""}${pnlPct.toFixed(2)}%`,color:pc(pnl)},
-                  ].map(s=>(
-                    <div key={s.label} style={{textAlign:"center",padding:"8px 0"}}>
-                      <div style={{fontSize:11,color:"#718096",marginBottom:4}}>{s.label}</div>
-                      <div style={{fontSize:16,fontWeight:700,color:s.color}}>{s.value}</div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Realized vs Unrealized */}
-                <div style={{background:"#1a1d2e",borderRadius:10,padding:16,border:"1px solid #2d3748"}}>
-                  <div style={{fontSize:14,fontWeight:600,color:"#e2e8f0",marginBottom:12}}>💵 Realized vs Unrealized P&L</div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-                    <div style={{background:"#0f1117",borderRadius:8,padding:14,textAlign:"center"}}>
-                      <div style={{fontSize:11,color:"#718096",marginBottom:6}}>📜 Realized (ขายแล้ว)</div>
-                      <div style={{fontSize:18,fontWeight:700,color:pc(totalRealizedAll)}}>{totalRealizedAll>=0?"+":""}${totalRealizedAll.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                      <div style={{fontSize:11,color:"#718096",marginTop:4}}>{realizedTxCount} รายการขาย</div>
-                    </div>
-                    <div style={{background:"#0f1117",borderRadius:8,padding:14,textAlign:"center"}}>
-                      <div style={{fontSize:11,color:"#718096",marginBottom:6}}>📊 Unrealized (ถืออยู่)</div>
-                      <div style={{fontSize:18,fontWeight:700,color:pc(pnl)}}>{pnl>=0?"+":""}${pnl.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                      <div style={{fontSize:11,color:"#718096",marginTop:4}}>{activeHoldings.length} หลักทรัพย์</div>
-                    </div>
-                  </div>
-                  <div style={{marginTop:10,paddingTop:10,borderTop:"1px solid #2d3748",display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:700}}>
-                    <span style={{color:"#a0aec0"}}>รวมกำไร/ขาดทุนทั้งหมด</span>
-                    <span style={{color:pc(totalRealizedAll+pnl)}}>{(totalRealizedAll+pnl)>=0?"+":""}${(totalRealizedAll+pnl).toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-                  </div>
-                </div>
-
-                {/* Top 10 Pie with legend */}
-                <div style={{background:"#1a1d2e",borderRadius:10,padding:16,border:"1px solid #2d3748"}}>
-                  <div style={{fontSize:14,fontWeight:600,color:"#e2e8f0",marginBottom:12}}>🏆 Top 10 Holdings</div>
-                  <ResponsiveContainer width="100%" height={260}>
-                    <PieChart>
-                      <Pie data={top10Data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} innerRadius={40}>
-                        {top10Data.map((_,i)=><Cell key={i} fill={PIE_COLORS[i%PIE_COLORS.length]}/>)}
-                      </Pie>
-                      <Tooltip formatter={(v:any)=>`${v}%`} contentStyle={{background:"#1a1d2e",border:"1px solid #2d3748",borderRadius:6,color:"#e2e8f0",fontSize:12}}/>
-                      <Legend formatter={(value)=>value} wrapperStyle={{fontSize:11,color:"#a0aec0"}}/>
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-
-                {/* Top 10 bar list */}
-                <div style={{background:"#1a1d2e",borderRadius:10,padding:16,border:"1px solid #2d3748"}}>
-                  <div style={{fontSize:14,fontWeight:600,color:"#e2e8f0",marginBottom:12}}>📋 Top 10 รายละเอียด</div>
-                  {top10Data.map((d,i)=>(
-                    <div key={d.name} style={{marginBottom:10}}>
-                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                        <span style={{fontSize:13,fontWeight:600,color:PIE_COLORS[i%PIE_COLORS.length]}}>{d.name}</span>
-                        <span style={{fontSize:13,color:"#e2e8f0"}}>{d.value}%</span>
-                      </div>
-                      <div style={{background:"#2d3748",borderRadius:4,height:6}}>
-                        <div style={{width:`${Math.min(d.value/top10Data[0].value*100,100)}%`,height:"100%",background:PIE_COLORS[i%PIE_COLORS.length],borderRadius:4}}/>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          <ChartsTab
+            activeHoldings={activeHoldings}
+            tv={tv}
+            onFilterSector={(sector)=>{ setQuery(sector); setTab("portfolio"); }}
+            onOpenDetail={setDetailId}
+          />
         )}
 
         {/* TRANSACTIONS TAB */}
-        {tab==="transactions"&&(()=>{
-          type UnifiedTx = { symbol: string; date: string; kind: "buy"|"sell"|"split"; qty?: number; price?: number; avgCostAtSale?: number; gain?: number; gainPct?: number; ratio?: string; sector: string; fees?: number; grossGain?: number; proceeds?: number; idx: number };
-          const allTx: UnifiedTx[] = [];
-
-          holdings.forEach((h:any) => {
-            (h.buyHistory||[]).forEach((b:any,i:number) => allTx.push({ symbol:h.symbol, date:b.date, kind:"buy", qty:b.qty, price:b.price, sector:h.sector||"", idx:i }));
-            (h.realizedHistory||[]).forEach((r:any,i:number) => allTx.push({ symbol:h.symbol, date:r.date, kind:"sell", qty:r.qty, price:r.sellPrice, avgCostAtSale:r.avgCostAtSale, gain:r.gain, gainPct:r.gainPct, fees:r.fees, grossGain:r.grossGain, proceeds:r.proceeds, sector:h.sector||"", idx:i }));
-            (h.splitHistory||[]).forEach((s:any,i:number) => allTx.push({ symbol:h.symbol, date:s.date, kind:"split", ratio:s.ratio, sector:h.sector||"", idx:i }));
-          });
-          allTx.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-          // Running avgCost after each buy (per symbol, by buyHistory index) — FIFO lots, same as computeFromHistory
-          const avgCostAtBuy: Map<string, number[]> = new Map();
-          holdings.forEach((h:any) => {
-            const buys = (h.buyHistory||[]);
-            const sells = (h.realizedHistory||[]);
-            const splits = (h.splitHistory||[]);
-            const events = [
-              ...buys.map((b:any,i:number)=>({ date:b.date, type:"buy" as const, qty:b.qty, price:b.price, buyIdx:i, targetShares:0 })),
-              ...sells.map((s:any)=>({ date:s.date, type:"sell" as const, qty:s.qty, price:0, buyIdx:-1, targetShares:0 })),
-              ...splits.map((sp:any)=>({ date:sp.date, type:"split" as const, qty:0, price:0, buyIdx:-1, targetShares:parseFloat(sp.ratio)||0 })),
-            ].sort((a,b)=>new Date(a.date).getTime()-new Date(b.date).getTime());
-            const lots: {qty:number,price:number}[] = [];
-            const avgArr: number[] = new Array(buys.length).fill(0);
-            for (const e of events) {
-              if (e.type==="buy") {
-                lots.push({ qty:e.qty, price:e.price });
-                const sh = lots.reduce((s,l)=>s+l.qty,0);
-                avgArr[e.buyIdx] = sh>0 ? lots.reduce((s,l)=>s+l.qty*l.price,0)/sh : 0;
-              } else if (e.type==="sell") {
-                let rem = e.qty;
-                while (rem > 1e-12 && lots.length) {
-                  const take = Math.min(lots[0].qty, rem);
-                  lots[0].qty -= take; rem -= take;
-                  if (lots[0].qty <= 1e-12) lots.shift();
-                }
-              } else if (e.targetShares > 0) {
-                const cur = lots.reduce((s,l)=>s+l.qty,0);
-                if (cur > 0) { const f = e.targetShares/cur; for (const l of lots) { l.qty *= f; l.price /= f; } }
-              }
-            }
-            avgCostAtBuy.set(h.symbol, avgArr);
-          });
-
-          const allSymbols = [...new Set(holdings.map((h:any)=>h.symbol))].sort();
-          const filteredTx = txFilterSymbol==="ALL" ? allTx : allTx.filter(t=>t.symbol===txFilterSymbol);
-
-          const sellTx = filteredTx.filter(t=>t.kind==="sell");
-          const winCount = sellTx.filter(t=>(t.gain||0)>=0).length;
-          const lossCount = sellTx.filter(t=>(t.gain||0)<0).length;
-          const winRate = sellTx.length>0 ? (winCount/sellTx.length*100) : 0;
-          const buyCount = filteredTx.filter(t=>t.kind==="buy").length;
-          const splitCount = filteredTx.filter(t=>t.kind==="split").length;
-
-          const filteredHoldings = txFilterSymbol==="ALL" ? effectiveHoldings : effectiveHoldings.filter((h:any)=>h.symbol===txFilterSymbol);
-          const totalRealized = sellTx.reduce((s,t)=>s+(t.gain||0),0);
-          const totalUnrealized = filteredHoldings.reduce((s:number,h:any)=>s+(h.shares>0?(h.currentPrice-h.avgCost)*h.shares:0),0);
-          const totalPnL = totalRealized + totalUnrealized;
-
-          const kindIcon = (k:string) => k==="buy"?"🛒":k==="sell"?"💰":"🔀";
-          const kindColor = (k:string) => k==="buy"?"#86efac":k==="sell"?"#fbbf24":"#67e8f9";
-          const kindLabel = (k:string) => k==="buy"?"ซื้อ":k==="sell"?"ขาย":"แตกพาร์";
-
-          return (
-            <div>
-              {/* Symbol Filter + import button */}
-              <div style={{marginBottom:12,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                <span style={{fontSize:12,color:"#718096"}}>กรองหุ้น:</span>
-                <select value={txFilterSymbol} onChange={e=>setTxFilterSymbol(e.target.value)}
-                  style={{background:"#1a1d2e",border:"1px solid #4a5568",borderRadius:6,color:"#e2e8f0",fontSize:13,padding:"6px 10px"}}>
-                  <option value="ALL">ทั้งหมด ({holdings.length} หลักทรัพย์)</option>
-                  {allSymbols.map(s=><option key={s} value={s}>{s}</option>)}
-                </select>
-                {txFilterSymbol!=="ALL" && <button onClick={()=>setTxFilterSymbol("ALL")} style={{fontSize:12,color:"#fc8181",background:"none",border:"none",cursor:"pointer"}}>✕ ล้าง</button>}
-                <div style={{marginLeft:"auto",display:"flex",gap:6}}>
-                  <button onClick={()=>setShowTxImport(v=>!v)} style={btn("#1a2a3a","#93c5fd",{fontSize:12,padding:"6px 12px"})}>📥 Import ประวัติ CSV</button>
-                  <button onClick={recalcRealizedFIFO} style={btn("#1a3a4a","#67e8f9",{fontSize:12,padding:"6px 12px"})}>🔁 Recalc FIFO</button>
-                  <button onClick={restoreBackup} style={btn("#3a2a1a","#fbbf24",{fontSize:12,padding:"6px 12px"})}>↩️ กู้คืน backup</button>
-                  <button onClick={()=>{
-                    if(!window.confirm("ลบประวัติ transaction ทั้งหมด?\n(จำนวนหุ้น/ต้นทุนปัจจุบันจะถูกบันทึกไว้ก่อนลบ)")) return;
-                    makeBackup("Clear ประวัติ");
-                    const updated = holdings.map((h:any)=>{
-                      const eff = computeFromHistory(h);
-                      return { ...h, shares: eff.shares, avgCost: eff.avgCost, buyHistory:[], realizedHistory:[], splitHistory:[] };
-                    });
-                    setAndSave(updated); msg("ลบประวัติทั้งหมดแล้ว ✓");
-                  }} style={btn("#4a1515","#fc8181",{fontSize:12,padding:"6px 12px"})}>🗑️ Clear ประวัติ</button>
-                </div>
-              </div>
-
-              {/* TX CSV Import panel */}
-              {showTxImport&&(
-                <div style={{background:"#1a1d2e",borderRadius:8,padding:16,marginBottom:12,border:"1px solid #2d3748"}}>
-                  <div style={{fontSize:13,fontWeight:600,color:"#93c5fd",marginBottom:6}}>📥 Import ประวัติ ซื้อ/ขาย</div>
-                  <div style={{fontSize:12,color:"#a0aec0",marginBottom:8}}>Format: <code style={{color:"#67e8f9"}}>DD/MM/YYYY HH:MM,Side(B/S),Symbol,จำนวน,ราคา</code> — เวลาใส่หรือไม่ใส่ก็ได้, <code style={{color:"#7ee8a2"}}>BRK.B → BRK-B</code> อัตโนมัติ</div>
-                  <textarea value={txImportText} onChange={e=>setTxImportText(e.target.value)}
-                    placeholder={"01/11/2025 21:21,B,ACLS,0.1499694,81.95\n18/06/2026 07:20,S,ACLS,0.0445361,184.12\n02/07/2026 15:03,SPLIT,CRWD,4\n02/07/2026 15:03,+,CRWD,0.5311213,0\n02/07/2026 15:03,-,CRWD,0.1327803"}
-                    style={{width:"100%",minHeight:140,background:"#0f1117",color:"#e2e8f0",border:"1px solid #4a5568",borderRadius:6,padding:10,fontSize:12,resize:"vertical",fontFamily:"monospace"}}/>
-                  <div style={{display:"flex",gap:8,marginTop:8}}>
-                    <button onClick={importTxCSV} disabled={!txImportText.trim()} style={btn("#2f6b4f","#7ee8a2",{opacity:!txImportText.trim()?0.5:1})}>✅ นำเข้า</button>
-                    <button onClick={()=>{setShowTxImport(false);setTxImportText("");}} style={btn("#2d3748","#a0aec0")}>ยกเลิก</button>
-                  </div>
-                </div>
-              )}
-
-              {/* Summary */}
-              <div style={{background:"#1a1d2e",borderRadius:10,padding:16,marginBottom:16,border:"1px solid #2d3748",display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                <div style={{textAlign:"center"}}>
-                  <div style={{fontSize:11,color:"#718096",marginBottom:4}}>Realized P&L{txFilterSymbol!=="ALL"?` (${txFilterSymbol})`:""}</div>
-                  <div style={{fontSize:16,fontWeight:700,color:pc(totalRealized)}}>{totalRealized>=0?"+":""}${totalRealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                </div>
-                <div style={{textAlign:"center"}}>
-                  <div style={{fontSize:11,color:"#718096",marginBottom:4}}>Unrealized P&L{txFilterSymbol!=="ALL"?` (${txFilterSymbol})`:""}</div>
-                  <div style={{fontSize:16,fontWeight:700,color:pc(totalUnrealized)}}>{totalUnrealized>=0?"+":""}${totalUnrealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                </div>
-                <div style={{textAlign:"center"}}>
-                  <div style={{fontSize:11,color:"#718096",marginBottom:4}}>Total P&L</div>
-                  <div style={{fontSize:16,fontWeight:700,color:pc(totalPnL)}}>{totalPnL>=0?"+":""}${totalPnL.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                </div>
-                <div style={{textAlign:"center"}}>
-                  <div style={{fontSize:11,color:"#718096",marginBottom:4}}>Win Rate (ขาย)</div>
-                  <div style={{fontSize:16,fontWeight:700,color:"#e2e8f0"}}>{winRate.toFixed(0)}% <span style={{fontSize:11,color:"#718096"}}>({winCount}W/{lossCount}L)</span></div>
-                </div>
-                <div style={{textAlign:"center",gridColumn:"1/-1",display:"flex",justifyContent:"center",gap:20,paddingTop:6,borderTop:"1px solid #2d3748"}}>
-                  <span style={{fontSize:12,color:"#86efac"}}>🛒 ซื้อ {buyCount} ครั้ง</span>
-                  <span style={{fontSize:12,color:"#fbbf24"}}>💰 ขาย {sellTx.length} ครั้ง</span>
-                  <span style={{fontSize:12,color:"#67e8f9"}}>🔀 แตกพาร์ {splitCount} ครั้ง</span>
-                </div>
-              </div>
-
-              {filteredTx.length===0 ? (
-                <div style={{textAlign:"center",padding:"40px 20px",color:"#718096"}}>
-                  <div style={{fontSize:36}}>📜</div>
-                  <div style={{marginTop:8}}>ยังไม่มีประวัติ Transaction</div>
-                  <div style={{fontSize:12,marginTop:4}}>กด 🛒 ซื้อ / 💰 ขาย / 🔀 แตกพาร์ ที่หุ้นในแท็บรายการ</div>
-                </div>
-              ) : (
-                <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                  {filteredTx.map((t,i)=>(
-                    <div key={i} style={{background:"#1a1d2e",borderRadius:8,padding:"10px 14px",border:"1px solid #2d3748",borderLeft:`3px solid ${kindColor(t.kind)}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-                      <div style={{display:"flex",alignItems:"center",gap:10}}>
-                        <span style={{fontSize:18}}>{kindIcon(t.kind)}</span>
-                        <div>
-                          <div style={{display:"flex",alignItems:"center",gap:6}}>
-                            <span style={{fontWeight:700,color:"#7ee8a2",fontSize:13}}>{t.symbol}</span>
-                            <span style={{fontSize:11,color:kindColor(t.kind),fontWeight:600}}>{kindLabel(t.kind)}</span>
-                          </div>
-                          <div style={{fontSize:11,color:"#718096"}}>{new Date(t.date).toLocaleDateString("en-GB",{year:"numeric",month:"short",day:"numeric"})} {new Date(t.date).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false})}</div>
-                        </div>
-                      </div>
-                      <div style={{textAlign:"right"}}>
-                        {t.kind==="split" ? (
-                          <span style={{fontSize:13,color:"#67e8f9",fontWeight:600}}>Ratio {t.ratio}</span>
-                        ) : (
-                          <>
-                            <div style={{fontSize:13,color:"#e2e8f0"}}>{t.qty?.toFixed(7)} หุ้น @ ${t.price?.toFixed(4)}</div>
-                            {t.kind==="buy" && (() => { const avg = avgCostAtBuy.get(t.symbol)?.[t.idx]; return avg!=null ? <div style={{fontSize:11,color:"#a0aec0"}}>ต้นทุนเฉลี่ย: <span style={{color:"#7ee8a2",fontWeight:600}}>${avg.toFixed(4)}</span></div> : null; })()}
-                            {t.kind==="sell" && t.proceeds!=null && <div style={{fontSize:11,color:"#67e8f9"}}>ได้รับ ${(t.proceeds-(t.fees||0)).toFixed(2)}</div>}
-                            {t.kind==="sell" && (
-                              <div>
-                                <div style={{fontSize:12,fontWeight:700,color:pc(t.gain||0)}}>
-                                  {(t.gain||0)>=0?"+":""}${(t.gain||0).toFixed(2)} ({(t.gainPct||0)>=0?"+":""}{(t.gainPct||0).toFixed(1)}%)
-                                </div>
-                                {t.fees!=null && t.fees>0 && <div style={{fontSize:10,color:"#fc8181"}}>fee -${t.fees.toFixed(2)}</div>}
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-                      <div style={{display:"flex",gap:4}}>
-                        <button onClick={()=>openEditTx(t.symbol,t.kind,t.idx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#718096",padding:"4px 6px"}} title="แก้ไข">✏️</button>
-                        <button onClick={()=>deleteTx(t.symbol,t.kind,t.idx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"#fc8181",padding:"4px 6px"}} title="ลบ">✕</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })()}
-
-        {/* ADD TAB */}
-        {tab==="add"&&(
-          <div style={{maxWidth:460}}>
-            <div style={{background:"#1a1d2e",borderRadius:10,padding:20,border:"1px solid #2d3748"}}>
-              <div style={{fontSize:14,fontWeight:600,marginBottom:14,color:"#a0aec0"}}>เพิ่มหลักทรัพย์</div>
-              {[{k:"symbol",l:"Symbol",p:"AAPL"},{k:"shares",l:"จำนวนหุ้น",p:"100",t:"number"},{k:"avgCost",l:"ต้นทุนเฉลี่ย ($)",p:"150.00",t:"number"},{k:"currentPrice",l:"ราคาปัจจุบัน",p:"0",t:"number"},{k:"targetPct",l:"สัดส่วนเป้าหมาย % (ไม่บังคับ)",p:"2.5",t:"number"},{k:"sector",l:"กลุ่มธุรกิจ (ไม่บังคับ)",p:"Tech"},{k:"note",l:"หมายเหตุ (ไม่บังคับ)",p:"Long term"}].map(f=>(
-                <div key={f.k} style={{marginBottom:10}}>
-                  <div style={{fontSize:11,color:"#a0aec0",marginBottom:3}}>{f.l}</div>
-                  <input type={(f as any).t||"text"} value={(newStock as any)[f.k]||""} placeholder={f.p}
-                    onChange={e=>setNewStock({...newStock,[f.k]:f.k==="symbol"?e.target.value.toUpperCase():e.target.value})}
-                    style={{width:"100%",background:"#0f1117",border:"1px solid #4a5568",borderRadius:6,padding:"9px 12px",color:"#e2e8f0",fontSize:13}}/>
-                </div>
-              ))}
-              <button onClick={addHolding} style={{...btn("#2f6b4f","#7ee8a2"),width:"100%",padding:"11px",fontSize:14,marginTop:4}}>➕ เพิ่มหลักทรัพย์</button>
-            </div>
-          </div>
+        {tab==="transactions"&&(
+          <HistoryTab
+            holdings={holdings}
+            pc={pc}
+            txFilterSymbol={txFilterSymbol}
+            setTxFilterSymbol={setTxFilterSymbol}
+            showTxImport={showTxImport}
+            setShowTxImport={setShowTxImport}
+            txImportText={txImportText}
+            setTxImportText={setTxImportText}
+            importTxCSV={importTxCSV}
+            recalcRealizedFIFO={recalcRealizedFIFO}
+            restoreBackup={restoreBackup}
+            makeBackup={makeBackup}
+            setAndSave={setAndSave}
+            msg={msg}
+            computeFromHistory={computeFromHistory}
+            openEditTx={openEditTx}
+            deleteTx={deleteTx}
+          />
         )}
+
+        {/* AI TAB */}
+        {tab==="ai"&&(
+          <AiTab
+            hasHoldings={holdings.length>0}
+            moversCount={moversCount}
+            onAnalyze={copyForAnalysis}
+            onMovers={copyMoversAnalysis}
+            onAllocation={copyAllocationAnalysis}
+            onNewIdeas={copyNewIdeas}
+            showAllocImport={showAllocImport}
+            onTogglePasteTarget={()=>setShowAllocImport(v=>!v)}
+            allocText={allocText}
+            setAllocText={setAllocText}
+            onApplyAllocation={parseAndApplyAllocation}
+            onCancelPasteTarget={()=>{setShowAllocImport(false);setAllocText("");}}
+          />
+        )}
+
         </div>{/* content-area */}
-      </div>{/* main-layout */}
+      </div>{/* app-body */}
 
       {/* EDIT TRANSACTION MODAL */}
-      {editTxData && (
-        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16,overflowY:"auto"}} onClick={()=>setEditTxData(null)}>
-          <div style={{background:"#1a1d2e",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid #2d3748",boxSizing:"border-box"}} onClick={e=>e.stopPropagation()}>
-            <div style={{fontSize:16,fontWeight:700,color:"#e2e8f0",marginBottom:4}}>
+      <Sheet open={!!editTxData} onClose={()=>setEditTxData(null)} maxWidth={380}>
+        {editTxData && (<>
+            <div style={{fontSize:16,fontWeight:700,color:"var(--ink)",marginBottom:4}}>
               ✏️ แก้ไข{editTxData.kind==="buy"?"การซื้อ":editTxData.kind==="sell"?"การขาย":"การแตกพาร์"} {editTxData.symbol}
             </div>
-            <div style={{fontSize:11,color:"#fc8181",marginBottom:16}}>⚠️ การแก้ไขจะกระทบยอดจำนวนหุ้น/ต้นทุนปัจจุบัน</div>
+            <div style={{fontSize:11,color:"var(--loss)",marginBottom:16}}>⚠️ การแก้ไขจะกระทบยอดจำนวนหุ้น/ต้นทุนปัจจุบัน</div>
 
             <div style={{marginBottom:12}}>
-              <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>วันเวลา (วัน/เดือน/ปี)</div>
+              <div style={{fontSize:12,color:"var(--mut)",marginBottom:4}}>วันเวลา (วัน/เดือน/ปี)</div>
               <DateTimePicker24h value={editTxData.date} onChange={iso=>setEditTxData({...editTxData,date:iso})}/>
             </div>
 
             {editTxData.kind==="split" ? (
               <div style={{marginBottom:16}}>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>จำนวนหุ้นใหม่ (หลังแตกพาร์)</div>
+                <div style={{fontSize:12,color:"var(--mut)",marginBottom:4}}>จำนวนหุ้นใหม่ (หลังแตกพาร์)</div>
                 <input type="number" value={editTxData.ratio} onChange={e=>setEditTxData({...editTxData,ratio:e.target.value})} placeholder="ระบุจำนวนหุ้นหลังแตกพาร์"
-                  style={{width:"100%",background:"#0f1117",border:"1px solid #4a5568",borderRadius:6,padding:"10px 12px",color:"#e2e8f0",fontSize:14,boxSizing:"border-box"}}/>
+                  style={{width:"100%",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:6,padding:"10px 12px",color:"var(--ink)",fontSize:14,boxSizing:"border-box"}}/>
               </div>
             ) : (
               <>
                 <div style={{marginBottom:12}}>
-                  <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>จำนวนหุ้น</div>
+                  <div style={{fontSize:12,color:"var(--mut)",marginBottom:4}}>จำนวนหุ้น</div>
                   <input type="number" value={editTxData.qty} onChange={e=>setEditTxData({...editTxData,qty:e.target.value})}
-                    style={{width:"100%",background:"#0f1117",border:"1px solid #4a5568",borderRadius:6,padding:"10px 12px",color:"#e2e8f0",fontSize:14,boxSizing:"border-box"}}/>
+                    style={{width:"100%",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:6,padding:"10px 12px",color:"var(--ink)",fontSize:14,boxSizing:"border-box"}}/>
                 </div>
                 <div style={{marginBottom:12}}>
-                  <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>ราคา ($)</div>
+                  <div style={{fontSize:12,color:"var(--mut)",marginBottom:4}}>ราคา ($)</div>
                   <input type="number" value={editTxData.price} onChange={e=>setEditTxData({...editTxData,price:e.target.value})}
-                    style={{width:"100%",background:"#0f1117",border:"1px solid #4a5568",borderRadius:6,padding:"10px 12px",color:"#e2e8f0",fontSize:14,boxSizing:"border-box"}}/>
+                    style={{width:"100%",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:6,padding:"10px 12px",color:"var(--ink)",fontSize:14,boxSizing:"border-box"}}/>
                 </div>
                 {editTxData.kind==="sell" && (
-                  <div style={{background:"#0f1117",borderRadius:8,padding:12,marginBottom:16}}>
-                    <div style={{fontSize:11,color:"#a0aec0",marginBottom:8}}>💵 ค่าธรรมเนียม</div>
+                  <div style={{background:"var(--bg)",borderRadius:8,padding:12,marginBottom:16}}>
+                    <div style={{fontSize:11,color:"var(--mut)",marginBottom:8}}>💵 ค่าธรรมเนียม</div>
                     {[
                       {label:"Commission ($)", key:"commission" as const},
                       {label:"SEC Fee ($)", key:"secFee" as const},
@@ -1395,15 +1266,15 @@ export default function App() {
                       {label:"CAT Fee ($)", key:"catFee" as const},
                     ].map(f=>(
                       <div key={f.key} style={{marginBottom:8}}>
-                        <div style={{fontSize:11,color:"#718096",marginBottom:3}}>{f.label}</div>
+                        <div style={{fontSize:11,color:"var(--faint)",marginBottom:3}}>{f.label}</div>
                         <input type="number" value={editTxData[f.key]} onChange={e=>setEditTxData({...editTxData,[f.key]:e.target.value})}
-                          style={{width:"100%",background:"#1a1d2e",border:"1px solid #4a5568",borderRadius:5,padding:"7px 10px",color:"#e2e8f0",fontSize:13,boxSizing:"border-box"}}/>
+                          style={{width:"100%",background:"var(--card)",border:"1px solid var(--line)",borderRadius:5,padding:"7px 10px",color:"var(--ink)",fontSize:13,boxSizing:"border-box"}}/>
                       </div>
                     ))}
-                    <div style={{marginBottom:8,paddingTop:6,borderTop:"1px solid #2d3748"}}>
-                      <div style={{fontSize:11,color:"#718096",marginBottom:3}}>VAT 7% ($) <span style={{color:"#4a5568"}}>(ปล่อยว่าง = อัตโนมัติ {((parseFloat(editTxData.commission)||0)*0.07).toFixed(4)})</span></div>
+                    <div style={{marginBottom:8,paddingTop:6,borderTop:"1px solid var(--line)"}}>
+                      <div style={{fontSize:11,color:"var(--faint)",marginBottom:3}}>VAT 7% ($) <span style={{color:"var(--faint)"}}>(ปล่อยว่าง = อัตโนมัติ {((parseFloat(editTxData.commission)||0)*0.07).toFixed(4)})</span></div>
                       <input type="number" value={editTxData.vat} onChange={e=>setEditTxData({...editTxData,vat:e.target.value})} placeholder={`${((parseFloat(editTxData.commission)||0)*0.07).toFixed(4)}`}
-                        style={{width:"100%",background:"#1a1d2e",border:"1px solid #4a5568",borderRadius:5,padding:"7px 10px",color:"#e2e8f0",fontSize:13,boxSizing:"border-box"}}/>
+                        style={{width:"100%",background:"var(--card)",border:"1px solid var(--line)",borderRadius:5,padding:"7px 10px",color:"var(--ink)",fontSize:13,boxSizing:"border-box"}}/>
                     </div>
                   </div>
                 )}
@@ -1411,44 +1282,42 @@ export default function App() {
             )}
 
             <div style={{display:"flex",gap:8}}>
-              <button onClick={saveEditTx} style={{...btn("#2f6b4f","#7ee8a2"),flex:1,padding:"10px"}}>✅ บันทึก</button>
-              <button onClick={()=>setEditTxData(null)} style={{...btn("#2d3748","#a0aec0"),flex:1,padding:"10px"}}>ยกเลิก</button>
+              <button onClick={saveEditTx} style={{...btn("var(--brass)","var(--on-brass)"),flex:1,padding:"10px"}}>✅ บันทึก</button>
+              <button onClick={()=>setEditTxData(null)} style={{...btn("var(--line)","var(--mut)"),flex:1,padding:"10px"}}>ยกเลิก</button>
             </div>
-          </div>
-        </div>
-      )}
+        </>)}
+      </Sheet>
 
       {/* ACTION SHEET MODAL */}
-      {actionMenuId !== null && (() => {
-        const h = effectiveHoldings.find((x:any)=>x.id===actionMenuId);
-        if (!h) return null;
-        const actions = [
-          { icon:"✏️", label:"แก้ไขข้อมูล", color:"#e2e8f0", onClick:()=>{setEditId(h.id);setActionMenuId(null);} },
-          { icon:"🛒", label:"ซื้อเพิ่ม", color:"#86efac", onClick:()=>{openBuyModal(h.id);setActionMenuId(null);} },
-          { icon:"💰", label:"ขาย", color:"#fbbf24", onClick:()=>{openSellModal(h.id);setActionMenuId(null);} },
-          { icon:"🔀", label:"แตกพาร์", color:"#67e8f9", onClick:()=>{openSplitModal(h.id);setActionMenuId(null);} },
-          { icon:"✕", label:"ลบออกจาก Port", color:"#fc8181", onClick:()=>{removeH(h.id);setActionMenuId(null);} },
-        ];
-        return (
-          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={()=>setActionMenuId(null)}>
-            <div style={{background:"#1a1d2e",borderRadius:12,padding:8,maxWidth:320,width:"100%",border:"1px solid #2d3748",overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
-              <div style={{padding:"12px 16px",borderBottom:"1px solid #2d3748",marginBottom:4}}>
-                <span style={{fontWeight:700,color:"#7ee8a2",fontSize:15}}>{h.symbol}</span>
-                <span style={{fontSize:12,color:"#718096",marginLeft:8}}>{h.shares.toFixed(4)} หุ้น</span>
+      <Sheet open={actionMenuId !== null} onClose={()=>setActionMenuId(null)} maxWidth={320}>
+        {(() => {
+          const h = effectiveHoldings.find((x:any)=>x.id===actionMenuId);
+          if (!h) return null;
+          const actions = [
+            { icon:"✏️", label:"แก้ไขข้อมูล", color:"var(--ink)", onClick:()=>{setEditId(h.id);setActionMenuId(null);} },
+            { icon:"🛒", label:"ซื้อเพิ่ม", color:"var(--gain)", onClick:()=>{openBuyModal(h.id);setActionMenuId(null);} },
+            { icon:"💰", label:"ขาย", color:"var(--warn)", onClick:()=>{openSellModal(h.id);setActionMenuId(null);} },
+            { icon:"🔀", label:"แตกพาร์", color:"var(--brass)", onClick:()=>{openSplitModal(h.id);setActionMenuId(null);} },
+            { icon:"✕", label:"ลบออกจาก Port", color:"var(--loss)", onClick:()=>{removeH(h.id);setActionMenuId(null);} },
+          ];
+          return (<>
+              <div style={{padding:"0 0 12px",borderBottom:"1px solid var(--line)",marginBottom:4}}>
+                <span style={{fontWeight:700,color:"var(--brass)",fontSize:15}}>{h.symbol}</span>
+                <span style={{fontSize:12,color:"var(--faint)",marginLeft:8}}>{h.shares.toFixed(4)} หุ้น</span>
               </div>
               {actions.map((a,i)=>(
                 <button key={i} onClick={a.onClick} style={{display:"flex",alignItems:"center",gap:12,width:"100%",padding:"12px 16px",background:"none",border:"none",cursor:"pointer",fontSize:14,color:a.color,textAlign:"left",borderRadius:8}}>
                   <span style={{fontSize:18}}>{a.icon}</span>{a.label}
                 </button>
               ))}
-              <button onClick={()=>setActionMenuId(null)} style={{width:"100%",padding:"10px",marginTop:4,background:"#2d3748",border:"none",borderRadius:8,cursor:"pointer",fontSize:13,color:"#a0aec0"}}>ยกเลิก</button>
-            </div>
-          </div>
-        );
-      })()}
+              <button onClick={()=>setActionMenuId(null)} style={{width:"100%",padding:"10px",marginTop:4,background:"var(--line)",border:"none",borderRadius:8,cursor:"pointer",fontSize:13,color:"var(--mut)"}}>ยกเลิก</button>
+          </>);
+        })()}
+      </Sheet>
 
       {/* BUY MODAL */}
-      {buyModalId !== null && (() => {
+      <Sheet open={buyModalId !== null} onClose={()=>setBuyModalId(null)} maxWidth={380}>
+        {(() => {
         const h = effectiveHoldings.find((x:any)=>x.id===buyModalId);
         if (!h) return null;
         const qty = parseFloat(buyQty)||0;
@@ -1457,55 +1326,53 @@ export default function App() {
         const newValue = qty*price;
         const newShares = h.shares+qty;
         const newAvgCost = newShares>0 ? (oldValue+newValue)/newShares : 0;
-        return (
-          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={()=>setBuyModalId(null)}>
-            <div style={{background:"#1a1d2e",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid #2d3748"}} onClick={e=>e.stopPropagation()}>
-              <div style={{fontSize:16,fontWeight:700,color:"#86efac",marginBottom:4}}>🛒 ซื้อเพิ่ม {h.symbol}</div>
-              <div style={{fontSize:12,color:"#718096",marginBottom:16}}>มีอยู่ {h.shares.toFixed(7)} หุ้น | ทุนเฉลี่ย ${h.avgCost.toFixed(4)}/หุ้น</div>
+        return (<>
+              <div style={{fontSize:16,fontWeight:700,color:"var(--gain)",marginBottom:4}}>🛒 ซื้อเพิ่ม {h.symbol}</div>
+              <div style={{fontSize:12,color:"var(--faint)",marginBottom:16}}>มีอยู่ {h.shares.toFixed(7)} หุ้น | ทุนเฉลี่ย ${h.avgCost.toFixed(4)}/หุ้น</div>
 
               <div style={{marginBottom:12}}>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>จำนวนที่ซื้อเพิ่ม</div>
+                <div style={{fontSize:12,color:"var(--mut)",marginBottom:4}}>จำนวนที่ซื้อเพิ่ม</div>
                 <input type="number" value={buyQty} onChange={e=>setBuyQty(e.target.value)} placeholder="0" autoFocus
-                  style={{width:"100%",background:"#0f1117",border:"1px solid #4a5568",borderRadius:6,padding:"10px 12px",color:"#e2e8f0",fontSize:14}}/>
+                  style={{width:"100%",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:6,padding:"10px 12px",color:"var(--ink)",fontSize:14}}/>
               </div>
 
               <div style={{marginBottom:16}}>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>ราคาที่ซื้อ ($)</div>
+                <div style={{fontSize:12,color:"var(--mut)",marginBottom:4}}>ราคาที่ซื้อ ($)</div>
                 <input type="number" value={buyPrice} onChange={e=>setBuyPrice(e.target.value)} placeholder={h.currentPrice?String(h.currentPrice):"0"}
-                  style={{width:"100%",background:"#0f1117",border:"1px solid #4a5568",borderRadius:6,padding:"10px 12px",color:"#e2e8f0",fontSize:14}}/>
-                <button onClick={()=>setBuyPrice(String(h.currentPrice))} style={{fontSize:11,color:"#67e8f9",background:"none",border:"none",cursor:"pointer",marginTop:4,padding:0}}>ใช้ราคาปัจจุบัน (${h.currentPrice})</button>
+                  style={{width:"100%",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:6,padding:"10px 12px",color:"var(--ink)",fontSize:14}}/>
+                <button onClick={()=>setBuyPrice(String(h.currentPrice))} style={{fontSize:11,color:"var(--brass)",background:"none",border:"none",cursor:"pointer",marginTop:4,padding:0}}>ใช้ราคาปัจจุบัน (${h.currentPrice})</button>
               </div>
 
               <div style={{marginBottom:16}}>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>วันเวลาที่ซื้อ (วัน/เดือน/ปี)</div>
+                <div style={{fontSize:12,color:"var(--mut)",marginBottom:4}}>วันเวลาที่ซื้อ (วัน/เดือน/ปี)</div>
                 <DateTimePicker24h value={buyDateTime} onChange={setBuyDateTime}/>
               </div>
 
               {qty>0 && price>0 && (
-                <div style={{background:"#0f1117",borderRadius:8,padding:12,marginBottom:16}}>
-                  <div style={{fontSize:11,color:"#718096",marginBottom:6}}>ผลลัพธ์หลังซื้อเพิ่ม</div>
+                <div style={{background:"var(--bg)",borderRadius:8,padding:12,marginBottom:16}}>
+                  <div style={{fontSize:11,color:"var(--faint)",marginBottom:6}}>ผลลัพธ์หลังซื้อเพิ่ม</div>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:4}}>
-                    <span style={{color:"#a0aec0"}}>จำนวนหุ้น</span>
-                    <span style={{color:"#e2e8f0"}}>{h.shares.toFixed(4)} → <b style={{color:"#7ee8a2"}}>{newShares.toFixed(4)}</b></span>
+                    <span style={{color:"var(--mut)"}}>จำนวนหุ้น</span>
+                    <span style={{color:"var(--ink)"}}>{h.shares.toFixed(4)} → <b style={{color:"var(--brass)"}}>{newShares.toFixed(4)}</b></span>
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:13}}>
-                    <span style={{color:"#a0aec0"}}>ต้นทุนเฉลี่ย/หุ้น</span>
-                    <span style={{color:"#e2e8f0"}}>${h.avgCost.toFixed(4)} → <b style={{color:"#7ee8a2"}}>${newAvgCost.toFixed(4)}</b></span>
+                    <span style={{color:"var(--mut)"}}>ต้นทุนเฉลี่ย/หุ้น</span>
+                    <span style={{color:"var(--ink)"}}>${h.avgCost.toFixed(4)} → <b style={{color:"var(--brass)"}}>${newAvgCost.toFixed(4)}</b></span>
                   </div>
                 </div>
               )}
 
               <div style={{display:"flex",gap:8}}>
-                <button onClick={confirmBuy} disabled={!qty||!price} style={{...btn("#2f6b4f","#86efac"),flex:1,padding:"10px",opacity:(!qty||!price)?0.5:1}}>✅ ยืนยันซื้อเพิ่ม</button>
-                <button onClick={()=>setBuyModalId(null)} style={{...btn("#2d3748","#a0aec0"),flex:1,padding:"10px"}}>ยกเลิก</button>
+                <button onClick={confirmBuy} disabled={!qty||!price} style={{...btn("var(--brass)","var(--on-brass)"),flex:1,padding:"10px",opacity:(!qty||!price)?0.5:1}}>✅ ยืนยันซื้อเพิ่ม</button>
+                <button onClick={()=>setBuyModalId(null)} style={{...btn("var(--line)","var(--mut)"),flex:1,padding:"10px"}}>ยกเลิก</button>
               </div>
-            </div>
-          </div>
-        );
-      })()}
+        </>);
+        })()}
+      </Sheet>
 
       {/* SELL MODAL */}
-      {sellModalId !== null && (() => {
+      <Sheet open={sellModalId !== null} onClose={()=>setSellModalId(null)} maxWidth={380}>
+        {(() => {
         const h = effectiveHoldings.find((x:any)=>x.id===sellModalId);
         if (!h) return null;
         const qty = parseFloat(sellQty)||0;
@@ -1516,38 +1383,36 @@ export default function App() {
         const grossGain = (price - basis) * qty;
         const netGain = grossGain - fees.totalFees;
         const netGainPct = basis>0 && qty>0 ? (netGain/(basis*qty)*100) : 0;
-        return (
-          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16,overflowY:"auto"}} onClick={()=>setSellModalId(null)}>
-            <div style={{background:"#1a1d2e",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid #2d3748",boxSizing:"border-box"}} onClick={e=>e.stopPropagation()}>
-              <div style={{fontSize:16,fontWeight:700,color:"#fbbf24",marginBottom:4}}>💰 ขาย {h.symbol}</div>
-              <div style={{fontSize:12,color:"#718096",marginBottom:16}}>มีอยู่ {h.shares.toFixed(7)} หุ้น | ทุน ${h.avgCost.toFixed(4)}/หุ้น</div>
+        return (<>
+              <div style={{fontSize:16,fontWeight:700,color:"var(--warn)",marginBottom:4}}>💰 ขาย {h.symbol}</div>
+              <div style={{fontSize:12,color:"var(--faint)",marginBottom:16}}>มีอยู่ {h.shares.toFixed(7)} หุ้น | ทุน ${h.avgCost.toFixed(4)}/หุ้น</div>
 
               <div style={{marginBottom:12}}>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>จำนวนที่ขาย</div>
+                <div style={{fontSize:12,color:"var(--mut)",marginBottom:4}}>จำนวนที่ขาย</div>
                 <input type="number" value={sellQty} onChange={e=>setSellQty(e.target.value)} placeholder="0" autoFocus
-                  style={{width:"100%",background:"#0f1117",border:"1px solid #4a5568",borderRadius:6,padding:"10px 12px",color:"#e2e8f0",fontSize:14,boxSizing:"border-box"}}/>
-                <button onClick={()=>setSellQty(String(h.shares))} style={{fontSize:11,color:"#67e8f9",background:"none",border:"none",cursor:"pointer",marginTop:4,padding:0}}>ขายทั้งหมด ({h.shares.toFixed(4)})</button>
+                  style={{width:"100%",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:6,padding:"10px 12px",color:"var(--ink)",fontSize:14,boxSizing:"border-box"}}/>
+                <button onClick={()=>setSellQty(String(h.shares))} style={{fontSize:11,color:"var(--brass)",background:"none",border:"none",cursor:"pointer",marginTop:4,padding:0}}>ขายทั้งหมด ({h.shares.toFixed(4)})</button>
               </div>
 
               <div style={{marginBottom:12}}>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>ราคาที่ขาย ($)</div>
+                <div style={{fontSize:12,color:"var(--mut)",marginBottom:4}}>ราคาที่ขาย ($)</div>
                 <input type="number" value={sellPrice} onChange={e=>setSellPrice(e.target.value)} placeholder={h.currentPrice?String(h.currentPrice):"0"}
-                  style={{width:"100%",background:"#0f1117",border:"1px solid #4a5568",borderRadius:6,padding:"10px 12px",color:"#e2e8f0",fontSize:14,boxSizing:"border-box"}}/>
-                <button onClick={()=>setSellPrice(String(h.currentPrice))} style={{fontSize:11,color:"#67e8f9",background:"none",border:"none",cursor:"pointer",marginTop:4,padding:0}}>ใช้ราคาปัจจุบัน (${h.currentPrice})</button>
+                  style={{width:"100%",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:6,padding:"10px 12px",color:"var(--ink)",fontSize:14,boxSizing:"border-box"}}/>
+                <button onClick={()=>setSellPrice(String(h.currentPrice))} style={{fontSize:11,color:"var(--brass)",background:"none",border:"none",cursor:"pointer",marginTop:4,padding:0}}>ใช้ราคาปัจจุบัน (${h.currentPrice})</button>
               </div>
 
               <div style={{marginBottom:12}}>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:4}}>วันเวลาที่ขาย</div>
+                <div style={{fontSize:12,color:"var(--mut)",marginBottom:4}}>วันเวลาที่ขาย</div>
                 <DateTimePicker24h value={sellDateTime} onChange={setSellDateTime}/>
               </div>
 
               <button onClick={()=>setShowFees(!showFees)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",background:"none",border:"none",cursor:"pointer",padding:"8px 0",marginBottom:showFees?8:12}}>
-                <span style={{fontSize:12,color:"#a0aec0"}}>💵 ค่าธรรมเนียม (ไม่บังคับ)</span>
-                <span style={{fontSize:12,color:"#67e8f9"}}>{showFees?"▲ ซ่อน":"▼ แสดง"}</span>
+                <span style={{fontSize:12,color:"var(--mut)"}}>💵 ค่าธรรมเนียม (ไม่บังคับ)</span>
+                <span style={{fontSize:12,color:"var(--brass)"}}>{showFees?"▲ ซ่อน":"▼ แสดง"}</span>
               </button>
 
               {showFees && (
-                <div style={{background:"#0f1117",borderRadius:8,padding:12,marginBottom:12}}>
+                <div style={{background:"var(--bg)",borderRadius:8,padding:12,marginBottom:12}}>
                   {[
                     {label:"Commission Fee ($)", val:sellCommission, set:setSellCommission},
                     {label:"SEC Fee ($)", val:sellSecFee, set:setSellSecFee},
@@ -1555,85 +1420,113 @@ export default function App() {
                     {label:"CAT Fee ($)", val:sellCatFee, set:setSellCatFee},
                   ].map(f=>(
                     <div key={f.label} style={{marginBottom:8}}>
-                      <div style={{fontSize:11,color:"#718096",marginBottom:3}}>{f.label}</div>
+                      <div style={{fontSize:11,color:"var(--faint)",marginBottom:3}}>{f.label}</div>
                       <input type="number" value={f.val} onChange={e=>f.set(e.target.value)} placeholder="0"
-                        style={{width:"100%",background:"#1a1d2e",border:"1px solid #4a5568",borderRadius:5,padding:"7px 10px",color:"#e2e8f0",fontSize:13,boxSizing:"border-box"}}/>
+                        style={{width:"100%",background:"var(--card)",border:"1px solid var(--line)",borderRadius:5,padding:"7px 10px",color:"var(--ink)",fontSize:13,boxSizing:"border-box"}}/>
                     </div>
                   ))}
-                  <div style={{marginBottom:8,paddingTop:6,borderTop:"1px solid #2d3748"}}>
-                    <div style={{fontSize:11,color:"#718096",marginBottom:3}}>VAT 7% ($) <span style={{color:"#4a5568"}}>(ปล่อยว่าง = คำนวณอัตโนมัติจาก Commission × 7% = ${((parseFloat(sellCommission)||0)*0.07).toFixed(2)})</span></div>
+                  <div style={{marginBottom:8,paddingTop:6,borderTop:"1px solid var(--line)"}}>
+                    <div style={{fontSize:11,color:"var(--faint)",marginBottom:3}}>VAT 7% ($) <span style={{color:"var(--faint)"}}>(ปล่อยว่าง = คำนวณอัตโนมัติจาก Commission × 7% = ${((parseFloat(sellCommission)||0)*0.07).toFixed(2)})</span></div>
                     <input type="number" value={sellVat} onChange={e=>setSellVat(e.target.value)} placeholder={`${((parseFloat(sellCommission)||0)*0.07).toFixed(4)}`}
-                      style={{width:"100%",background:"#1a1d2e",border:"1px solid #4a5568",borderRadius:5,padding:"7px 10px",color:"#e2e8f0",fontSize:13,boxSizing:"border-box"}}/>
+                      style={{width:"100%",background:"var(--card)",border:"1px solid var(--line)",borderRadius:5,padding:"7px 10px",color:"var(--ink)",fontSize:13,boxSizing:"border-box"}}/>
                   </div>
                   <div style={{fontSize:12,fontWeight:700,display:"flex",justifyContent:"space-between",marginTop:4}}>
-                    <span style={{color:"#a0aec0"}}>รวมค่าธรรมเนียม</span>
-                    <span style={{color:"#fc8181"}}>${fees.totalFees.toFixed(2)}</span>
+                    <span style={{color:"var(--mut)"}}>รวมค่าธรรมเนียม</span>
+                    <span style={{color:"var(--loss)"}}>${fees.totalFees.toFixed(2)}</span>
                   </div>
                 </div>
               )}
 
               {qty>0 && price>0 && (
-                <div style={{background:"#0f1117",borderRadius:8,padding:12,marginBottom:16}}>
+                <div style={{background:"var(--bg)",borderRadius:8,padding:12,marginBottom:16}}>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
-                    <span style={{color:"#718096"}}>ต้นทุนล็อตที่ขาย (FIFO)</span>
-                    <span style={{color:"#a0aec0"}}>${basis.toFixed(4)}/หุ้น</span>
+                    <span style={{color:"var(--faint)"}}>ต้นทุนล็อตที่ขาย (FIFO)</span>
+                    <span style={{color:"var(--mut)"}}>${basis.toFixed(4)}/หุ้น</span>
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
-                    <span style={{color:"#718096"}}>Gross P&L</span>
-                    <span style={{color:"#a0aec0"}}>{grossGain>=0?"+":""}${grossGain.toFixed(2)}</span>
+                    <span style={{color:"var(--faint)"}}>Gross P&L</span>
+                    <span style={{color:"var(--mut)"}}>{grossGain>=0?"+":""}${grossGain.toFixed(2)}</span>
                   </div>
                   {fees.totalFees>0 && (
                     <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
-                      <span style={{color:"#718096"}}>ค่าธรรมเนียมทั้งหมด</span>
-                      <span style={{color:"#fc8181"}}>-${fees.totalFees.toFixed(2)}</span>
+                      <span style={{color:"var(--faint)"}}>ค่าธรรมเนียมทั้งหมด</span>
+                      <span style={{color:"var(--loss)"}}>-${fees.totalFees.toFixed(2)}</span>
                     </div>
                   )}
-                  <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4,paddingTop:6,borderTop:"1px solid #2d3748"}}>
-                    <span style={{color:"#718096"}}>ยอดขายรวม (Proceeds)</span>
-                    <span style={{color:"#e2e8f0"}}>${(qty*price).toFixed(2)}</span>
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4,paddingTop:6,borderTop:"1px solid var(--line)"}}>
+                    <span style={{color:"var(--faint)"}}>ยอดขายรวม (Proceeds)</span>
+                    <span style={{color:"var(--ink)"}}>${(qty*price).toFixed(2)}</span>
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:16,fontWeight:700,marginTop:4}}>
-                    <span style={{color:"#a0aec0"}}>Net P&L</span>
-                    <span style={{color:netGain>=0?"#7ee8a2":"#fc8181"}}>{netGain>=0?"+":""}${netGain.toFixed(2)} ({netGainPct>=0?"+":""}{netGainPct.toFixed(2)}%)</span>
+                    <span style={{color:"var(--mut)"}}>Net P&L</span>
+                    <span style={{color:netGain>=0?"var(--gain)":"var(--loss)"}}>{netGain>=0?"+":""}${netGain.toFixed(2)} ({netGainPct>=0?"+":""}{netGainPct.toFixed(2)}%)</span>
                   </div>
                 </div>
               )}
 
               <div style={{display:"flex",gap:8}}>
-                <button onClick={confirmSell} disabled={!qty||!price||qty>h.shares} style={{...btn("#2f6b4f","#7ee8a2"),flex:1,padding:"10px",opacity:(!qty||!price||qty>h.shares)?0.5:1}}>✅ ยืนยันขาย</button>
-                <button onClick={()=>setSellModalId(null)} style={{...btn("#2d3748","#a0aec0"),flex:1,padding:"10px"}}>ยกเลิก</button>
+                <button onClick={confirmSell} disabled={!qty||!price||qty>h.shares} style={{...btn("var(--brass)","var(--on-brass)"),flex:1,padding:"10px",opacity:(!qty||!price||qty>h.shares)?0.5:1}}>✅ ยืนยันขาย</button>
+                <button onClick={()=>setSellModalId(null)} style={{...btn("var(--line)","var(--mut)"),flex:1,padding:"10px"}}>ยกเลิก</button>
               </div>
-            </div>
-          </div>
-        );
-      })()}
+        </>);
+        })()}
+      </Sheet>
 
       {/* SPLIT MODAL */}
-      {splitModalId !== null && (() => {
+      <Sheet open={splitModalId !== null} onClose={()=>setSplitModalId(null)} maxWidth={380}>
+        {(() => {
         const h = effectiveHoldings.find((x:any)=>x.id===splitModalId);
         if (!h) return null;
         const newShares = parseFloat(splitRatio);
         const valid = newShares > 0 && newShares !== h.shares;
-        return (
-          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}} onClick={()=>setSplitModalId(null)}>
-            <div style={{background:"#1a1d2e",borderRadius:12,padding:24,maxWidth:380,width:"100%",border:"1px solid #2d3748"}} onClick={e=>e.stopPropagation()}>
-              <div style={{fontSize:16,fontWeight:700,color:"#67e8f9",marginBottom:4}}>🔀 แตกพาร์ {h.symbol}</div>
-              <div style={{fontSize:12,color:"#718096",marginBottom:16}}>ปัจจุบัน {h.shares.toFixed(7)} หุ้น</div>
+        return (<>
+              <div style={{fontSize:16,fontWeight:700,color:"var(--brass)",marginBottom:4}}>🔀 แตกพาร์ {h.symbol}</div>
+              <div style={{fontSize:12,color:"var(--faint)",marginBottom:16}}>ปัจจุบัน {h.shares.toFixed(7)} หุ้น</div>
 
               <div style={{marginBottom:16}}>
-                <div style={{fontSize:12,color:"#a0aec0",marginBottom:6}}>จำนวนหุ้นหลังแตกพาร์</div>
+                <div style={{fontSize:12,color:"var(--mut)",marginBottom:6}}>จำนวนหุ้นหลังแตกพาร์</div>
                 <input type="number" value={splitRatio} onChange={e=>setSplitRatio(e.target.value)} placeholder={`เช่น ${(h.shares*4).toFixed(7)}`} min="0" step="any" autoFocus
-                  style={{width:"100%",background:"#0f1117",border:"1px solid #4a5568",borderRadius:6,padding:"10px 12px",color:"#e2e8f0",fontSize:14}}/>
+                  style={{width:"100%",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:6,padding:"10px 12px",color:"var(--ink)",fontSize:14}}/>
               </div>
 
               <div style={{display:"flex",gap:8}}>
-                <button onClick={confirmSplit} disabled={!valid} style={{...btn("#1a3a4a","#67e8f9"),flex:1,padding:"10px",opacity:valid?1:0.5}}>✅ ยืนยันแตกพาร์</button>
-                <button onClick={()=>setSplitModalId(null)} style={{...btn("#2d3748","#a0aec0"),flex:1,padding:"10px"}}>ยกเลิก</button>
+                <button onClick={confirmSplit} disabled={!valid} style={{...btn("var(--card2)","var(--brass)"),flex:1,padding:"10px",opacity:valid?1:0.5}}>✅ ยืนยันแตกพาร์</button>
+                <button onClick={()=>setSplitModalId(null)} style={{...btn("var(--line)","var(--mut)"),flex:1,padding:"10px"}}>ยกเลิก</button>
               </div>
-            </div>
+        </>);
+        })()}
+      </Sheet>
+
+      {/* DETAIL SHEET (mobile card tap) */}
+      <DetailSheet
+        holding={effectiveHoldings.find((x:any)=>x.id===detailId) || null}
+        onClose={()=>{setDetailId(null);setEditId(null);}}
+        tv={tv}
+        pc={pc}
+        editId={editId}
+        onEditIdChange={setEditId}
+        updateH={updateH}
+        confirmEdit={confirmEdit}
+        onBuy={(id)=>{setDetailId(null);openBuyModal(id);}}
+        onSell={(id)=>{setDetailId(null);openSellModal(id);}}
+        onSplit={(id)=>{setDetailId(null);openSplitModal(id);}}
+        onHistory={(symbol)=>{setDetailId(null);setTab("transactions");setTxFilterSymbol(symbol);}}
+        onRemove={(id)=>{setDetailId(null);removeH(id);}}
+      />
+
+      {/* ADD HOLDING SHEET */}
+      <Sheet open={showAddSheet} onClose={()=>setShowAddSheet(false)} maxWidth={420}>
+        <div style={{fontSize:16,fontWeight:700,marginBottom:14,color:"var(--ink)"}}>เพิ่มหลักทรัพย์</div>
+        {[{k:"symbol",l:"Symbol",p:"AAPL"},{k:"shares",l:"จำนวนหุ้น",p:"100",t:"number"},{k:"avgCost",l:"ต้นทุนเฉลี่ย ($)",p:"150.00",t:"number"},{k:"currentPrice",l:"ราคาปัจจุบัน",p:"0",t:"number"},{k:"targetPct",l:"สัดส่วนเป้าหมาย % (ไม่บังคับ)",p:"2.5",t:"number"},{k:"sector",l:"กลุ่มธุรกิจ (ไม่บังคับ)",p:"Tech"},{k:"note",l:"หมายเหตุ (ไม่บังคับ)",p:"Long term"}].map(f=>(
+          <div key={f.k} style={{marginBottom:10}}>
+            <div style={{fontSize:11,color:"var(--mut)",marginBottom:3}}>{f.l}</div>
+            <input type={(f as any).t||"text"} value={(newStock as any)[f.k]||""} placeholder={f.p}
+              onChange={e=>setNewStock({...newStock,[f.k]:f.k==="symbol"?e.target.value.toUpperCase():e.target.value})}
+              style={{width:"100%",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:6,padding:"9px 12px",color:"var(--ink)",fontSize:13,boxSizing:"border-box"}}/>
           </div>
-        );
-      })()}
+        ))}
+        <button onClick={()=>{if(!newStock.symbol){msg("ใส่ Symbol ก่อน");return;}addHolding();setShowAddSheet(false);}} style={{...btnPrimary(),width:"100%",padding:"11px",fontSize:14,marginTop:4}}>เพิ่มหลักทรัพย์</button>
+      </Sheet>
     </div>
   );
 }

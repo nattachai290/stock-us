@@ -1,84 +1,106 @@
-* { box-sizing: border-box; margin: 0; padding: 0; }
-html { background: #0f1117; overflow-x: hidden; }
-body { background: #0f1117; color: #e2e8f0; font-family: 'Segoe UI', sans-serif; overflow-x: hidden; }
-
-/* ── Sidebar layout ── */
-.main-layout { display: flex; align-items: flex-start; }
-.content-area { flex: 1; min-width: 0; padding: 16px; }
-
-.action-sidebar {
-  width: 224px;
-  flex-shrink: 0;
-  padding: 14px 12px;
-  border-left: 1px solid #2d3748;
-  background: #141720;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  position: sticky;
-  top: 0;
-  max-height: 100vh;
-  overflow-y: auto;
+:root{
+  /* surfaces */
+  --bg:#0C1014;        /* พื้นหลังแอป */
+  --card:#151C23;      /* การ์ด/แผง */
+  --card2:#1C252E;     /* การ์ดซ้อน/ปุ่มรอง/hover */
+  --line:#242F39;      /* เส้นขอบ hairline */
+  /* ink */
+  --ink:#EAEFF4;       /* ตัวหนังสือหลัก */
+  --mut:#90A2B0;       /* รอง */
+  --faint:#5F6E7A;     /* จาง/label */
+  /* brand */
+  --brass:#D2AE6C;     /* สีแบรนด์เดียว: โลโก้ ปุ่มหลัก แท็บ active โฟกัส แถบเป้า */
+  --on-brass:#161006;  /* ตัวหนังสือบนพื้น brass */
+  /* semantic — ใช้กับตัวเลขเงิน/สถานะเท่านั้น ห้ามใช้ตกแต่ง */
+  --gain:#4CC38A;
+  --loss:#E5655E;
+  --warn:#E2A33C;      /* ราคาเก่า >24h, ตัวผิดปกติ ±3% */
+  /* charts (categorical, ลำดับตายตัว, จงใจไม่มีเขียว) */
+  --c1:#3987e5; --c2:#c98500; --c3:#d55181;
+  --c4:#9085e9; --c5:#199e70; --c6:#5F6E7A; /* c6 = "อื่นๆ" */
+  /* geometry */
+  --r-sm:10px; --r-md:13px; --r-lg:16px;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 32px rgba(0,0,0,.35);
 }
-.action-sidebar button:not(.sidebar-close-btn) { width: 100% !important; padding: 9px 10px !important; font-size: 12px !important; text-align: left; }
-.action-sidebar.hidden { display: none; }
-.sidebar-section-label { font-size: 10px; font-weight: 600; color: #4a5568; letter-spacing: .07em; text-transform: uppercase; margin-top: 6px; padding-bottom: 4px; border-bottom: 1px solid #1e2433; }
-.sidebar-close-btn { display: none; }
 
-.hamburger-fab { display: none; }
-.sidebar-overlay { display: none; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { background: var(--bg); overflow-x: hidden; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: system-ui,-apple-system,"Segoe UI","Noto Sans Thai",sans-serif;
+  font-variant-numeric: tabular-nums;
+  overflow-x: hidden;
+}
 
-@media (max-width: 768px) {
-  .action-sidebar {
-    position: fixed;
-    right: 0;
-    top: 0;
-    height: 100dvh;
-    width: 272px;
-    z-index: 200;
-    transform: translateX(110%);
-    transition: transform 0.25s cubic-bezier(.4,0,.2,1);
-    border-left: 1px solid #4a5568;
-    padding-top: 64px;
-    max-height: 100dvh;
+/* ── Sheet primitive (§4.4): bottom sheet on mobile, centered modal on PC ── */
+.sheet-scrim {
+  position: fixed; inset: 0; background: rgba(4,7,10,.55);
+  z-index: 1000; display: flex; align-items: flex-end; justify-content: center;
+  padding: 0;
+}
+.sheet-panel {
+  background: var(--card); width: 100%; max-height: 88vh; overflow-y: auto;
+  border-radius: 18px 18px 0 0; padding: 20px; box-sizing: border-box;
+  border: 1px solid var(--line); border-bottom: none;
+}
+.sheet-handle { display: block; width: 36px; height: 4px; border-radius: 2px; background: var(--line); margin: -8px auto 14px; }
+
+@media (min-width: 900px) {
+  .sheet-scrim { align-items: center; padding: 16px; }
+  .sheet-panel {
+    width: 100%; max-width: var(--sheet-max-width, 420px);
+    border-radius: var(--r-lg); border: 1px solid var(--line);
+    max-height: 85vh;
   }
-  .action-sidebar.open { transform: translateX(0); }
-  .hamburger-fab {
+  .sheet-handle { display: none; }
+}
+
+/* ── Mobile-card / desktop-table switch (single 900px breakpoint) ── */
+.holdings-cards { display: block; }
+.holdings-table-wrap { display: none; }
+@media (min-width: 900px) {
+  .holdings-cards { display: none; }
+  .holdings-table-wrap { display: block; }
+}
+
+/* ── Snackbar (§4.3): above the bottom tab bar on mobile, bottom-right on PC ── */
+.snackbar {
+  position: fixed; z-index: 1200;
+  left: 50%; transform: translateX(-50%);
+  bottom: calc(70px + env(safe-area-inset-bottom));
+  width: 420px; max-width: calc(100vw - 32px);
+}
+@media (min-width: 900px) {
+  .snackbar { left: auto; transform: none; right: 20px; bottom: 20px; }
+}
+
+/* ── App shell layout (§3): left sidebar nav on desktop, bottom tab bar on mobile ── */
+.app-body { display: flex; align-items: flex-start; }
+.content-area { flex: 1; min-width: 0; padding: 16px; padding-bottom: 84px; }
+
+.app-sidebar { display: none; }
+.app-bottom-tabs {
+  display: flex;
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 150;
+  background: var(--card); border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@media (min-width: 900px) {
+  .content-area { padding-bottom: 16px; }
+  .app-bottom-tabs { display: none; }
+  /* sidebar ซ้ายมี wordmark อยู่แล้ว — ซ่อนตัวซ้ำบน app bar */
+  .appbar-wordmark { visibility: hidden; }
+  .app-sidebar {
     display: flex;
-    align-items: center;
-    justify-content: center;
-    position: fixed;
-    bottom: 28px;
-    right: 20px;
-    width: 54px;
-    height: 54px;
-    border-radius: 50%;
-    background: #1e3a5f;
-    border: 2px solid #63b3ed44;
-    color: #63b3ed;
-    font-size: 22px;
-    cursor: pointer;
-    z-index: 300;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
-  }
-  .sidebar-overlay {
-    display: block;
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.55);
-    z-index: 199;
-    backdrop-filter: blur(2px);
-  }
-  .sidebar-close-btn {
-    display: block;
-    position: absolute;
-    top: 14px;
-    right: 14px;
-    background: none;
-    border: none;
-    color: #a0aec0;
-    font-size: 22px;
-    cursor: pointer;
-    padding: 4px 8px;
+    flex-direction: column;
+    width: 184px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    align-self: flex-start;
+    height: 100vh;
+    background: var(--card);
+    border-right: 1px solid var(--line);
   }
 }
