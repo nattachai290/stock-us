@@ -58,3 +58,15 @@ export const IconLightbulb = ({ size = 16 }: { size?: number }) => (
 export const IconClipboard = ({ size = 16 }: { size?: number }) => (
   <svg {...base} width={size} height={size}><rect x="6" y="4" width="12" height="17" rx="1.5"/><path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/><path d="M9 11h6M9 15h6"/></svg>
 );
+
+export const IconArrowDown = ({ size = 16 }: { size?: number }) => (
+  <svg {...base} width={size} height={size}><path d="M12 5v14m0 0-5-5m5 5 5-5"/></svg>
+);
+
+export const IconArrowUp = ({ size = 16 }: { size?: number }) => (
+  <svg {...base} width={size} height={size}><path d="M12 19V5m0 0-5 5m5-5 5 5"/></svg>
+);
+
+export const IconSplit = ({ size = 16 }: { size?: number }) => (
+  <svg {...base} width={size} height={size}><path d="M8 3H5v18h3M16 3h3v18h-3"/></svg>
+);

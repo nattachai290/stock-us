@@ -1,10 +1,9 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
-import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import DateTimePicker24h from "./components/DateTimePicker24h";
 import { parseCSV, toCSV, copyToClipboard, fifoBasisForSale, computeFromHistory } from "./lib/portfolio";
 import { setOnDriveAuthExpired, listPortfolios, loadPortfolio, savePortfolio, deletePortfolio } from "./lib/drive";
-import { btn, btnPrimary, btnGhost, inp, PIE_COLORS } from "./lib/ui";
+import { btn, btnPrimary, btnGhost, inp } from "./lib/ui";
 import Snackbar from "./components/Snackbar";
 import Sheet from "./components/Sheet";
 import HoldingsList from "./components/HoldingsList";
@@ -12,6 +11,8 @@ import DetailSheet from "./components/DetailSheet";
 import AppShell from "./components/AppShell";
 import AiTab from "./components/AiTab";
 import ToolsMenu from "./components/ToolsMenu";
+import ChartsTab from "./components/ChartsTab";
+import HistoryTab from "./components/HistoryTab";
 
 const PROXY_URL = "/api/price";
 const GOOGLE_CLIENT_ID = "45222114320-2r8rh69n1mt4jd4138v90vqq7ha0dgq2.apps.googleusercontent.com";
@@ -846,21 +847,6 @@ export default function App() {
   const totalRealizedAll = holdings.reduce((s:number,h:any) => s + (h.realizedHistory||[]).reduce((s2:number,r:any)=>s2+r.gain,0), 0);
   const realizedTxCount = holdings.reduce((s:number,h:any) => s + (h.realizedHistory||[]).length, 0);
 
-  // Pie chart data by sector
-  const sectorData = (() => {
-    const map: Record<string,number> = {};
-    holdings.forEach((h:any) => {
-      const val = h.shares * h.currentPrice;
-      if (val > 0) { const s = h.sector || "ไม่ระบุ"; map[s] = (map[s]||0) + val; }
-    });
-    return Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([name, value]) => ({ name, value: parseFloat((value/tv*100).toFixed(1)) }));
-  })();
-
-  // Top 10 holdings for pie
-  const top10Data = [...effectiveHoldings].sort((a,b)=>(b.shares*b.currentPrice)-(a.shares*a.currentPrice)).slice(0,10).map((h:any)=>{
-    const val=h.shares*h.currentPrice; return { name: h.symbol, value: parseFloat((val/tv*100).toFixed(1)) };
-  });
-
   // Today's % across the whole portfolio, derived from each position's already-fetched changePct
   // (per-share prev-close implied by currentPrice/changePct) — purely a render-time aggregate, no new data source.
   const todayBase = activeHoldings.reduce((s:number,h:any)=>{
@@ -1187,264 +1173,37 @@ export default function App() {
 
         {/* CHART TAB */}
         {tab==="chart"&&(
-          <div>
-            {tv===0?(
-              <div style={{textAlign:"center",padding:"40px 20px",color:"var(--faint)"}}><div style={{fontSize:36}}>📊</div><div style={{marginTop:8}}>กด 🔄 อัพเดทราคาก่อน</div></div>
-            ):(
-              <div style={{display:"flex",flexDirection:"column",gap:16}}>
-                {/* Summary stats */}
-                <div style={{background:"var(--card)",borderRadius:10,padding:16,border:"1px solid var(--line)",display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-                  {[
-                    {label:"มูลค่ารวม",value:`$${tv.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}`,color:"var(--ink)"},
-                    {label:"ต้นทุนรวม",value:`$${tc.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}`,color:"var(--mut)"},
-                    {label:"กำไร/ขาดทุน",value:`${pnl>=0?"+":""}$${pnl.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}`,color:pc(pnl)},
-                    {label:"Return %",value:`${pnl>=0?"+":""}${pnlPct.toFixed(2)}%`,color:pc(pnl)},
-                  ].map(s=>(
-                    <div key={s.label} style={{textAlign:"center",padding:"8px 0"}}>
-                      <div style={{fontSize:11,color:"var(--faint)",marginBottom:4}}>{s.label}</div>
-                      <div style={{fontSize:16,fontWeight:700,color:s.color}}>{s.value}</div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Realized vs Unrealized */}
-                <div style={{background:"var(--card)",borderRadius:10,padding:16,border:"1px solid var(--line)"}}>
-                  <div style={{fontSize:14,fontWeight:600,color:"var(--ink)",marginBottom:12}}>💵 Realized vs Unrealized P&L</div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-                    <div style={{background:"var(--bg)",borderRadius:8,padding:14,textAlign:"center"}}>
-                      <div style={{fontSize:11,color:"var(--faint)",marginBottom:6}}>📜 Realized (ขายแล้ว)</div>
-                      <div style={{fontSize:18,fontWeight:700,color:pc(totalRealizedAll)}}>{totalRealizedAll>=0?"+":""}${totalRealizedAll.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                      <div style={{fontSize:11,color:"var(--faint)",marginTop:4}}>{realizedTxCount} รายการขาย</div>
-                    </div>
-                    <div style={{background:"var(--bg)",borderRadius:8,padding:14,textAlign:"center"}}>
-                      <div style={{fontSize:11,color:"var(--faint)",marginBottom:6}}>📊 Unrealized (ถืออยู่)</div>
-                      <div style={{fontSize:18,fontWeight:700,color:pc(pnl)}}>{pnl>=0?"+":""}${pnl.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                      <div style={{fontSize:11,color:"var(--faint)",marginTop:4}}>{activeHoldings.length} หลักทรัพย์</div>
-                    </div>
-                  </div>
-                  <div style={{marginTop:10,paddingTop:10,borderTop:"1px solid var(--line)",display:"flex",justifyContent:"space-between",fontSize:13,fontWeight:700}}>
-                    <span style={{color:"var(--mut)"}}>รวมกำไร/ขาดทุนทั้งหมด</span>
-                    <span style={{color:pc(totalRealizedAll+pnl)}}>{(totalRealizedAll+pnl)>=0?"+":""}${(totalRealizedAll+pnl).toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
-                  </div>
-                </div>
-
-                {/* Top 10 Pie with legend */}
-                <div style={{background:"var(--card)",borderRadius:10,padding:16,border:"1px solid var(--line)"}}>
-                  <div style={{fontSize:14,fontWeight:600,color:"var(--ink)",marginBottom:12}}>🏆 Top 10 Holdings</div>
-                  <ResponsiveContainer width="100%" height={260}>
-                    <PieChart>
-                      <Pie data={top10Data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} innerRadius={40}>
-                        {top10Data.map((_,i)=><Cell key={i} fill={PIE_COLORS[i%PIE_COLORS.length]}/>)}
-                      </Pie>
-                      <Tooltip formatter={(v:any)=>`${v}%`} contentStyle={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:6,color:"var(--ink)",fontSize:12}}/>
-                      <Legend formatter={(value)=>value} wrapperStyle={{fontSize:11,color:"var(--mut)"}}/>
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-
-                {/* Top 10 bar list */}
-                <div style={{background:"var(--card)",borderRadius:10,padding:16,border:"1px solid var(--line)"}}>
-                  <div style={{fontSize:14,fontWeight:600,color:"var(--ink)",marginBottom:12}}>📋 Top 10 รายละเอียด</div>
-                  {top10Data.map((d,i)=>(
-                    <div key={d.name} style={{marginBottom:10}}>
-                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                        <span style={{fontSize:13,fontWeight:600,color:PIE_COLORS[i%PIE_COLORS.length]}}>{d.name}</span>
-                        <span style={{fontSize:13,color:"var(--ink)"}}>{d.value}%</span>
-                      </div>
-                      <div style={{background:"var(--line)",borderRadius:4,height:6}}>
-                        <div style={{width:`${Math.min(d.value/top10Data[0].value*100,100)}%`,height:"100%",background:PIE_COLORS[i%PIE_COLORS.length],borderRadius:4}}/>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          <ChartsTab
+            activeHoldings={activeHoldings}
+            tv={tv}
+            onFilterSector={(sector)=>{ setQuery(sector); setTab("portfolio"); }}
+            onOpenDetail={setDetailId}
+          />
         )}
 
         {/* TRANSACTIONS TAB */}
-        {tab==="transactions"&&(()=>{
-          type UnifiedTx = { symbol: string; date: string; kind: "buy"|"sell"|"split"; qty?: number; price?: number; avgCostAtSale?: number; gain?: number; gainPct?: number; ratio?: string; sector: string; fees?: number; grossGain?: number; proceeds?: number; idx: number };
-          const allTx: UnifiedTx[] = [];
-
-          holdings.forEach((h:any) => {
-            (h.buyHistory||[]).forEach((b:any,i:number) => allTx.push({ symbol:h.symbol, date:b.date, kind:"buy", qty:b.qty, price:b.price, sector:h.sector||"", idx:i }));
-            (h.realizedHistory||[]).forEach((r:any,i:number) => allTx.push({ symbol:h.symbol, date:r.date, kind:"sell", qty:r.qty, price:r.sellPrice, avgCostAtSale:r.avgCostAtSale, gain:r.gain, gainPct:r.gainPct, fees:r.fees, grossGain:r.grossGain, proceeds:r.proceeds, sector:h.sector||"", idx:i }));
-            (h.splitHistory||[]).forEach((s:any,i:number) => allTx.push({ symbol:h.symbol, date:s.date, kind:"split", ratio:s.ratio, sector:h.sector||"", idx:i }));
-          });
-          allTx.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-          // Running avgCost after each buy (per symbol, by buyHistory index) — FIFO lots, same as computeFromHistory
-          const avgCostAtBuy: Map<string, number[]> = new Map();
-          holdings.forEach((h:any) => {
-            const buys = (h.buyHistory||[]);
-            const sells = (h.realizedHistory||[]);
-            const splits = (h.splitHistory||[]);
-            const events = [
-              ...buys.map((b:any,i:number)=>({ date:b.date, type:"buy" as const, qty:b.qty, price:b.price, buyIdx:i, targetShares:0 })),
-              ...sells.map((s:any)=>({ date:s.date, type:"sell" as const, qty:s.qty, price:0, buyIdx:-1, targetShares:0 })),
-              ...splits.map((sp:any)=>({ date:sp.date, type:"split" as const, qty:0, price:0, buyIdx:-1, targetShares:parseFloat(sp.ratio)||0 })),
-            ].sort((a,b)=>new Date(a.date).getTime()-new Date(b.date).getTime());
-            const lots: {qty:number,price:number}[] = [];
-            const avgArr: number[] = new Array(buys.length).fill(0);
-            for (const e of events) {
-              if (e.type==="buy") {
-                lots.push({ qty:e.qty, price:e.price });
-                const sh = lots.reduce((s,l)=>s+l.qty,0);
-                avgArr[e.buyIdx] = sh>0 ? lots.reduce((s,l)=>s+l.qty*l.price,0)/sh : 0;
-              } else if (e.type==="sell") {
-                let rem = e.qty;
-                while (rem > 1e-12 && lots.length) {
-                  const take = Math.min(lots[0].qty, rem);
-                  lots[0].qty -= take; rem -= take;
-                  if (lots[0].qty <= 1e-12) lots.shift();
-                }
-              } else if (e.targetShares > 0) {
-                const cur = lots.reduce((s,l)=>s+l.qty,0);
-                if (cur > 0) { const f = e.targetShares/cur; for (const l of lots) { l.qty *= f; l.price /= f; } }
-              }
-            }
-            avgCostAtBuy.set(h.symbol, avgArr);
-          });
-
-          const allSymbols = [...new Set(holdings.map((h:any)=>h.symbol))].sort();
-          const filteredTx = txFilterSymbol==="ALL" ? allTx : allTx.filter(t=>t.symbol===txFilterSymbol);
-
-          const sellTx = filteredTx.filter(t=>t.kind==="sell");
-          const winCount = sellTx.filter(t=>(t.gain||0)>=0).length;
-          const lossCount = sellTx.filter(t=>(t.gain||0)<0).length;
-          const winRate = sellTx.length>0 ? (winCount/sellTx.length*100) : 0;
-          const buyCount = filteredTx.filter(t=>t.kind==="buy").length;
-          const splitCount = filteredTx.filter(t=>t.kind==="split").length;
-
-          const filteredHoldings = txFilterSymbol==="ALL" ? effectiveHoldings : effectiveHoldings.filter((h:any)=>h.symbol===txFilterSymbol);
-          const totalRealized = sellTx.reduce((s,t)=>s+(t.gain||0),0);
-          const totalUnrealized = filteredHoldings.reduce((s:number,h:any)=>s+(h.shares>0?(h.currentPrice-h.avgCost)*h.shares:0),0);
-          const totalPnL = totalRealized + totalUnrealized;
-
-          const kindIcon = (k:string) => k==="buy"?"🛒":k==="sell"?"💰":"🔀";
-          const kindColor = (k:string) => k==="buy"?"var(--gain)":k==="sell"?"var(--warn)":"var(--brass)";
-          const kindLabel = (k:string) => k==="buy"?"ซื้อ":k==="sell"?"ขาย":"แตกพาร์";
-
-          return (
-            <div>
-              {/* Symbol Filter + import button */}
-              <div style={{marginBottom:12,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                <span style={{fontSize:12,color:"var(--faint)"}}>กรองหุ้น:</span>
-                <select value={txFilterSymbol} onChange={e=>setTxFilterSymbol(e.target.value)}
-                  style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:6,color:"var(--ink)",fontSize:13,padding:"6px 10px"}}>
-                  <option value="ALL">ทั้งหมด ({holdings.length} หลักทรัพย์)</option>
-                  {allSymbols.map(s=><option key={s} value={s}>{s}</option>)}
-                </select>
-                {txFilterSymbol!=="ALL" && <button onClick={()=>setTxFilterSymbol("ALL")} style={{fontSize:12,color:"var(--loss)",background:"none",border:"none",cursor:"pointer"}}>✕ ล้าง</button>}
-                <div style={{marginLeft:"auto"}}>
-                  <ToolsMenu items={[
-                    { label:"Import ประวัติ CSV", onClick:()=>setShowTxImport(v=>!v) },
-                    { label:"Recalc FIFO", onClick:recalcRealizedFIFO },
-                    { label:"กู้คืน backup", onClick:restoreBackup },
-                    { label:"Clear ประวัติ", danger:true, onClick:()=>{
-                        if(!window.confirm("ลบประวัติ transaction ทั้งหมด?\n(จำนวนหุ้น/ต้นทุนปัจจุบันจะถูกบันทึกไว้ก่อนลบ)")) return;
-                        makeBackup("Clear ประวัติ");
-                        const updated = holdings.map((h:any)=>{
-                          const eff = computeFromHistory(h);
-                          return { ...h, shares: eff.shares, avgCost: eff.avgCost, buyHistory:[], realizedHistory:[], splitHistory:[] };
-                        });
-                        setAndSave(updated); msg("ลบประวัติทั้งหมดแล้ว ✓");
-                      } },
-                  ]}/>
-                </div>
-              </div>
-
-              {/* TX CSV Import panel */}
-              {showTxImport&&(
-                <div style={{background:"var(--card)",borderRadius:8,padding:16,marginBottom:12,border:"1px solid var(--line)"}}>
-                  <div style={{fontSize:13,fontWeight:600,color:"var(--brass)",marginBottom:6}}>📥 Import ประวัติ ซื้อ/ขาย</div>
-                  <div style={{fontSize:12,color:"var(--mut)",marginBottom:8}}>Format: <code style={{color:"var(--brass)"}}>DD/MM/YYYY HH:MM,Side(B/S),Symbol,จำนวน,ราคา</code> — เวลาใส่หรือไม่ใส่ก็ได้, <code style={{color:"var(--brass)"}}>BRK.B → BRK-B</code> อัตโนมัติ</div>
-                  <textarea value={txImportText} onChange={e=>setTxImportText(e.target.value)}
-                    placeholder={"01/11/2025 21:21,B,ACLS,0.1499694,81.95\n18/06/2026 07:20,S,ACLS,0.0445361,184.12\n02/07/2026 15:03,SPLIT,CRWD,4\n02/07/2026 15:03,+,CRWD,0.5311213,0\n02/07/2026 15:03,-,CRWD,0.1327803"}
-                    style={{width:"100%",minHeight:140,background:"var(--bg)",color:"var(--ink)",border:"1px solid var(--line)",borderRadius:6,padding:10,fontSize:12,resize:"vertical",fontFamily:"monospace"}}/>
-                  <div style={{display:"flex",gap:8,marginTop:8}}>
-                    <button onClick={importTxCSV} disabled={!txImportText.trim()} style={btn("var(--brass)","var(--on-brass)",{opacity:!txImportText.trim()?0.5:1})}>✅ นำเข้า</button>
-                    <button onClick={()=>{setShowTxImport(false);setTxImportText("");}} style={btn("var(--line)","var(--mut)")}>ยกเลิก</button>
-                  </div>
-                </div>
-              )}
-
-              {/* Summary */}
-              <div style={{background:"var(--card)",borderRadius:10,padding:16,marginBottom:16,border:"1px solid var(--line)",display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-                <div style={{textAlign:"center"}}>
-                  <div style={{fontSize:11,color:"var(--faint)",marginBottom:4}}>Realized P&L{txFilterSymbol!=="ALL"?` (${txFilterSymbol})`:""}</div>
-                  <div style={{fontSize:16,fontWeight:700,color:pc(totalRealized)}}>{totalRealized>=0?"+":""}${totalRealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                </div>
-                <div style={{textAlign:"center"}}>
-                  <div style={{fontSize:11,color:"var(--faint)",marginBottom:4}}>Unrealized P&L{txFilterSymbol!=="ALL"?` (${txFilterSymbol})`:""}</div>
-                  <div style={{fontSize:16,fontWeight:700,color:pc(totalUnrealized)}}>{totalUnrealized>=0?"+":""}${totalUnrealized.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                </div>
-                <div style={{textAlign:"center"}}>
-                  <div style={{fontSize:11,color:"var(--faint)",marginBottom:4}}>Total P&L</div>
-                  <div style={{fontSize:16,fontWeight:700,color:pc(totalPnL)}}>{totalPnL>=0?"+":""}${totalPnL.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                </div>
-                <div style={{textAlign:"center"}}>
-                  <div style={{fontSize:11,color:"var(--faint)",marginBottom:4}}>Win Rate (ขาย)</div>
-                  <div style={{fontSize:16,fontWeight:700,color:"var(--ink)"}}>{winRate.toFixed(0)}% <span style={{fontSize:11,color:"var(--faint)"}}>({winCount}W/{lossCount}L)</span></div>
-                </div>
-                <div style={{textAlign:"center",gridColumn:"1/-1",display:"flex",justifyContent:"center",gap:20,paddingTop:6,borderTop:"1px solid var(--line)"}}>
-                  <span style={{fontSize:12,color:"var(--gain)"}}>🛒 ซื้อ {buyCount} ครั้ง</span>
-                  <span style={{fontSize:12,color:"var(--warn)"}}>💰 ขาย {sellTx.length} ครั้ง</span>
-                  <span style={{fontSize:12,color:"var(--brass)"}}>🔀 แตกพาร์ {splitCount} ครั้ง</span>
-                </div>
-              </div>
-
-              {filteredTx.length===0 ? (
-                <div style={{textAlign:"center",padding:"40px 20px",color:"var(--faint)"}}>
-                  <div style={{fontSize:36}}>📜</div>
-                  <div style={{marginTop:8}}>ยังไม่มีประวัติ Transaction</div>
-                  <div style={{fontSize:12,marginTop:4}}>กด 🛒 ซื้อ / 💰 ขาย / 🔀 แตกพาร์ ที่หุ้นในแท็บรายการ</div>
-                </div>
-              ) : (
-                <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                  {filteredTx.map((t,i)=>(
-                    <div key={i} style={{background:"var(--card)",borderRadius:8,padding:"10px 14px",border:"1px solid var(--line)",borderLeft:`3px solid ${kindColor(t.kind)}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-                      <div style={{display:"flex",alignItems:"center",gap:10}}>
-                        <span style={{fontSize:18}}>{kindIcon(t.kind)}</span>
-                        <div>
-                          <div style={{display:"flex",alignItems:"center",gap:6}}>
-                            <span style={{fontWeight:700,color:"var(--brass)",fontSize:13}}>{t.symbol}</span>
-                            <span style={{fontSize:11,color:kindColor(t.kind),fontWeight:600}}>{kindLabel(t.kind)}</span>
-                          </div>
-                          <div style={{fontSize:11,color:"var(--faint)"}}>{new Date(t.date).toLocaleDateString("en-GB",{year:"numeric",month:"short",day:"numeric"})} {new Date(t.date).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false})}</div>
-                        </div>
-                      </div>
-                      <div style={{textAlign:"right"}}>
-                        {t.kind==="split" ? (
-                          <span style={{fontSize:13,color:"var(--brass)",fontWeight:600}}>Ratio {t.ratio}</span>
-                        ) : (
-                          <>
-                            <div style={{fontSize:13,color:"var(--ink)"}}>{t.qty?.toFixed(7)} หุ้น @ ${t.price?.toFixed(4)}</div>
-                            {t.kind==="buy" && (() => { const avg = avgCostAtBuy.get(t.symbol)?.[t.idx]; return avg!=null ? <div style={{fontSize:11,color:"var(--mut)"}}>ต้นทุนเฉลี่ย: <span style={{color:"var(--brass)",fontWeight:600}}>${avg.toFixed(4)}</span></div> : null; })()}
-                            {t.kind==="sell" && t.proceeds!=null && <div style={{fontSize:11,color:"var(--brass)"}}>ได้รับ ${(t.proceeds-(t.fees||0)).toFixed(2)}</div>}
-                            {t.kind==="sell" && (
-                              <div>
-                                <div style={{fontSize:12,fontWeight:700,color:pc(t.gain||0)}}>
-                                  {(t.gain||0)>=0?"+":""}${(t.gain||0).toFixed(2)} ({(t.gainPct||0)>=0?"+":""}{(t.gainPct||0).toFixed(1)}%)
-                                </div>
-                                {t.fees!=null && t.fees>0 && <div style={{fontSize:10,color:"var(--loss)"}}>fee -${t.fees.toFixed(2)}</div>}
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </div>
-                      <div style={{display:"flex",gap:4}}>
-                        <button onClick={()=>openEditTx(t.symbol,t.kind,t.idx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"var(--faint)",padding:"4px 6px"}} title="แก้ไข">✏️</button>
-                        <button onClick={()=>deleteTx(t.symbol,t.kind,t.idx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"var(--loss)",padding:"4px 6px"}} title="ลบ">✕</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })()}
+        {tab==="transactions"&&(
+          <HistoryTab
+            holdings={holdings}
+            effectiveHoldings={effectiveHoldings}
+            pc={pc}
+            txFilterSymbol={txFilterSymbol}
+            setTxFilterSymbol={setTxFilterSymbol}
+            showTxImport={showTxImport}
+            setShowTxImport={setShowTxImport}
+            txImportText={txImportText}
+            setTxImportText={setTxImportText}
+            importTxCSV={importTxCSV}
+            recalcRealizedFIFO={recalcRealizedFIFO}
+            restoreBackup={restoreBackup}
+            makeBackup={makeBackup}
+            setAndSave={setAndSave}
+            msg={msg}
+            computeFromHistory={computeFromHistory}
+            openEditTx={openEditTx}
+            deleteTx={deleteTx}
+          />
+        )}
 
         {/* AI TAB */}
         {tab==="ai"&&(
