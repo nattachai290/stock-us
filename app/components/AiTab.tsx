@@ -1,6 +1,6 @@
 "use client";
 import { IconClipboard, IconZap, IconPencil, IconLightbulb, IconPaste, IconGrid } from "./icons";
-import { btn, btnGhost } from "../lib/ui";
+import { btn } from "../lib/ui";
 
 // AI hub tab (§5.8) — five prompt-generator cards. Every card just calls the
 // same copy*() functions the old sidebar buttons called; no prompt text here.

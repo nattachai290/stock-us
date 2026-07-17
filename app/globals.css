@@ -63,6 +63,17 @@ body {
   .holdings-table-wrap { display: block; }
 }
 
+/* ── Snackbar (§4.3): above the bottom tab bar on mobile, bottom-right on PC ── */
+.snackbar {
+  position: fixed; z-index: 1200;
+  left: 50%; transform: translateX(-50%);
+  bottom: calc(70px + env(safe-area-inset-bottom));
+  width: 420px; max-width: calc(100vw - 32px);
+}
+@media (min-width: 900px) {
+  .snackbar { left: auto; transform: none; right: 20px; bottom: 20px; }
+}
+
 /* ── App shell layout (§3): left sidebar nav on desktop, bottom tab bar on mobile ── */
 .app-body { display: flex; align-items: flex-start; }
 .content-area { flex: 1; min-width: 0; padding: 16px; padding-bottom: 84px; }
@@ -78,6 +89,8 @@ body {
 @media (min-width: 900px) {
   .content-area { padding-bottom: 16px; }
   .app-bottom-tabs { display: none; }
+  /* sidebar ซ้ายมี wordmark อยู่แล้ว — ซ่อนตัวซ้ำบน app bar */
+  .appbar-wordmark { visibility: hidden; }
   .app-sidebar {
     display: flex;
     flex-direction: column;

@@ -913,7 +913,7 @@ export default function App() {
       <Snackbar status={status} onClose={()=>setStatus("")}/>
       {/* App bar */}
       <div style={{background:"var(--card)",borderBottom:"1px solid var(--line)",padding:"10px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-        <div style={{fontSize:17,fontWeight:800,letterSpacing:"0.14em",fontFamily:'"Avenir Next",Futura,"Segoe UI",system-ui,sans-serif'}}>
+        <div className="appbar-wordmark" style={{fontSize:17,fontWeight:800,letterSpacing:"0.14em",fontFamily:'"Avenir Next",Futura,"Segoe UI",system-ui,sans-serif'}}>
           <span style={{color:"var(--brass)"}}>SA</span><span style={{color:"var(--ink)"}}>SOM</span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",position:"relative"}}>
