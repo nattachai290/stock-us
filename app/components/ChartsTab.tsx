@@ -21,6 +21,15 @@ export default function ChartsTab({ activeHoldings, tv, onFilterSector, onOpenDe
       </div>
     );
   }
+  // Holdings exist but no prices fetched yet — every weight would divide by zero
+  if (tv === 0) {
+    return (
+      <div style={{ textAlign: "center", padding: "40px 20px", color: "var(--faint)" }}>
+        <IconBars size={28} />
+        <div style={{ marginTop: 8 }}>ยังไม่มีราคา — กด "อัพเดทราคา" ในแท็บพอร์ตก่อน</div>
+      </div>
+    );
+  }
 
   // 1. Sector breakdown
   const sectorMap: Record<string, number> = {};
@@ -58,15 +67,20 @@ export default function ChartsTab({ activeHoldings, tv, onFilterSector, onOpenDe
           ))}
         </div>
         <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
-          {sectorSegments.map(seg => (
-            <div key={seg.name} onClick={() => seg.name !== "อื่นๆ" && onFilterSector(seg.name)}
-              style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: seg.name !== "อื่นๆ" ? "pointer" : "default" }}>
+          {sectorSegments.map(seg => {
+            // "อื่นๆ" is an aggregate and "ไม่ระบุ" holdings have sector:"" — neither
+            // matches the portfolio-tab query filter, so don't offer tap-to-filter
+            const filterable = seg.name !== "อื่นๆ" && seg.name !== "ไม่ระบุ";
+            return (
+            <div key={seg.name} onClick={() => filterable && onFilterSector(seg.name)}
+              style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: filterable ? "pointer" : "default" }}>
               <span style={{ width: 9, height: 9, borderRadius: 2, background: seg.color, flexShrink: 0 }} />
               <span style={{ flex: 1, color: "var(--ink)" }}>{seg.name}</span>
               <span style={{ color: "var(--mut)" }}>${seg.value.toLocaleString("en", { maximumFractionDigits: 0 })}</span>
               <span style={{ color: "var(--faint)", width: 44, textAlign: "right" }}>{(seg.value / tv * 100).toFixed(1)}%</span>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 

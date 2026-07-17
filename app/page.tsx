@@ -1185,7 +1185,6 @@ export default function App() {
         {tab==="transactions"&&(
           <HistoryTab
             holdings={holdings}
-            effectiveHoldings={effectiveHoldings}
             pc={pc}
             txFilterSymbol={txFilterSymbol}
             setTxFilterSymbol={setTxFilterSymbol}

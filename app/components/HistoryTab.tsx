@@ -10,14 +10,13 @@ type UnifiedTx = { symbol: string; date: string; kind: "buy"|"sell"|"split"; qty
 // math (allTx, avgCostAtBuy FIFO replay) is moved here verbatim from the old
 // inline IIFE in page.tsx; not a single calculation changed.
 export default function HistoryTab({
-  holdings, effectiveHoldings, pc,
+  holdings, pc,
   txFilterSymbol, setTxFilterSymbol,
   showTxImport, setShowTxImport, txImportText, setTxImportText, importTxCSV,
   recalcRealizedFIFO, restoreBackup, makeBackup, setAndSave, msg, computeFromHistory,
   openEditTx, deleteTx,
 }: {
   holdings: any[];
-  effectiveHoldings: any[];
   pc: (v: number) => string;
   txFilterSymbol: string;
   setTxFilterSymbol: (s: string) => void;
@@ -45,19 +44,23 @@ export default function HistoryTab({
   });
   allTx.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-  // Running avgCost after each buy (per symbol, by buyHistory index) — FIFO lots, same as computeFromHistory
+  // Running avgCost after each buy (per symbol, by buyHistory index) — FIFO lots, same as computeFromHistory.
+  // Also captures per-split before/after shares for display: splitHistory.ratio stores the
+  // TOTAL share count after the split, not a factor, so the 1:N badge needs the replay.
   const avgCostAtBuy: Map<string, number[]> = new Map();
+  const splitInfo: Map<string, { before: number; after: number }[]> = new Map();
   holdings.forEach((h:any) => {
     const buys = (h.buyHistory||[]);
     const sells = (h.realizedHistory||[]);
     const splits = (h.splitHistory||[]);
     const events = [
-      ...buys.map((b:any,i:number)=>({ date:b.date, type:"buy" as const, qty:b.qty, price:b.price, buyIdx:i, targetShares:0 })),
-      ...sells.map((s:any)=>({ date:s.date, type:"sell" as const, qty:s.qty, price:0, buyIdx:-1, targetShares:0 })),
-      ...splits.map((sp:any)=>({ date:sp.date, type:"split" as const, qty:0, price:0, buyIdx:-1, targetShares:parseFloat(sp.ratio)||0 })),
+      ...buys.map((b:any,i:number)=>({ date:b.date, type:"buy" as const, qty:b.qty, price:b.price, buyIdx:i, splitIdx:-1, targetShares:0 })),
+      ...sells.map((s:any)=>({ date:s.date, type:"sell" as const, qty:s.qty, price:0, buyIdx:-1, splitIdx:-1, targetShares:0 })),
+      ...splits.map((sp:any,i:number)=>({ date:sp.date, type:"split" as const, qty:0, price:0, buyIdx:-1, splitIdx:i, targetShares:parseFloat(sp.ratio)||0 })),
     ].sort((a,b)=>new Date(a.date).getTime()-new Date(b.date).getTime());
     const lots: {qty:number,price:number}[] = [];
     const avgArr: number[] = new Array(buys.length).fill(0);
+    const splitArr: { before: number; after: number }[] = new Array(splits.length).fill(null).map(()=>({ before: 0, after: 0 }));
     for (const e of events) {
       if (e.type==="buy") {
         lots.push({ qty:e.qty, price:e.price });
@@ -72,11 +75,21 @@ export default function HistoryTab({
         }
       } else if (e.targetShares > 0) {
         const cur = lots.reduce((s,l)=>s+l.qty,0);
+        if (e.splitIdx >= 0) splitArr[e.splitIdx] = { before: cur, after: e.targetShares };
         if (cur > 0) { const f = e.targetShares/cur; for (const l of lots) { l.qty *= f; l.price /= f; } }
       }
     }
     avgCostAtBuy.set(h.symbol, avgArr);
+    splitInfo.set(h.symbol, splitArr);
   });
+
+  // "1 : 4" for a forward split, "4 : 1" for a reverse split, nice-rounded
+  const splitBadge = (before: number, after: number) => {
+    if (before <= 0 || after <= 0) return null;
+    const f = after / before;
+    const nice = (v: number) => Math.abs(v - Math.round(v)) < 0.01 ? String(Math.round(v)) : v.toFixed(2);
+    return f >= 1 ? `1 : ${nice(f)}` : `${nice(1 / f)} : 1`;
+  };
 
   const bySymbol = txFilterSymbol==="ALL" || !txFilterSymbol ? allTx : allTx.filter(t=>t.symbol.toUpperCase().includes(txFilterSymbol.toUpperCase()));
   const filteredTx = txKindFilter==="all" ? bySymbol : bySymbol.filter(t=>t.kind===txKindFilter);
@@ -202,9 +215,16 @@ export default function HistoryTab({
                         </div>
                       </div>
                       <div style={{textAlign:"right"}}>
-                        {t.kind==="split" ? (
-                          <span style={{fontSize:13,color:"var(--c4)",fontWeight:600}}>1 : {t.ratio}</span>
-                        ) : (
+                        {t.kind==="split" ? (() => {
+                          const info = splitInfo.get(t.symbol)?.[t.idx];
+                          const badge = info ? splitBadge(info.before, info.after) : null;
+                          return (
+                            <div>
+                              <span style={{fontSize:13,color:"var(--c4)",fontWeight:600}}>{badge ?? `→ ${parseFloat(t.ratio||"0").toFixed(4)} หุ้น`}</span>
+                              {badge && info && <div style={{fontSize:11,color:"var(--mut)"}}>{info.before.toFixed(4)} → {info.after.toFixed(4)} หุ้น</div>}
+                            </div>
+                          );
+                        })() : (
                           <>
                             <div style={{fontSize:13,color:"var(--ink)"}}>{t.qty?.toFixed(4)} หุ้น @ ${t.price?.toFixed(2)}</div>
                             {t.kind==="buy" && (() => { const avg = avgCostAtBuy.get(t.symbol)?.[t.idx]; return avg!=null ? <div style={{fontSize:11,color:"var(--mut)"}}>ทุนเฉลี่ย ${avg.toFixed(2)}</div> : null; })()}
