@@ -55,7 +55,14 @@ export function parseActivityText(text: string): OcrParseResult {
     cur = null;
   };
 
+  // Month section headers ("December 2025") sit between transaction blocks — treat
+  // them as record boundaries so a missed/garbled "Buy XXX" header line can't make
+  // the previous record absorb the next block's numbers.
+  const MONTH_HEADER = /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b/i;
+
   for (const line of lines) {
+    if (MONTH_HEADER.test(line)) { flush(); continue; }
+
     // New record starts at a Buy/Sell line: "Buy ARM", "Sell ARM" (symbol may touch: "BuyARM")
     const m = line.match(/\b(Buy|Sell)\s*([A-Z][A-Z0-9.\-]{0,9})\b/);
     if (m) {
@@ -64,13 +71,16 @@ export function parseActivityText(text: string): OcrParseResult {
     }
     if (!cur) continue;
 
+    // All fields are first-value-wins: within one block each label appears once, so a
+    // second occurrence means the next block's header was missed — never overwrite.
+
     // Total + currency, e.g. "12.09 USD" / "399.74 THB" (often on the Buy/Sell line itself)
     const t = line.match(/([\d,OolI|]+\.\d{2})\s*(USD|THB)/i);
     if (t && cur.total == null) { cur.total = toNum(t[1]); cur.currency = t[2].toUpperCase(); }
 
     // "Executed Price 325.00"
     const p = line.match(/Executed\s*Price[\s:]*([\d.,OolI|]+)/i);
-    if (p) { const v = toNum(p[1]); if (v > 0) { cur.price = v; cur.priceStr = numFix(p[1]); } }
+    if (p && cur.price == null) { const v = toNum(p[1]); if (v > 0) { cur.price = v; cur.priceStr = numFix(p[1]); } }
 
     // "3 Jul 2026 - 06:03:10 PM" (dash/en-dash; seconds optional)
     const dm = line.match(/(\d{1,2})\s+([A-Za-z]{3,4})\.?\s+(\d{4})\s*[-–—]\s*(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?/i);
@@ -87,7 +97,7 @@ export function parseActivityText(text: string): OcrParseResult {
 
     // "Shares 0.0371384"
     const s = line.match(/Shares[\s:]*([\d.,OolI|]+)/i);
-    if (s) { const v = toNum(s[1]); if (v > 0) { cur.qty = v; cur.qtyStr = numFix(s[1]); } }
+    if (s && cur.qty == null) { const v = toNum(s[1]); if (v > 0) { cur.qty = v; cur.qtyStr = numFix(s[1]); } }
   }
   flush();
 
@@ -121,16 +131,23 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult): MergeResult {
 
     if (!rb) {
       flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป");
-    } else {
-      // qty: prefer the pass whose token has the expected 7 decimals
-      if (ra.qtyStr !== rb.qtyStr) {
-        const aOk = decimals(ra.qtyStr) === SHARE_DECIMALS;
-        const bOk = decimals(rb.qtyStr) === SHARE_DECIMALS;
-        if (aOk && !bOk) best = ra;
-        else if (bOk && !aOk) best = rb;
-        else { best = aOk ? ra : rb; flags.push(`จำนวนหุ้นสองรอบไม่ตรงกัน (${ra.qtyStr} / ${rb.qtyStr})`); }
+    } else if (ra.qtyStr !== rb.qtyStr || ra.priceStr !== rb.priceStr) {
+      // Passes disagree. Strongest tiebreak: whichever reading's price×qty matches the
+      // USD total printed in the image wins outright (arithmetic can't lie).
+      const aUsd = ra.check === "ok", bUsd = rb.check === "ok";
+      if (aUsd !== bUsd) {
+        best = aUsd ? ra : rb;
+      } else {
+        // Fall back to the 7-decimal Shares rule for qty
+        if (ra.qtyStr !== rb.qtyStr) {
+          const aOk = decimals(ra.qtyStr) === SHARE_DECIMALS;
+          const bOk = decimals(rb.qtyStr) === SHARE_DECIMALS;
+          if (aOk && !bOk) best = ra;
+          else if (bOk && !aOk) best = rb;
+          else { best = aOk ? ra : rb; flags.push(`จำนวนหุ้นสองรอบไม่ตรงกัน (${ra.qtyStr} / ${rb.qtyStr})`); }
+        }
+        if (ra.priceStr !== rb.priceStr) flags.push(`ราคาสองรอบไม่ตรงกัน (${ra.priceStr} / ${rb.priceStr})`);
       }
-      if (ra.priceStr !== rb.priceStr) flags.push(`ราคาสองรอบไม่ตรงกัน (${ra.priceStr} / ${rb.priceStr})`);
     }
 
     if (decimals(best.qtyStr) !== SHARE_DECIMALS) flags.push(`ทศนิยมจำนวนหุ้นได้ ${decimals(best.qtyStr)} หลัก (ปกติ 7) — อาจอ่านตกหลัก`);

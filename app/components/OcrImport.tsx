@@ -77,9 +77,9 @@ export default function OcrImport({ onAppend }: { onAppend: (csv: string) => voi
         onChange={e => e.target.files && run(e.target.files)} />
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <button onClick={() => fileRef.current?.click()} disabled={busy} style={{ ...btnGhost({ fontSize: 12, opacity: busy ? 0.6 : 1 }) }}>
-          {busy ? "กำลังอ่าน..." : "อ่านจากรูป (OCR ในเครื่อง — ฟรี)"}
+          {busy ? "กำลังอ่าน..." : "อัพโหลดรูป"}
         </button>
-        <span style={{ fontSize: 11, color: "var(--faint)" }}>รองรับภาพแคปหน้า Activity ของโบรกเกอร์ · เลือกได้หลายรูป</span>
+        <span style={{ fontSize: 11, color: "var(--faint)" }}>ภาพแคปหน้า Activity ของโบรกเกอร์ · เลือกได้หลายรูป · OCR ในเครื่อง ฟรี</span>
       </div>
       {progress && <div style={{ fontSize: 12, color: "var(--warn)", marginTop: 6 }}>{progress}</div>}
 

@@ -32,6 +32,11 @@ body {
   overflow-x: hidden;
 }
 
+/* Hide the native up/down spinner on number inputs (mainly a desktop nuisance) */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+
 /* ── Sheet primitive (§4.4): bottom sheet on mobile, centered modal on PC ── */
 .sheet-scrim {
   position: fixed; inset: 0; background: rgba(4,7,10,.55);
