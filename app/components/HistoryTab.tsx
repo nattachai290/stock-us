@@ -3,6 +3,7 @@ import { useState } from "react";
 import { IconClock, IconArrowDown, IconArrowUp, IconSplit } from "./icons";
 import { btn, btnGhost } from "../lib/ui";
 import ToolsMenu from "./ToolsMenu";
+import OcrImport from "./OcrImport";
 
 type UnifiedTx = { symbol: string; date: string; kind: "buy"|"sell"|"split"; qty?: number; price?: number; avgCostAtSale?: number; gain?: number; gainPct?: number; ratio?: string; sector: string; fees?: number; grossGain?: number; proceeds?: number; idx: number };
 
@@ -149,6 +150,7 @@ export default function HistoryTab({
             <button onClick={importTxCSV} disabled={!txImportText.trim()} style={btn("var(--brass)","var(--on-brass)",{opacity:!txImportText.trim()?0.5:1})}>นำเข้า</button>
             <button onClick={()=>{setShowTxImport(false);setTxImportText("");}} style={btn("var(--line)","var(--mut)")}>ยกเลิก</button>
           </div>
+          <OcrImport onAppend={(csv)=>setTxImportText((txImportText ? txImportText.trimEnd()+"\n" : "")+csv)}/>
         </div>
       )}
 
