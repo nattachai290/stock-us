@@ -1271,7 +1271,7 @@ export default function App() {
       </div>{/* app-body */}
 
       {/* EDIT TRANSACTION MODAL */}
-      <Sheet open={!!editTxData} onClose={()=>setEditTxData(null)} maxWidth={380}>
+      <Sheet open={!!editTxData} onClose={()=>setEditTxData(null)} maxWidth={380} dismissOnScrim={false}>
         {editTxData && (<>
             <div style={{fontSize:16,fontWeight:700,color:"var(--ink)",marginBottom:4}}>
               ✏️ แก้ไข{editTxData.kind==="buy"?"การซื้อ":editTxData.kind==="sell"?"การขาย":"การแตกพาร์"} {editTxData.symbol}
@@ -1361,7 +1361,7 @@ export default function App() {
       </Sheet>
 
       {/* BUY MODAL */}
-      <Sheet open={buyModalId !== null} onClose={()=>setBuyModalId(null)} maxWidth={380}>
+      <Sheet open={buyModalId !== null} onClose={()=>setBuyModalId(null)} maxWidth={380} dismissOnScrim={false}>
         {(() => {
         const h = effectiveHoldings.find((x:any)=>x.id===buyModalId);
         if (!h) return null;
@@ -1416,7 +1416,7 @@ export default function App() {
       </Sheet>
 
       {/* SELL MODAL */}
-      <Sheet open={sellModalId !== null} onClose={()=>setSellModalId(null)} maxWidth={380}>
+      <Sheet open={sellModalId !== null} onClose={()=>setSellModalId(null)} maxWidth={380} dismissOnScrim={false}>
         {(() => {
         const h = effectiveHoldings.find((x:any)=>x.id===sellModalId);
         if (!h) return null;
@@ -1518,7 +1518,7 @@ export default function App() {
       </Sheet>
 
       {/* SPLIT MODAL */}
-      <Sheet open={splitModalId !== null} onClose={()=>setSplitModalId(null)} maxWidth={380}>
+      <Sheet open={splitModalId !== null} onClose={()=>setSplitModalId(null)} maxWidth={380} dismissOnScrim={false}>
         {(() => {
         const h = effectiveHoldings.find((x:any)=>x.id===splitModalId);
         if (!h) return null;
@@ -1560,7 +1560,7 @@ export default function App() {
       />
 
       {/* ADD HOLDING SHEET */}
-      <Sheet open={showAddSheet} onClose={()=>setShowAddSheet(false)} maxWidth={420}>
+      <Sheet open={showAddSheet} onClose={()=>setShowAddSheet(false)} maxWidth={420} dismissOnScrim={false}>
         <div style={{fontSize:16,fontWeight:700,marginBottom:14,color:"var(--ink)"}}>เพิ่มหลักทรัพย์</div>
         {[{k:"symbol",l:"Symbol",p:"AAPL"},{k:"shares",l:"จำนวนหุ้น",p:"100",t:"number"},{k:"avgCost",l:"ต้นทุนเฉลี่ย ($)",p:"150.00",t:"number"},{k:"currentPrice",l:"ราคาปัจจุบัน",p:"0",t:"number"},{k:"targetPct",l:"สัดส่วนเป้าหมาย % (ไม่บังคับ)",p:"2.5",t:"number"},{k:"sector",l:"กลุ่มธุรกิจ (ไม่บังคับ)",p:"Tech"},{k:"note",l:"หมายเหตุ (ไม่บังคับ)",p:"Long term"}].map(f=>(
           <div key={f.k} style={{marginBottom:10}}>
@@ -1570,7 +1570,10 @@ export default function App() {
               style={{width:"100%",background:"var(--bg)",border:"1px solid var(--line)",borderRadius:6,padding:"9px 12px",color:"var(--ink)",fontSize:13,boxSizing:"border-box"}}/>
           </div>
         ))}
-        <button onClick={()=>{if(!newStock.symbol){msg("ใส่ Symbol ก่อน");return;}addHolding();setShowAddSheet(false);}} style={{...btnPrimary(),width:"100%",padding:"11px",fontSize:14,marginTop:4}}>เพิ่มหลักทรัพย์</button>
+        <div style={{display:"flex",gap:8,marginTop:4}}>
+          <button onClick={()=>{if(!newStock.symbol){msg("ใส่ Symbol ก่อน");return;}addHolding();setShowAddSheet(false);}} style={{...btnPrimary(),flex:1,padding:"11px",fontSize:14}}>เพิ่มหลักทรัพย์</button>
+          <button onClick={()=>setShowAddSheet(false)} style={{...btnGhost(),padding:"11px 18px",fontSize:14}}>ยกเลิก</button>
+        </div>
       </Sheet>
     </div>
   );
