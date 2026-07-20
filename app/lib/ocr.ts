@@ -15,6 +15,7 @@ export type OcrTxRow = {
   check: "ok" | "mismatch" | "unverified";
   isGold?: boolean;       // gold DCA rows use "Weight x oz" (4 decimals) & map to XAUUSD
   sideUncertain?: boolean;// Thai ซื้อ/ขาย was too garbled to read confidently — needs a look
+  skip?: boolean;         // corporate-action block (split) — not a plain buy/sell, dropped
 };
 
 export type OcrParseResult = { rows: OcrTxRow[]; incomplete: number };
@@ -51,7 +52,10 @@ export function parseActivityText(text: string): OcrParseResult {
 
   const flush = () => {
     if (!cur) return;
-    if (cur.side && cur.symbol && cur.qty && cur.price && cur.iso) {
+    if (cur.skip) { cur = null; return; } // corporate action — dropped on purpose
+    // A ticker that OCR mangled must not be emitted with a wrong symbol
+    const cleanSym = cur.isGold || (cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol));
+    if (cur.side && cleanSym && cur.qty && cur.price && cur.iso) {
       let check: OcrTxRow["check"] = "unverified";
       if (cur.currency === "USD" && cur.total) {
         const expect = cur.qty * cur.price;
@@ -60,7 +64,7 @@ export function parseActivityText(text: string): OcrParseResult {
       }
       // Gold DCA (e.g. MTS-GOLD) is priced in USD/oz — same unit as the XAUUSD spot
       // source in /api/price — so map it there regardless of the broker's product name.
-      const symbol = cur.isGold ? "XAUUSD" : cur.symbol;
+      const symbol = cur.isGold ? "XAUUSD" : cur.symbol!;
       const d = new Date(cur.iso);
       const csvDate = `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
       rows.push({
@@ -88,23 +92,43 @@ export function parseActivityText(text: string): OcrParseResult {
     // Thai section header ("มิถุนายน 2569") — full month name + year, no tx content
     if (THAI_FULL_MON.test(compact) && /\d{4}/.test(line) && !/GOLD|oz|USD/i.test(line)) { flush(); continue; }
 
+    // Corporate action ("CA - แตกหรือรวมหุ้น", i.e. a split) — the "CA" marker is Latin
+    // and reliable. These map to +/- share adjustments that the FIFO importer treats
+    // specially; rather than risk a bad row, mark the current block to be skipped so the
+    // user imports the (rare) split by hand.
+    if (/\bCA\b/.test(line) && (compact.includes("แตก") || compact.includes("รวม"))) { if (cur) cur.skip = true; }
+
     // New record starts at a Buy/Sell line: "Buy ARM", "Sell ARM" (symbol may touch: "BuyARM")
     const m = line.match(/\b(Buy|Sell)\s*([A-Z][A-Z0-9.\-]{0,9})\b/);
     if (m) {
       flush();
       cur = { side: m[1] === "Buy" ? "B" : "S", symbol: m[2].toUpperCase().replace(/\./g, "-") };
     } else {
-      // Thai gold row: the product name (MTS-GOLD) is Latin and reliable; the side word
-      // (ซื้อ/ขาย) is Thai and noisy, so read it loosely — ขาย=sell; ซื้อ (or the common
-      // OCR mangle that keeps "ือ")=buy; otherwise flag the row for a manual look.
-      const gm = line.match(/\b([A-Z]{2,}-?GOLD)\b/i);
-      if (gm) {
+      // Thai header line. Anchors are all Latin/structural, so they survive the noisy Thai:
+      //  • gold: the product name contains GOLD
+      //  • buy:  a "<total> บาท/USD" amount (only BUYS show a spent total → side B is
+      //          structural, not from the noisy word)
+      //  • sell: "<ticker> <shares> หุ้น" (share count; side S needs the ขาย word)
+      // A ticker that OCR mangled into Thai simply won't match [A-Z]{1,6} → the block is
+      // dropped (missing), never emitted with a wrong symbol.
+      const goldHdr = line.match(/\b([A-Z]{2,}-?GOLD)\b/i);
+      const anyTotal  = /[\d,OolI|]+\.\d{2}\s*(?:บ|USD|THB)/i.test(line); // a spent/received total → header
+      const bahtTotal = /[\d,OolI|]+\.\d{2}\s*(?:บ|THB)/i.test(line);     // baht spent = a BUY, unambiguously
+      const sellM = line.match(/\b([A-Z]{1,6})\b\s+(-?[\d.OolI|]{6,})\s*(?:ห|Ku|Au|Kn)/); // "ticker qty หุ้น" (sell)
+      const tickerM = line.match(/\b([A-Z]{1,6})\b/); // uppercase-only — a Thai-mangled ticker won't match
+      if (goldHdr || (anyTotal && tickerM) || sellM) {
         flush();
-        let side: "B" | "S" = "B", uncertain = false;
+        const gold = !!goldHdr;
+        // Side priority: the readable Thai word, else a baht total (definitely a buy). A USD
+        // total is ambiguous (stock buy vs gold-sale proceeds), so if the word is unreadable
+        // we flag rather than guess silently.
+        let side: "B" | "S", uncertain = false;
         if (compact.includes("ขาย")) side = "S";
         else if (compact.includes("ซื้อ") || compact.includes("ือ")) side = "B";
-        else uncertain = true;
-        cur = { side, symbol: "MTS-GOLD", isGold: true, sideUncertain: uncertain };
+        else if (bahtTotal && !sellM) side = "B";
+        else { side = sellM ? "S" : "B"; uncertain = true; }
+        cur = { side, symbol: gold ? "MTS-GOLD" : (tickerM ? tickerM[1] : sellM![1]).toUpperCase(), isGold: gold, sideUncertain: uncertain };
+        if (sellM && !bahtTotal) { const v = toNum(sellM[2]); if (v > 0) { cur.qty = v; cur.qtyStr = numFix(sellM[2]); } }
       }
     }
     if (!cur) continue;
@@ -155,6 +179,12 @@ export function parseActivityText(text: string): OcrParseResult {
     if (s && cur.qty == null) { const v = toNum(s[1]); if (v > 0) { cur.qty = v; cur.qtyStr = numFix(s[1]); } }
     const w = line.match(/([\d.,OolI|]+)\s*[o0]z\b/i);
     if (w && cur.qty == null) { const v = toNum(w[1]); if (v > 0) { cur.qty = v; cur.qtyStr = numFix(w[1]); cur.isGold = true; } }
+    // Thai buy quantity on its own line ("จำนวนหุ้น 0.0128022"): a Thai-labelled line
+    // ending in a 7-decimal number, with no ticker / total / date on it.
+    if (cur.qty == null && !cur.isGold && !/[A-Z]{2,}/.test(line) && !/บ|USD|THB|:/.test(line)) {
+      const jm = line.match(/([\d.OolI|]{7,})\s*$/);
+      if (jm) { const v = toNum(jm[1]); if (v > 0) { cur.qty = v; cur.qtyStr = numFix(jm[1]); } }
+    }
   }
   flush();
 

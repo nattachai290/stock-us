@@ -126,12 +126,37 @@ Weight 0.0029 oz
   check("thai: ซื้อ → Buy", mb.rows[0]?.side === "B", mb.rows[0]?.csv);
   check("thai: บาท total → THB (unverified)", mb.rows[0]?.currency === "THB" && mb.rows[0]?.check === "unverified");
 
-  // A side word OCR'd away entirely must flag, never silently pick a side
-  const garbled = `MTS-GOLD 14,000.96 บาท
+  // A baht total is unambiguously a BUY, so a garbled side word need NOT flag there
+  const bahtBuy = `MTS-GOLD 14,000.96 บาท
 ราคาที่ได้จริง 4,357.98 5 มิ.ย. 69 - 21:48:33 น.
 น้ำหนัก 0.0976 oz`;
-  const mg = mergeParses(parseActivityText(garbled), parseActivityText(garbled));
-  check("thai: unreadable side is flagged", mg.rows[0]?.flags.some(f => f.includes("ซื้อ/ขาย")), JSON.stringify(mg.rows[0]?.flags));
+  const mbb = mergeParses(parseActivityText(bahtBuy), parseActivityText(bahtBuy));
+  check("thai: baht total → confident Buy (no side flag)", mbb.rows[0]?.side === "B" && !mbb.rows[0]?.flags.some(f => f.includes("ซื้อ/ขาย")), JSON.stringify(mbb.rows[0]));
+
+  // A USD total is ambiguous (buy vs sale proceeds); with no readable side word it must flag
+  const usdGarbled = `MTS-GOLD 28.66 USD
+ราคาที่ได้จริง 4,094.87 24 มิ.ย. 69 - 08:42:13 น.
+น้ำหนัก 0.0070 oz`;
+  const mug = mergeParses(parseActivityText(usdGarbled), parseActivityText(usdGarbled));
+  check("thai: USD total + unreadable side is flagged", mug.rows[0]?.flags.some(f => f.includes("ซื้อ/ขาย")), JSON.stringify(mug.rows[0]?.flags));
+
+  // Thai stock: buy identified by baht total; sell by "ticker qty หุ้น"; ticker stays ASCII
+  const stockBuy = `ซื้อ FSLR 99.80 บาท
+ราคาที่ได้จริง 231.99 1 ก.ค. 69 - 17:06:48 น.
+จำนวนหุ้น 0.0128022`;
+  const msb = mergeParses(parseActivityText(stockBuy), parseActivityText(stockBuy));
+  check("thai stock buy: FSLR B", msb.rows[0]?.csv === "01/07/2026 17:06,B,FSLR,0.0128022,231.99", msb.rows[0]?.csv);
+
+  const stockSell = `ขาย OXY 0.1348522 หุ้น
+ราคาที่ได้จริง 48.35 1 ก.ค. 69 - 20:21:02 น.`;
+  const mss = mergeParses(parseActivityText(stockSell), parseActivityText(stockSell));
+  check("thai stock sell: OXY S", mss.rows[0]?.csv === "01/07/2026 20:21,S,OXY,0.1348522,48.35", mss.rows[0]?.csv);
+
+  // Corporate action (CA - แตกหรือรวมหุ้น) is dropped, not emitted as a bad row
+  const ca = `รับ NFLX 0.0270022 หุ้น
+CA - แตกหรือรวมหุ้น 17 พ.ย. 68 - 15:47:52 น.`;
+  const mca = mergeParses(parseActivityText(ca), parseActivityText(ca));
+  check("thai stock: corporate action dropped", mca.rows.length === 0, JSON.stringify(mca.rows.map(r => r.csv)));
 }
 
 // ── End-to-end OCR tests on real screenshots ──────────────────────────────────
@@ -160,6 +185,19 @@ const TRUTH_GOLD_THAI = [
   "05/06/2026 21:48,B,XAUUSD,0.0976,4357.98", "08/06/2026 09:05,S,XAUUSD,0.0080,4320.64",
   "24/06/2026 08:42,S,XAUUSD,0.0070,4094.87",
 ];
+// Thai STOCK screenshots (ซื้อ/ขาย + US tickers, จำนวนหุ้น). Thai OCR of symbols/side is
+// noisy, so the guarantee is SILENT-wrong===0 (mangled rows drop or flag). CA (รับ/หัก)
+// rows are skipped. exact baselines are the measured minimums.
+const TRUTH_TH_SELLS = [
+  "01/07/2026 20:21,S,OXY,0.1348522,48.35", "01/07/2026 20:20,S,IVV,0.0045730,748.48",
+  "01/07/2026 17:06,B,FSLR,0.0128022,231.99", "01/07/2026 15:09,S,QQQM,0.0126133,300.06",
+  "01/07/2026 15:08,S,SPHD,0.0612187,50.96", "01/07/2026 15:08,S,SPY,0.0045788,745.00",
+  "01/07/2026 15:08,S,SPYD,0.0668001,47.68",
+];
+const TRUTH_TH_CA = [
+  "23/11/2025 14:40,B,ENPH,0.1143497,26.76", "19/11/2025 11:49,B,ALAB,0.0219307,139.53",
+  "19/11/2025 11:48,B,MELI,0.0014788,2069.22", "17/11/2025 08:26,B,TEM,0.0450000,68.00",
+];
 
 // eng+tha, using the exact self-hosted data the browser ships (public/tesseract)
 const worker = await createWorker("eng+tha", 1, {
@@ -182,6 +220,8 @@ const CASES = [
   { name: "single image", imgs: [FIX("activity-4-single.jpg")], truth: TRUTH_SINGLE, minExact: 2 },
   { name: "gold DCA (MTS-GOLD)", imgs: [FIX("gold-mts.jpg")], truth: TRUTH_GOLD, minExact: 5 },
   { name: "gold DCA Thai (MTS-GOLD)", imgs: [FIX("gold-mts-thai.jpg")], truth: TRUTH_GOLD_THAI, minExact: 4 },
+  { name: "Thai stock sells", imgs: [FIX("th-stock-sells.jpg")], truth: TRUTH_TH_SELLS, minExact: 6 },
+  { name: "Thai stock buys + CA-skip", imgs: [FIX("th-stock-ca.jpg")], truth: TRUTH_TH_CA, minExact: 3 },
 ];
 for (const c of CASES) {
   const m = mergeParses(await ocrPass(c.imgs, 2), await ocrPass(c.imgs, 3));
@@ -189,7 +229,10 @@ for (const c of CASES) {
   const silent = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length === 0);
   check(`${c.name}: SILENT wrong === 0 (hard invariant)`, silent.length === 0, silent.map(r => r.csv).join(" | "));
   check(`${c.name}: exact >= ${c.minExact}/${c.truth.length}`, exact >= c.minExact, `got ${exact}`);
-  check(`${c.name}: row count matches truth`, m.rows.length === c.truth.length, `got ${m.rows.length}`);
+  // never invent rows beyond the truth set (dropping a mangled row is safe; adding one is not)
+  check(`${c.name}: no spurious rows (<= ${c.truth.length})`, m.rows.length <= c.truth.length, `got ${m.rows.length}`);
+  // every emitted symbol is a clean ticker or XAUUSD — a Thai-mangled ticker must never ship
+  check(`${c.name}: all symbols valid`, m.rows.every(r => /^([A-Z]{1,6}|XAUUSD)$/.test(r.symbol)), m.rows.map(r => r.symbol).join(","));
 }
 await worker.terminate();
 
