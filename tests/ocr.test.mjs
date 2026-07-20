@@ -260,7 +260,7 @@ await worker.terminate();
 
 // Aggregate regression floor (so a code change that tanks recall is caught), reported honestly
 console.log(`\nOCR exact recall overall: ${exactTotal}/${truthTotal} rows (${Math.round(exactTotal / truthTotal * 100)}%). Not 100% — OCR drops/flags the rest; use English screenshots for higher accuracy.`);
-check(`recall did not regress (>= 45/${truthTotal})`, exactTotal >= 45, `got ${exactTotal}`);
+check(`recall did not regress (>= 65/${truthTotal})`, exactTotal >= 65, `got ${exactTotal}`);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

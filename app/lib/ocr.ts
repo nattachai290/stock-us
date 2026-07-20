@@ -29,6 +29,17 @@ const THAI_MON: Record<string, string> = { "มค":"01", "กพ":"02", "มี
 const THAI_FULL_MON = /(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)/;
 const despace = (s: string) => s.replace(/\s+/g, "");
 const dedot = (s: string) => s.replace(/[.\s]/g, "");
+// OCR renderings of Thai month abbreviations that degraded into Latin/digits, mapped
+// back. Each key is unambiguous: only one month fits the surviving glyph shapes
+// (ก.พ→"AW" is the only ก-then-พ month; มิ.ย→"09" the only ม-then-ย; ก.ค→"nA"/"คค").
+const DEGRADED_MON: Record<string, string> = { aw: "02", "09": "06", na: "07", "คค": "07" };
+// Stray combining vowels/tone marks OCR injects mid-abbreviation ("พ.ุย." → พย);
+// none of the real abbreviation keys use these marks, so stripping them is lossless.
+const monKey = (s: string) => dedot(s).replace(/[ุู่้๊๋็์ํๆ]/g, "");
+const thaiMonth = (tok: string): string | undefined => {
+  const k = monKey(tok);
+  return THAI_MON[k] ?? DEGRADED_MON[k.toLowerCase()];
+};
 // Thai screenshots print the Buddhist year, short ("69") or full ("2569"); English
 // screenshots print the CE year (2026). Normalise everything to CE.
 function toCEYear(y: string): number {
@@ -38,9 +49,30 @@ function toCEYear(y: string): number {
   return n;                           // already CE
 }
 
-// OCR digit fixups applied only inside tokens we already believe are numbers
-const numFix = (s: string) => s.replace(/[Oo]/g, "0").replace(/[lI|]/g, "1").replace(/,/g, "");
+// OCR digit fixups applied only inside tokens we already believe are numbers.
+// "]" is a misread "1"; a number has exactly one decimal point, so extra dots
+// ("2,.069.22") are separator noise — keep the last dot only.
+const numFix = (s: string) => {
+  let t = s.replace(/[Oo]/g, "0").replace(/[lI|\]]/g, "1").replace(/,/g, "");
+  const i = t.lastIndexOf(".");
+  if (i >= 0) t = t.slice(0, i).replace(/\./g, "") + t.slice(i);
+  return t;
+};
 const toNum = (s: string) => parseFloat(numFix(s));
+// A "]" in a share count is either a misread trailing 1 ("0.588568]") or inserted
+// noise ("0.144660]1") — the broker always prints dp decimals, so pick the variant
+// that lands on exactly dp.
+const qtyFix = (s: string, dp: number) => {
+  if (s.includes("]")) {
+    for (const v of [s.replace(/\]/g, "1"), s.replace(/\]/g, "")]) {
+      const f = numFix(v);
+      if ((f.split(".")[1] || "").length === dp) return f;
+    }
+  }
+  return numFix(s);
+};
+// Currency/marker words that match the ticker shape but are never tickers
+const NOT_TICKERS = new Set(["USD", "THB", "DCA", "CA", "GOLD", "OZ", "AM", "PM"]);
 
 export function parseActivityText(text: string): OcrParseResult {
   const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
@@ -54,7 +86,7 @@ export function parseActivityText(text: string): OcrParseResult {
     if (!cur) return;
     if (cur.skip) { cur = null; return; } // corporate action — dropped on purpose
     // A ticker that OCR mangled must not be emitted with a wrong symbol
-    const cleanSym = cur.isGold || (cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol));
+    const cleanSym = cur.isGold || (cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol));
     if (cur.side && cleanSym && cur.qty && cur.price && cur.iso) {
       let check: OcrTxRow["check"] = "unverified";
       if (cur.currency === "USD" && cur.total) {
@@ -114,21 +146,33 @@ export function parseActivityText(text: string): OcrParseResult {
       const goldHdr = line.match(/\b([A-Z]{2,}-?GOLD)\b/i);
       const anyTotal  = /[\d,OolI|]+\.\d{2}\s*(?:บ|USD|THB)/i.test(line); // a spent/received total → header
       const bahtTotal = /[\d,OolI|]+\.\d{2}\s*(?:บ|THB)/i.test(line);     // baht spent = a BUY, unambiguously
-      const sellM = line.match(/\b([A-Z]{1,6})\b\s+(-?[\d.OolI|]{6,})\s*(?:ห|Ku|Au|Kn)/); // "ticker qty หุ้น" (sell)
-      const tickerM = line.match(/\b([A-Z]{1,6})\b/); // uppercase-only — a Thai-mangled ticker won't match
-      if (goldHdr || (anyTotal && tickerM) || sellM) {
+      let sellM = line.match(/\b([A-Z]{1,6})\b\s+(-?[\d.OolI|\]]{6,})\s*(?:ห|Ku|Au|Kn)/); // "ticker qty หุ้น" (sell)
+      if (sellM && NOT_TICKERS.has(sellM[1])) sellM = null;
+      // uppercase-only — a Thai-mangled ticker won't match; skip currency/marker words
+      // so "ซื้อ <mangled> 1.60 USD" can't emit USD as the symbol
+      let ticker: string | null = null;
+      for (const tm of line.matchAll(/\b([A-Z]{1,6})\b/g)) {
+        if (!NOT_TICKERS.has(tm[1])) { ticker = tm[1]; break; }
+      }
+      if (goldHdr || (anyTotal && ticker) || sellM) {
         flush();
         const gold = !!goldHdr;
-        // Side priority: the readable Thai word, else a baht total (definitely a buy). A USD
-        // total is ambiguous (stock buy vs gold-sale proceeds), so if the word is unreadable
-        // we flag rather than guess silently.
+        // Side priority: the readable Thai word (ยาย/บาย are common OCR renderings of
+        // ขาย), else a baht total (definitely a buy). A USD total is ambiguous (a buy can
+        // be USD-funded; a gold sale shows USD proceeds), so if the word is unreadable we
+        // flag rather than guess silently.
         let side: "B" | "S", uncertain = false;
-        if (compact.includes("ขาย")) side = "S";
+        if (compact.includes("ขาย") || compact.includes("ยาย") || compact.includes("บาย")) side = "S";
         else if (compact.includes("ซื้อ") || compact.includes("ือ")) side = "B";
         else if (bahtTotal && !sellM) side = "B";
         else { side = sellM ? "S" : "B"; uncertain = true; }
-        cur = { side, symbol: gold ? "MTS-GOLD" : (tickerM ? tickerM[1] : sellM![1]).toUpperCase(), isGold: gold, sideUncertain: uncertain };
-        if (sellM && !bahtTotal) { const v = toNum(sellM[2]); if (v > 0) { cur.qty = v; cur.qtyStr = numFix(sellM[2]); } }
+        cur = { side, symbol: gold ? "MTS-GOLD" : (ticker ?? sellM![1]).toUpperCase(), isGold: gold, sideUncertain: uncertain };
+        if (sellM && !bahtTotal) { const f = qtyFix(sellM[2], 7); const v = parseFloat(f); if (v > 0) { cur.qty = v; cur.qtyStr = f; } }
+      } else if (cur && cur.price != null && (compact.includes("จริง") || /Executed\s*Price/i.test(line))) {
+        // A second executed-price line while the open block already has its price means
+        // the next block's header was too mangled to detect — flush so the open block
+        // can't absorb the stranger's numbers (its own line then belongs to no record).
+        flush();
       }
     }
     if (!cur) continue;
@@ -158,34 +202,74 @@ export function parseActivityText(text: string): OcrParseResult {
     }
 
     // Thai date: "24 มิ.ย. 69 - 08:42:13 น." (24h clock, Buddhist year). The executed
-    // price sits on this same line before the day, so grab it here too.
+    // price sits on this same line before the day, so grab it here too. The time
+    // separator tolerates a misread dot ("17.14:24"); "]" next to a digit is a 1.
     if (!cur.iso) {
-      const td = line.match(/(\d{1,2})\s+([฀-๿.\s]+?)\s*(\d{2,4})\s*[-–—]\s*(\d{1,2}):(\d{2})/);
+      const numLine = line.replace(/\](?=\d)/g, "1").replace(/(?<=\d)\]/g, "1");
+      let iso: string | null = null;
+      let pricePrefix = ""; // only the part of the line BEFORE the date may hold the price
+      const td = numLine.match(/(\d{1,2})\s+([฀-๿.\s]+?)\s*(\d{2,4})\s*[-–—]\s*(\d{1,2})[:.](\d{2})/);
       if (td) {
-        const mon = THAI_MON[dedot(td[2])];
+        const mon = thaiMonth(td[2]);
         if (mon) {
-          cur.iso = `${toCEYear(td[3])}-${mon}-${td[1].padStart(2, "0")}T${td[4].padStart(2, "0")}:${td[5]}:00`;
-          if (cur.price == null) {
-            // The executed price sits before the date; keep ALL its decimals (broker shows
-            // 2 or 4, e.g. 48.35 / 449.8440). Day/year have no decimal so this can't grab them.
-            const pm = line.match(/([\d,OolI|]+\.\d{2,})/);
-            if (pm) { const v = toNum(pm[1]); if (v > 0) { cur.price = v; cur.priceStr = numFix(pm[1]); } }
+          iso = `${toCEYear(td[3])}-${mon}-${td[1].padStart(2, "0")}T${td[4].padStart(2, "0")}:${td[5]}:00`;
+          pricePrefix = numLine.slice(0, td.index);
+        }
+      }
+      if (!iso) {
+        // Degraded fallback: the month glyphs collapsed into Latin/digits ("26 0.9. 69",
+        // "9 n.A. 69") or the day did ("| ก.ค. 69"), which the strict pattern can't see.
+        // Anchor on "- hh:mm", then walk the tokens before it: year, month token(s),
+        // then a 1-2 char day. Only accepted when the month maps unambiguously.
+        const t = numLine.match(/^(.*?)[-–—]\s*(\d{1,2})[:.](\d{2})/);
+        if (t) {
+          const toks = t[1].trim().split(/\s+/);
+          const year = toks.pop();
+          if (year && /^\d{2,4}$/.test(year)) {
+            const monToks: string[] = [];
+            let day = "";
+            while (toks.length && monToks.length <= 6) {
+              const tk = toks.pop()!;
+              if (/^[\d|lI]{1,2}$/.test(tk) && monToks.length) { day = numFix(tk); break; }
+              monToks.unshift(tk);
+            }
+            const mon = day ? thaiMonth(monToks.join("")) : undefined;
+            const d = parseInt(day, 10), hh = parseInt(t[2], 10), mm = parseInt(t[3], 10);
+            if (mon && d >= 1 && d <= 31 && hh <= 23 && mm <= 59) {
+              iso = `${toCEYear(year)}-${mon}-${day.padStart(2, "0")}T${t[2].padStart(2, "0")}:${t[3]}:00`;
+              pricePrefix = toks.join(" "); // what's left before the day token
+            }
           }
+        }
+      }
+      if (iso) {
+        cur.iso = iso;
+        if (cur.price == null) {
+          // The executed price sits before the date; keep ALL its decimals (broker shows
+          // 2 or 4, e.g. 48.35 / 449.8440). Searching only the pre-date prefix means a
+          // mangled price can never be silently replaced by the time digits.
+          const pm = pricePrefix.match(/([\d,.OolI|]+\.\d{2,})/);
+          if (pm) { const v = toNum(pm[1]); if (v > 0) { cur.price = v; cur.priceStr = numFix(pm[1]); } }
         }
       }
     }
 
     // "Shares 0.0371384" (stocks) or "Weight 0.0029 oz" / "น้ำหนัก 0.0976 oz" (gold, 4dp).
     // The "oz" unit is Latin, so anchoring on it works regardless of label language.
-    const s = line.match(/Shares[\s:]*([\d.,OolI|]+)/i);
-    if (s && cur.qty == null) { const v = toNum(s[1]); if (v > 0) { cur.qty = v; cur.qtyStr = numFix(s[1]); } }
-    const w = line.match(/([\d.,OolI|]+)\s*[o0]z\b/i);
-    if (w && cur.qty == null) { const v = toNum(w[1]); if (v > 0) { cur.qty = v; cur.qtyStr = numFix(w[1]); cur.isGold = true; } }
+    const setQty = (raw: string, dp: number) => {
+      const f = qtyFix(raw, dp);
+      const v = parseFloat(f);
+      if (v > 0) { cur!.qty = v; cur!.qtyStr = f; }
+    };
+    const s = line.match(/Shares[\s:]*([\d.,OolI|\]]+)/i);
+    if (s && cur.qty == null) setQty(s[1], 7);
+    const w = line.match(/([\d.,OolI|\]]+)\s*[o0]z\b/i);
+    if (w && cur.qty == null) { setQty(w[1], 4); if (cur.qty != null) cur.isGold = true; }
     // Thai buy quantity on its own line ("จำนวนหุ้น 0.0128022"): a Thai-labelled line
     // ending in a 7-decimal number, with no ticker / total / date on it.
     if (cur.qty == null && !cur.isGold && !/[A-Z]{2,}/.test(line) && !/บ|USD|THB|:/.test(line)) {
-      const jm = line.match(/([\d.OolI|]{7,})\s*$/);
-      if (jm) { const v = toNum(jm[1]); if (v > 0) { cur.qty = v; cur.qtyStr = numFix(jm[1]); } }
+      const jm = line.match(/([\d.OolI|\]]{7,})\s*$/);
+      if (jm) setQty(jm[1], 7);
     }
   }
   flush();
