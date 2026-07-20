@@ -10,7 +10,7 @@ import { btnGhost, btnPrimary } from "../lib/ui";
 // plus a third eng-ONLY pass whose job is rescuing Latin tickers the Thai model
 // renders as Thai glyphs (see extractTickerHints). Nothing is imported
 // automatically; the user reviews the textarea and presses นำเข้า as usual.
-export default function OcrImport({ onAppend }: { onAppend: (csv: string) => void }) {
+export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: string) => void; knownSymbols?: string[] }) {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
   const [result, setResult] = useState<MergeResult | null>(null);
@@ -81,7 +81,8 @@ export default function OcrImport({ onAppend }: { onAppend: (csv: string) => voi
       }
       await engWorker.terminate();
       const hints = extractTickerHints(engText);
-      const merged = mergeParses(parseActivityText(texts[2], hints), parseActivityText(texts[3], hints));
+      const merged = mergeParses(parseActivityText(texts[2], hints, knownSymbols),
+                                 parseActivityText(texts[3], hints, knownSymbols));
       setResult(merged);
       setProgress(merged.rows.length ? "" : "อ่านไม่พบรายการในรูป — ใช้ภาพแคปหน้า Activity ที่เห็นบรรทัดเต็มๆ");
     } catch (e: any) {

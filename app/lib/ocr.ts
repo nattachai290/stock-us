@@ -18,6 +18,7 @@ export type OcrTxRow = {
   skip?: boolean;         // corporate-action block (split) — not a plain buy/sell, dropped
   symbolFromHint?: boolean;// ticker came from the eng-only rescue pass — flag for review
   symbolHintMismatch?: string;// eng pass read a DIFFERENT ticker for this row — flag for review
+  symbolCorrected?: string;// what OCR actually read, before the portfolio-whitelist fix
 };
 
 export type OcrParseResult = { rows: OcrTxRow[]; incomplete: number };
@@ -76,6 +77,27 @@ const qtyFix = (s: string, dp: number) => {
 // Currency/marker words that match the ticker shape but are never tickers
 const NOT_TICKERS = new Set(["USD", "THB", "DCA", "CA", "GOLD", "OZ", "AM", "PM"]);
 
+// True when a and b differ by exactly one edit (substitution, insertion or deletion).
+// Used for the portfolio-whitelist fix: OCR reading "IPR" when the portfolio holds
+// IIPR (double-I merged into one glyph) is a 1-edit miss.
+const editDist1 = (a: string, b: string): boolean => {
+  if (a === b) return false;
+  const [s, t] = a.length <= b.length ? [a, b] : [b, a];
+  if (t.length - s.length > 1) return false;
+  if (s.length === t.length) {
+    let d = 0;
+    for (let i = 0; i < s.length; i++) if (s[i] !== t[i]) d++;
+    return d === 1;
+  }
+  let i = 0, j = 0, skipped = false;
+  while (i < s.length && j < t.length) {
+    if (s[i] === t[j]) { i++; j++; }
+    else if (!skipped) { skipped = true; j++; }
+    else return false;
+  }
+  return true;
+};
+
 // ── eng-only rescue pass ───────────────────────────────────────────────────────
 // The eng+tha passes sometimes render a Latin ticker as Thai glyphs (IVV → "เง"),
 // while an English-only pass reads the ticker fine but mangles the Thai words.
@@ -110,7 +132,8 @@ export function extractTickerHints(text: string): Record<string, string> {
   return hints;
 }
 
-export function parseActivityText(text: string, hints?: Record<string, string>): OcrParseResult {
+export function parseActivityText(text: string, hints?: Record<string, string>, known?: string[]): OcrParseResult {
+  const knownSet = new Set((known ?? []).map(s => s.toUpperCase()));
   const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
   const rows: OcrTxRow[] = [];
   let incomplete = 0;
@@ -130,6 +153,14 @@ export function parseActivityText(text: string, hints?: Record<string, string>):
       const valid = cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol);
       if (hint && !valid) { cur.symbol = hint; cur.symbolFromHint = true; }
       else if (hint && valid && hint !== cur.symbol) cur.symbolHintMismatch = hint;
+    }
+    // Portfolio-whitelist fix: a read ticker the user doesn't hold, one edit away from
+    // exactly ONE symbol they do hold, is almost certainly that symbol (OCR merged or
+    // swapped a glyph). Ambiguity (2+ candidates) leaves the reading alone; the fix is
+    // always flagged for review in mergeParses — never silent.
+    if (!cur.isGold && cur.symbol && knownSet.size && !knownSet.has(cur.symbol)) {
+      const cands = [...knownSet].filter(k => editDist1(cur!.symbol!, k));
+      if (cands.length === 1) { cur.symbolCorrected = cur.symbol; cur.symbol = cands[0]; }
     }
     // A ticker that OCR mangled must not be emitted with a wrong symbol
     const cleanSym = cur.isGold || (cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol));
@@ -152,7 +183,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>):
         price: cur.price, priceStr: cur.priceStr || String(cur.price),
         total: cur.total, currency: cur.currency, check, isGold: cur.isGold,
         sideUncertain: cur.sideUncertain, symbolFromHint: cur.symbolFromHint,
-        symbolHintMismatch: cur.symbolHintMismatch,
+        symbolHintMismatch: cur.symbolHintMismatch, symbolCorrected: cur.symbolCorrected,
       });
     } else if (cur.side || cur.price || cur.qty) {
       incomplete++;
@@ -354,6 +385,7 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult): MergeResult {
   const finalize = (best: OcrTxRow, side: "B" | "S", flags: string[]) => {
     if (best.symbolFromHint) flags.push("ชื่อหุ้นอ่านจากรอบภาษาอังกฤษ — ตรวจกับรูป");
     if (best.symbolHintMismatch) flags.push(`รอบภาษาอังกฤษอ่านชื่อหุ้นเป็น ${best.symbolHintMismatch} — ตรวจกับรูป`);
+    if (best.symbolCorrected) flags.push(`OCR อ่านได้ "${best.symbolCorrected}" — แก้เป็น ${best.symbol} ตามหุ้นในพอร์ต ตรวจกับรูป`);
     if (!best.isGold && decimals(best.qtyStr) !== SHARE_DECIMALS) flags.push(`ทศนิยมจำนวนหุ้นได้ ${decimals(best.qtyStr)} หลัก (ปกติ 7) — อาจอ่านตกหลัก`);
     if (best.check === "mismatch") flags.push("ราคา×จำนวน ไม่ตรงกับยอดรวมในรูป");
     const parts = best.csv.split(","); parts[1] = side; // csv was built with best.side; apply the resolved one
