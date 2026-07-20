@@ -13,6 +13,7 @@ export type OcrTxRow = {
   total?: number;         // the amount shown on the right in the screenshot
   currency?: string;      // USD rows can be cross-checked (price×qty≈total); THB can't (unknown FX rate)
   check: "ok" | "mismatch" | "unverified";
+  isGold?: boolean;       // gold DCA rows use "Weight x oz" (4 decimals) & map to XAUUSD
 };
 
 export type OcrParseResult = { rows: OcrTxRow[]; incomplete: number };
@@ -40,14 +41,17 @@ export function parseActivityText(text: string): OcrParseResult {
         // fees make the shown total differ a little from price×qty
         check = Math.abs(expect - cur.total) <= Math.max(0.6, cur.total * 0.03) ? "ok" : "mismatch";
       }
+      // Gold DCA (e.g. MTS-GOLD) is priced in USD/oz — same unit as the XAUUSD spot
+      // source in /api/price — so map it there regardless of the broker's product name.
+      const symbol = cur.isGold ? "XAUUSD" : cur.symbol;
       const d = new Date(cur.iso);
       const csvDate = `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
       rows.push({
-        csv: `${csvDate},${cur.side},${cur.symbol},${cur.qtyStr},${cur.priceStr}`,
-        iso: cur.iso, side: cur.side, symbol: cur.symbol,
+        csv: `${csvDate},${cur.side},${symbol},${cur.qtyStr},${cur.priceStr}`,
+        iso: cur.iso, side: cur.side, symbol,
         qty: cur.qty, qtyStr: cur.qtyStr || String(cur.qty),
         price: cur.price, priceStr: cur.priceStr || String(cur.price),
-        total: cur.total, currency: cur.currency, check,
+        total: cur.total, currency: cur.currency, check, isGold: cur.isGold,
       });
     } else if (cur.side || cur.price || cur.qty) {
       incomplete++;
@@ -95,9 +99,11 @@ export function parseActivityText(text: string): OcrParseResult {
       }
     }
 
-    // "Shares 0.0371384"
+    // "Shares 0.0371384" (stocks) or "Weight 0.0029 oz" (gold DCA, 4 decimals)
     const s = line.match(/Shares[\s:]*([\d.,OolI|]+)/i);
     if (s && cur.qty == null) { const v = toNum(s[1]); if (v > 0) { cur.qty = v; cur.qtyStr = numFix(s[1]); } }
+    const w = line.match(/Weight[\s:]*([\d.,OolI|]+)\s*[o0]z/i);
+    if (w && cur.qty == null) { const v = toNum(w[1]); if (v > 0) { cur.qty = v; cur.qtyStr = numFix(w[1]); cur.isGold = true; } }
   }
   flush();
 
@@ -150,7 +156,8 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult): MergeResult {
       }
     }
 
-    if (decimals(best.qtyStr) !== SHARE_DECIMALS) flags.push(`ทศนิยมจำนวนหุ้นได้ ${decimals(best.qtyStr)} หลัก (ปกติ 7) — อาจอ่านตกหลัก`);
+    // Gold weight is shown to 4 decimals, not 7 — only apply the share-decimal check to stocks
+    if (!best.isGold && decimals(best.qtyStr) !== SHARE_DECIMALS) flags.push(`ทศนิยมจำนวนหุ้นได้ ${decimals(best.qtyStr)} หลัก (ปกติ 7) — อาจอ่านตกหลัก`);
     if (best.check === "mismatch") flags.push("ราคา×จำนวน ไม่ตรงกับยอดรวมในรูป");
 
     rows.push({ ...best, flags });
@@ -159,7 +166,7 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult): MergeResult {
   for (const rb of b.rows) {
     if (seen.has(key(rb))) continue;
     const flags = ["เห็นในรอบ OCR เดียว — ตรวจกับรูป"];
-    if (decimals(rb.qtyStr) !== SHARE_DECIMALS) flags.push(`ทศนิยมจำนวนหุ้นได้ ${decimals(rb.qtyStr)} หลัก (ปกติ 7) — อาจอ่านตกหลัก`);
+    if (!rb.isGold && decimals(rb.qtyStr) !== SHARE_DECIMALS) flags.push(`ทศนิยมจำนวนหุ้นได้ ${decimals(rb.qtyStr)} หลัก (ปกติ 7) — อาจอ่านตกหลัก`);
     if (rb.check === "mismatch") flags.push("ราคา×จำนวน ไม่ตรงกับยอดรวมในรูป");
     rows.push({ ...rb, flags });
   }
