@@ -11,6 +11,7 @@ import DetailSheet from "./components/DetailSheet";
 import AppShell from "./components/AppShell";
 import AiTab from "./components/AiTab";
 import ToolsMenu from "./components/ToolsMenu";
+import InvestedChart from "./components/InvestedChart";
 import ChartsTab from "./components/ChartsTab";
 import HistoryTab from "./components/HistoryTab";
 
@@ -402,6 +403,9 @@ export default function App() {
       }
       setLastUpdated(new Date()); setPriceErrors(errors);
       msg(errors.length ? `⚠️ มี ${errors.length} ตัวพลาด — ดูด้านล่าง` : "อัพเดทราคาแล้ว ✓");
+      // Fresh prices go to Drive right away (saveData no-ops the Drive part when not
+      // logged in), so other devices pick them up without waiting for the next edit.
+      await saveData(updated);
     } catch (e:any) { msg("ดึงราคาไม่ได้: " + e.message); setPriceErrors([e.message]); }
     setRefreshing(false);
   };
@@ -1087,6 +1091,8 @@ export default function App() {
                 {priceAsOf ? `ราคาเมื่อ ${priceAsOf.toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})} · Cboe + CNBC` : "ยังไม่เคยอัพเดทราคา — กดปุ่มด้านบน"}
               </div>
             </div>
+
+            <InvestedChart holdings={holdings}/>
 
             {!userEmail&&(
               <div style={{background:"var(--card)",border:"1px solid var(--brass)",borderRadius:8,padding:"10px 14px",marginBottom:12,fontSize:12,color:"var(--brass)"}}>

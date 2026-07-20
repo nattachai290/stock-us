@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test:ocr": "node tests/ocr.test.mjs",
-    "test:gold": "node tests/goldprice.test.mjs"
+    "test:gold": "node tests/goldprice.test.mjs",
+    "test:invested": "node tests/invested.test.mjs"
   },
   "dependencies": {
     "next": "16.2.9",
