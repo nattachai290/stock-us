@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import DateTimePicker24h from "./components/DateTimePicker24h";
 import { parseCSV, toCSV, copyToClipboard, fifoBasisForSale, computeFromHistory } from "./lib/portfolio";
-import { setOnDriveAuthExpired, listPortfolios, loadPortfolio, savePortfolio, deletePortfolio } from "./lib/drive";
+import { setOnDriveAuthExpired, listPortfolios, loadPortfolio, savePortfolio, deletePortfolio, renamePortfolio } from "./lib/drive";
 import { btn, btnPrimary, btnGhost, inp } from "./lib/ui";
 import Snackbar from "./components/Snackbar";
 import Sheet from "./components/Sheet";
@@ -58,6 +58,8 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [newPortName, setNewPortName] = useState("");
   const [showNewPort, setShowNewPort] = useState(false);
+  const [renamePortId, setRenamePortId] = useState<string|null>(null);
+  const [renameText, setRenameText] = useState("");
   const [newStock, setNewStock] = useState({ symbol:"", shares:"", avgCost:"", currentPrice:"", sector:"", note:"", targetPct:"" });
   const [tab, setTab] = useState("portfolio");
   const [editId, setEditId] = useState<number|null>(null);
@@ -306,6 +308,25 @@ export default function App() {
       else { setCurrentPortId(null); setHoldings([]); }
     }
     msg(`ลบ "${portName}" แล้ว`);
+  };
+
+  const renamePort = async (portId: string) => {
+    const name = renameText.trim();
+    if (!name) { msg("ใส่ชื่อ port ก่อน"); return; }
+    // Slashes break the Drive filename (portfolio-{name}.json)
+    if (name.includes("/")) { msg("ชื่อห้ามมี /"); return; }
+    const cur = portfolios.find(p => p.id === portId);
+    if (cur && cur.name === name) { setRenamePortId(null); return; } // no change
+    if (portfolios.some(p => p.id !== portId && p.name === name)) { msg("มีชื่อ port นี้อยู่แล้ว"); return; }
+    if (!token) { msg("กรุณา Login ก่อน"); return; }
+    try {
+      msg("กำลังเปลี่ยนชื่อ...", 0);
+      await renamePortfolio(token, portId, name);
+      setPortfolios(prev => prev.map(p => p.id === portId ? { ...p, name } : p));
+      if (currentPortId === portId) { setCurrentPortName(name); localStorage.setItem("currentPortName", name); }
+      setRenamePortId(null); setRenameText("");
+      msg(`เปลี่ยนชื่อเป็น "${name}" แล้ว ✓`);
+    } catch (e: any) { msg("เปลี่ยนชื่อไม่ได้: " + e.message); }
   };
 
   const saveData = useCallback(async (data: any[], portId = currentPortId, portName = currentPortName) => {
@@ -979,11 +1000,24 @@ export default function App() {
           <span style={{fontSize:12,color:"var(--faint)"}}>Port:</span>
           {portfolios.map(p=>(
             <div key={p.id} style={{display:"flex",alignItems:"center",gap:4}}>
-              <button onClick={()=>switchPort(p.id,p.name)}
-                style={btn(currentPortId===p.id?"var(--brass)":"var(--card2)", currentPortId===p.id?"var(--on-brass)":"var(--mut)",{fontSize:12,padding:"4px 10px"})}>
-                {p.name}
-              </button>
-              {portfolios.length > 1 && <button onClick={()=>deletePort(p.id,p.name)} style={{background:"none",border:"none",color:"var(--faint)",cursor:"pointer",fontSize:12}}>✕</button>}
+              {renamePortId===p.id ? (
+                <>
+                  <input autoFocus value={renameText} onChange={e=>setRenameText(e.target.value)}
+                    onKeyDown={e=>{ if(e.key==="Enter") renamePort(p.id); if(e.key==="Escape") setRenamePortId(null); }}
+                    style={{background:"var(--bg)",border:"1px solid var(--brass)",borderRadius:4,color:"var(--ink)",fontSize:12,padding:"4px 8px",width:120}}/>
+                  <button onClick={()=>renamePort(p.id)} style={btn("var(--brass)","var(--on-brass)",{fontSize:12,padding:"4px 8px"})}>✓</button>
+                  <button onClick={()=>setRenamePortId(null)} style={{background:"none",border:"none",color:"var(--faint)",cursor:"pointer",fontSize:12}}>✕</button>
+                </>
+              ) : (
+                <>
+                  <button onClick={()=>switchPort(p.id,p.name)}
+                    style={btn(currentPortId===p.id?"var(--brass)":"var(--card2)", currentPortId===p.id?"var(--on-brass)":"var(--mut)",{fontSize:12,padding:"4px 10px"})}>
+                    {p.name}
+                  </button>
+                  <button onClick={()=>{setRenamePortId(p.id);setRenameText(p.name);}} title="เปลี่ยนชื่อ" style={{background:"none",border:"none",color:"var(--faint)",cursor:"pointer",fontSize:12}}>✎</button>
+                  {portfolios.length > 1 && <button onClick={()=>deletePort(p.id,p.name)} title="ลบ" style={{background:"none",border:"none",color:"var(--faint)",cursor:"pointer",fontSize:12}}>✕</button>}
+                </>
+              )}
             </div>
           ))}
           {showNewPort ? (

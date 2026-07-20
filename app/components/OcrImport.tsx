@@ -1,14 +1,16 @@
 "use client";
 import { useRef, useState } from "react";
-import { parseActivityText, mergeParses, type MergeResult } from "../lib/ocr";
+import { parseActivityText, mergeParses, extractTickerHints, type MergeResult } from "../lib/ocr";
 import { btnGhost, btnPrimary } from "../lib/ui";
 
 // Upload broker-app Activity screenshots → OCR (tesseract.js, fully client-side,
 // assets self-hosted under /public/tesseract) → tx-import CSV rows appended into
 // the existing Import textarea for review. Each image is OCR'd twice (2x and 3x
-// upscale) and the passes are merged — see mergeParses in lib/ocr.ts. Nothing is
-// imported automatically; the user reviews the textarea and presses นำเข้า as usual.
-export default function OcrImport({ onAppend }: { onAppend: (csv: string) => void }) {
+// upscale, eng+tha) and the passes are merged — see mergeParses in lib/ocr.ts —
+// plus a third eng-ONLY pass whose job is rescuing Latin tickers the Thai model
+// renders as Thai glyphs (see extractTickerHints). Nothing is imported
+// automatically; the user reviews the textarea and presses นำเข้า as usual.
+export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: string) => void; knownSymbols?: string[] }) {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
   const [result, setResult] = useState<MergeResult | null>(null);
@@ -42,7 +44,10 @@ export default function OcrImport({ onAppend }: { onAppend: (csv: string) => voi
     setBusy(true); setResult(null); setProgress("กำลังโหลดตัวอ่าน OCR (ครั้งแรกอาจใช้เวลาสักครู่)...");
     try {
       const { createWorker } = await import("tesseract.js");
-      const worker = await createWorker("eng", 1, {
+      // eng+tha: the broker app can be in Thai (ขาย/ซื้อ, Thai months, Buddhist year).
+      // Thai data doesn't hurt the English screenshots (verified) and the parser reads
+      // both layouts. Numbers/oz/USD stay Latin either way.
+      const worker = await createWorker("eng+tha", 1, {
         workerPath: "/tesseract/worker.min.js",
         corePath: "/tesseract",
         langPath: "/tesseract",
@@ -52,14 +57,32 @@ export default function OcrImport({ onAppend }: { onAppend: (csv: string) => voi
       const texts: Record<number, string> = { 2: "", 3: "" };
       for (const scale of [2, 3]) {
         for (let i = 0; i < list.length; i++) {
-          setProgress(`กำลังอ่านรูป ${i + 1}/${list.length} (รอบ ${scale - 1}/2)...`);
+          setProgress(`กำลังอ่านรูป ${i + 1}/${list.length} (รอบ ${scale - 1}/3)...`);
           const blob = await preprocess(list[i], scale);
           const { data } = await worker.recognize(blob);
           texts[scale] += data.text + "\n";
         }
       }
       await worker.terminate();
-      const merged = mergeParses(parseActivityText(texts[2]), parseActivityText(texts[3]));
+      // Third pass, English-only: the eng model reads Latin tickers the Thai model
+      // mangles; its text is used solely to rescue symbols (keyed by share count).
+      const engWorker = await createWorker("eng", 1, {
+        workerPath: "/tesseract/worker.min.js",
+        corePath: "/tesseract",
+        langPath: "/tesseract",
+        gzip: true,
+      });
+      let engText = "";
+      for (let i = 0; i < list.length; i++) {
+        setProgress(`กำลังอ่านรูป ${i + 1}/${list.length} (รอบ 3/3)...`);
+        const blob = await preprocess(list[i], 2);
+        const { data } = await engWorker.recognize(blob);
+        engText += data.text + "\n";
+      }
+      await engWorker.terminate();
+      const hints = extractTickerHints(engText);
+      const merged = mergeParses(parseActivityText(texts[2], hints, knownSymbols),
+                                 parseActivityText(texts[3], hints, knownSymbols));
       setResult(merged);
       setProgress(merged.rows.length ? "" : "อ่านไม่พบรายการในรูป — ใช้ภาพแคปหน้า Activity ที่เห็นบรรทัดเต็มๆ");
     } catch (e: any) {

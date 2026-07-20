@@ -150,7 +150,7 @@ export default function HistoryTab({
             <button onClick={importTxCSV} disabled={!txImportText.trim()} style={btn("var(--brass)","var(--on-brass)",{opacity:!txImportText.trim()?0.5:1})}>นำเข้า</button>
             <button onClick={()=>{setShowTxImport(false);setTxImportText("");}} style={btn("var(--line)","var(--mut)")}>ยกเลิก</button>
           </div>
-          <OcrImport onAppend={(csv)=>setTxImportText((txImportText ? txImportText.trimEnd()+"\n" : "")+csv)}/>
+          <OcrImport knownSymbols={holdings.map((h:any)=>h.symbol)} onAppend={(csv)=>setTxImportText((txImportText ? txImportText.trimEnd()+"\n" : "")+csv)}/>
         </div>
       )}
 
