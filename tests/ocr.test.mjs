@@ -21,7 +21,7 @@ const FIX = (f) => path.join(ROOT, "tests", "fixtures", f);
 
 // compile the TS module on the fly so the test always runs the current source
 const src = execSync("npx esbuild app/lib/ocr.ts --format=esm", { cwd: ROOT }).toString();
-const { parseActivityText, mergeParses } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
+const { parseActivityText, mergeParses, extractTickerHints } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = "") => {
@@ -159,6 +159,37 @@ CA - แตกหรือรวมหุ้น 17 พ.ย. 68 - 15:47:52 น.`;
   check("thai stock: corporate action dropped", mca.rows.length === 0, JSON.stringify(mca.rows.map(r => r.csv)));
 }
 
+{
+  // eng-only rescue pass: the Thai model rendered the ticker as Thai glyphs ("เง"),
+  // the eng-only text read it fine — the share count (7 decimals, unique) links them.
+  const tha = `ยาย เง 0.0045730 หุ้น
+ราคาที่ได้จริง 748.48 1 ก.ค. 69 - 20:20:39 น.`;
+  const eng = `ug IVV 0.0045730 Ku
+s1mnlaasY 748.48 1 A.A. 69 - 20:20:39 u.`;
+  const hints = extractTickerHints(eng);
+  check("hints: share count → IVV extracted", hints["0.0045730"] === "IVV", JSON.stringify(hints));
+  const m = mergeParses(parseActivityText(tha, hints), parseActivityText(tha, hints));
+  check("rescue: mangled ticker recovered", m.rows[0]?.csv === "01/07/2026 20:20,S,IVV,0.0045730,748.48", m.rows[0]?.csv);
+  check("rescue: rescued row is flagged", m.rows[0]?.flags.some(f => f.includes("อังกฤษ")), JSON.stringify(m.rows[0]?.flags));
+  check("rescue: no hint → still dropped", mergeParses(parseActivityText(tha), parseActivityText(tha)).rows.length === 0);
+
+  // A ticker the Thai pass read cleanly is never overridden by the eng pass (which can
+  // shed uppercase junk from mangled Thai labels) — the disagreement becomes a flag.
+  const tha2 = `ซื้อ NUE 99.78 บาท
+ราคาที่ได้จริง 175.32 26 ก.พ. 69 - 21:46:06 น.
+จำนวนหุ้น 0.0181953`;
+  const eng2 = `#0 GDS 99.78 un
+s1AA 175.32 26 A.W. 69 - 21:46:06 u.
+91UdUKU 0.0181953`;
+  const h2 = extractTickerHints(eng2);
+  const m2 = mergeParses(parseActivityText(tha2, h2), parseActivityText(tha2, h2));
+  check("rescue: valid ticker not overridden", m2.rows[0]?.symbol === "NUE", m2.rows[0]?.csv);
+  check("rescue: hint disagreement flagged", m2.rows[0]?.flags.some(f => f.includes("GDS")), JSON.stringify(m2.rows[0]?.flags));
+
+  // Uppercase junk on a price/date line must not become a hint ticker
+  check("hints: date-line junk ignored", extractTickerHints("s1AA GDS 175.32 26 A.W. 69 - 21:46:06 u.\n91UdUKU 0.0181953")["0.0181953"] === undefined);
+}
+
 // ── End-to-end OCR tests on real screenshots ──────────────────────────────────
 
 const TRUTH_ALL = [
@@ -214,20 +245,25 @@ const TH_STOCK_MORE = {
 };
 const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4 };
 
-// eng+tha, using the exact self-hosted data the browser ships (public/tesseract)
+// eng+tha main passes + an eng-only rescue pass, using the exact self-hosted data
+// the browser ships (public/tesseract) — mirrors OcrImport.tsx
 const worker = await createWorker("eng+tha", 1, {
   langPath: path.join(ROOT, "public", "tesseract"),
   gzip: true, cacheMethod: "none",
 });
-async function ocrPass(imgs, scale) {
+const engWorker = await createWorker("eng", 1, {
+  langPath: path.join(ROOT, "public", "tesseract"),
+  gzip: true, cacheMethod: "none",
+});
+async function ocrText(w, imgs, scale) {
   let text = "";
   for (const p of imgs) {
     const img = await Jimp.read(p);
     img.greyscale().invert().scale(scale); // mirrors OcrImport.tsx canvas preprocessing
-    const { data } = await worker.recognize(await img.getBufferAsync(Jimp.MIME_PNG));
+    const { data } = await w.recognize(await img.getBufferAsync(Jimp.MIME_PNG));
     text += data.text + "\n";
   }
-  return parseActivityText(text);
+  return text;
 }
 
 const CASES = [
@@ -246,7 +282,9 @@ const CASES = [
 let exactTotal = 0, truthTotal = 0;
 console.log("\n— OCR exact-match recall (reported, not a pass/fail) —");
 for (const c of CASES) {
-  const m = mergeParses(await ocrPass(c.imgs, 2), await ocrPass(c.imgs, 3));
+  const hints = extractTickerHints(await ocrText(engWorker, c.imgs, 2));
+  const m = mergeParses(parseActivityText(await ocrText(worker, c.imgs, 2), hints),
+                        parseActivityText(await ocrText(worker, c.imgs, 3), hints));
   const exact = c.truth.filter(t => m.rows.some(r => r.csv === t)).length;
   const silent = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length === 0);
   exactTotal += exact; truthTotal += c.truth.length;
@@ -257,10 +295,11 @@ for (const c of CASES) {
   check(`${c.name}: every emitted symbol is a valid ticker`, m.rows.every(r => /^([A-Z]{1,6}|XAUUSD)$/.test(r.symbol)), m.rows.map(r => r.symbol).join(","));
 }
 await worker.terminate();
+await engWorker.terminate();
 
 // Aggregate regression floor (so a code change that tanks recall is caught), reported honestly
 console.log(`\nOCR exact recall overall: ${exactTotal}/${truthTotal} rows (${Math.round(exactTotal / truthTotal * 100)}%). Not 100% — OCR drops/flags the rest; use English screenshots for higher accuracy.`);
-check(`recall did not regress (>= 65/${truthTotal})`, exactTotal >= 65, `got ${exactTotal}`);
+check(`recall did not regress (>= 72/${truthTotal})`, exactTotal >= 72, `got ${exactTotal}`);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

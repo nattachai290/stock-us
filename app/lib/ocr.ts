@@ -16,6 +16,8 @@ export type OcrTxRow = {
   isGold?: boolean;       // gold DCA rows use "Weight x oz" (4 decimals) & map to XAUUSD
   sideUncertain?: boolean;// Thai ซื้อ/ขาย was too garbled to read confidently — needs a look
   skip?: boolean;         // corporate-action block (split) — not a plain buy/sell, dropped
+  symbolFromHint?: boolean;// ticker came from the eng-only rescue pass — flag for review
+  symbolHintMismatch?: string;// eng pass read a DIFFERENT ticker for this row — flag for review
 };
 
 export type OcrParseResult = { rows: OcrTxRow[]; incomplete: number };
@@ -74,7 +76,41 @@ const qtyFix = (s: string, dp: number) => {
 // Currency/marker words that match the ticker shape but are never tickers
 const NOT_TICKERS = new Set(["USD", "THB", "DCA", "CA", "GOLD", "OZ", "AM", "PM"]);
 
-export function parseActivityText(text: string): OcrParseResult {
+// ── eng-only rescue pass ───────────────────────────────────────────────────────
+// The eng+tha passes sometimes render a Latin ticker as Thai glyphs (IVV → "เง"),
+// while an English-only pass reads the ticker fine but mangles the Thai words.
+// Extract (share-count → ticker) pairs from the eng-only text: the broker prints
+// share counts with 7 decimals, so the count uniquely identifies its row and lets
+// the main parse adopt the eng reading for blocks whose ticker it couldn't read.
+export function extractTickerHints(text: string): Record<string, string> {
+  const hints: Record<string, string> = {};
+  const clash = new Set<string>();
+  const add = (q: string, t: string) => {
+    const k = numFix(q);
+    if (clash.has(k)) return;
+    if (hints[k] && hints[k] !== t) { delete hints[k]; clash.add(k); return; } // ambiguous → unusable
+    hints[k] = t;
+  };
+  const qty7 = (l: string) => l.match(/(\d+\.[\d\]]{7})(?!\d)/); // 7-decimal count ("]" = misread 1)
+  let pending: string | null = null, ttl = 0;
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    // Executed-price/date lines ("... 175.32 26 A.W. 69 - 21:46:06") are not headers —
+    // the mangled Thai label can shed uppercase junk that must not be taken as a ticker.
+    const dateLine = /[-–—]\s*\d{1,2}[:.]\d{2}/.test(line);
+    let ticker: string | null = null;
+    if (!dateLine) for (const m of line.matchAll(/\b([A-Z]{2,6})\b/g)) if (!NOT_TICKERS.has(m[1])) { ticker = m[1]; break; }
+    const q = qty7(line);
+    if (ticker && q) { add(q[1], ticker); pending = null; continue; }        // sell header: ticker + count
+    if (ticker && /\d+\.\d{2}(?!\d)/.test(line)) { pending = ticker; ttl = 3; continue; } // buy header: ticker + total
+    if (pending && ttl-- > 0) { if (q) { add(q[1], pending); pending = null; } } // count on a following line
+    else if (!dateLine) pending = null;
+  }
+  return hints;
+}
+
+export function parseActivityText(text: string, hints?: Record<string, string>): OcrParseResult {
   const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
   const rows: OcrTxRow[] = [];
   let incomplete = 0;
@@ -85,6 +121,16 @@ export function parseActivityText(text: string): OcrParseResult {
   const flush = () => {
     if (!cur) return;
     if (cur.skip) { cur = null; return; } // corporate action — dropped on purpose
+    // eng-rescue: when the main pass couldn't read this block's ticker, adopt the
+    // eng-only pass's reading for this exact share count (flagged in mergeParses).
+    // A ticker the main pass DID read cleanly is never overridden — the eng pass can
+    // shed uppercase junk — but a disagreement is surfaced as a review flag.
+    if (!cur.isGold && cur.qtyStr && hints) {
+      const hint = hints[cur.qtyStr];
+      const valid = cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol);
+      if (hint && !valid) { cur.symbol = hint; cur.symbolFromHint = true; }
+      else if (hint && valid && hint !== cur.symbol) cur.symbolHintMismatch = hint;
+    }
     // A ticker that OCR mangled must not be emitted with a wrong symbol
     const cleanSym = cur.isGold || (cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol));
     if (cur.side && cleanSym && cur.qty && cur.price && cur.iso) {
@@ -105,7 +151,8 @@ export function parseActivityText(text: string): OcrParseResult {
         qty: cur.qty, qtyStr: cur.qtyStr || String(cur.qty),
         price: cur.price, priceStr: cur.priceStr || String(cur.price),
         total: cur.total, currency: cur.currency, check, isGold: cur.isGold,
-        sideUncertain: cur.sideUncertain,
+        sideUncertain: cur.sideUncertain, symbolFromHint: cur.symbolFromHint,
+        symbolHintMismatch: cur.symbolHintMismatch,
       });
     } else if (cur.side || cur.price || cur.qty) {
       incomplete++;
@@ -154,7 +201,12 @@ export function parseActivityText(text: string): OcrParseResult {
       for (const tm of line.matchAll(/\b([A-Z]{1,6})\b/g)) {
         if (!NOT_TICKERS.has(tm[1])) { ticker = tm[1]; break; }
       }
-      if (goldHdr || (anyTotal && ticker) || sellM) {
+      const sellWord = compact.includes("ขาย") || compact.includes("ยาย") || compact.includes("บาย");
+      const buyWord = compact.includes("ซื้อ") || compact.includes("ือ");
+      // Share-count + หุ้น unit with an unreadable ticker ("ยาย เง 0.0045730 หุ้น") —
+      // still a header; the eng-rescue pass may recover the symbol at flush time.
+      const qtyUnit = !sellM && (sellWord || buyWord) ? line.match(/(-?[\d.OolI|\]]{6,})\s*(?:ห|Ku|Au|Kn)/) : null;
+      if (goldHdr || anyTotal || sellM || qtyUnit) {
         flush();
         const gold = !!goldHdr;
         // Side priority: the readable Thai word (ยาย/บาย are common OCR renderings of
@@ -162,12 +214,13 @@ export function parseActivityText(text: string): OcrParseResult {
         // be USD-funded; a gold sale shows USD proceeds), so if the word is unreadable we
         // flag rather than guess silently.
         let side: "B" | "S", uncertain = false;
-        if (compact.includes("ขาย") || compact.includes("ยาย") || compact.includes("บาย")) side = "S";
-        else if (compact.includes("ซื้อ") || compact.includes("ือ")) side = "B";
+        if (sellWord) side = "S";
+        else if (buyWord) side = "B";
         else if (bahtTotal && !sellM) side = "B";
         else { side = sellM ? "S" : "B"; uncertain = true; }
-        cur = { side, symbol: gold ? "MTS-GOLD" : (ticker ?? sellM![1]).toUpperCase(), isGold: gold, sideUncertain: uncertain };
-        if (sellM && !bahtTotal) { const f = qtyFix(sellM[2], 7); const v = parseFloat(f); if (v > 0) { cur.qty = v; cur.qtyStr = f; } }
+        cur = { side, symbol: gold ? "MTS-GOLD" : (ticker ?? sellM?.[1])?.toUpperCase(), isGold: gold, sideUncertain: uncertain };
+        const qtyTok = sellM ? sellM[2] : qtyUnit?.[1];
+        if (qtyTok && !bahtTotal) { const f = qtyFix(qtyTok, 7); const v = parseFloat(f); if (v > 0) { cur.qty = v; cur.qtyStr = f; } }
       } else if (cur && cur.price != null && (compact.includes("จริง") || /Executed\s*Price/i.test(line))) {
         // A second executed-price line while the open block already has its price means
         // the next block's header was too mangled to detect — flush so the open block
@@ -299,6 +352,8 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult): MergeResult {
   const rows: MergedRow[] = [];
 
   const finalize = (best: OcrTxRow, side: "B" | "S", flags: string[]) => {
+    if (best.symbolFromHint) flags.push("ชื่อหุ้นอ่านจากรอบภาษาอังกฤษ — ตรวจกับรูป");
+    if (best.symbolHintMismatch) flags.push(`รอบภาษาอังกฤษอ่านชื่อหุ้นเป็น ${best.symbolHintMismatch} — ตรวจกับรูป`);
     if (!best.isGold && decimals(best.qtyStr) !== SHARE_DECIMALS) flags.push(`ทศนิยมจำนวนหุ้นได้ ${decimals(best.qtyStr)} หลัก (ปกติ 7) — อาจอ่านตกหลัก`);
     if (best.check === "mismatch") flags.push("ราคา×จำนวน ไม่ตรงกับยอดรวมในรูป");
     const parts = best.csv.split(","); parts[1] = side; // csv was built with best.side; apply the resolved one
