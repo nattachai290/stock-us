@@ -48,3 +48,13 @@ export async function savePortfolio(token: string, fileId: string | null, name: 
 export async function deletePortfolio(token: string, fileId: string) {
   await driveReq(`https://www.googleapis.com/drive/v3/files/${fileId}`, token, { method: "DELETE" });
 }
+
+// The portfolio's display name is encoded in the Drive filename (portfolio-{name}.json),
+// so renaming is a metadata PATCH — no re-upload of the holdings blob.
+export async function renamePortfolio(token: string, fileId: string, newName: string): Promise<void> {
+  await driveReq(`https://www.googleapis.com/drive/v3/files/${fileId}`, token, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: `portfolio-${newName}.json` }),
+  });
+}
