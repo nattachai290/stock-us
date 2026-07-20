@@ -166,7 +166,9 @@ export function parseActivityText(text: string): OcrParseResult {
         if (mon) {
           cur.iso = `${toCEYear(td[3])}-${mon}-${td[1].padStart(2, "0")}T${td[4].padStart(2, "0")}:${td[5]}:00`;
           if (cur.price == null) {
-            const pm = line.match(/([\d,OolI|]+\.\d{2})/); // the x,xxx.xx before the date
+            // The executed price sits before the date; keep ALL its decimals (broker shows
+            // 2 or 4, e.g. 48.35 / 449.8440). Day/year have no decimal so this can't grab them.
+            const pm = line.match(/([\d,OolI|]+\.\d{2,})/);
             if (pm) { const v = toNum(pm[1]); if (v > 0) { cur.price = v; cur.priceStr = numFix(pm[1]); } }
           }
         }

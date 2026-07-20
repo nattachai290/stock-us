@@ -198,6 +198,21 @@ const TRUTH_TH_CA = [
   "23/11/2025 14:40,B,ENPH,0.1143497,26.76", "19/11/2025 11:49,B,ALAB,0.0219307,139.53",
   "19/11/2025 11:48,B,MELI,0.0014788,2069.22", "17/11/2025 08:26,B,TEM,0.0450000,68.00",
 ];
+// The remaining 9 Thai stock screenshots. Ground truth is every fully-visible row
+// (partial/cut-off rows at a screen edge are expected to drop). minExact is the measured
+// floor — Thai OCR recall is modest, but SILENT-wrong stays 0 and symbols stay valid.
+const TH_STOCK_MORE = {
+  "th-stock-3.jpg": ["12/12/2025 22:01,B,TMDX,0.0265417,128.10","12/12/2025 09:32,B,LLY,0.0031127,1008.76","12/12/2025 09:31,B,KO,0.0454348,69.11","05/12/2025 21:59,B,LMT,0.0069579,449.8440","26/11/2025 16:56,B,NVDA,0.0087506,181.70"],
+  "th-stock-4.jpg": ["16/01/2026 12:49,B,NFLX,0.0358800,88.35","12/01/2026 14:59,B,TSLA,0.0072081,441.17","12/01/2026 14:59,B,HPQ,0.1480446,21.48","12/01/2026 14:59,B,CSCO,0.0437585,72.90","24/12/2025 21:49,B,EOSE,0.2676623,11.9180"],
+  "th-stock-5.jpg": ["04/02/2026 22:02,B,IONQ,0.0875916,35.7340","04/02/2026 22:02,B,EOSE,0.2419230,12.9380","04/02/2026 22:02,B,ALAB,0.0202162,154.8260","04/02/2026 22:01,B,ACHR,0.4499856,6.9780","30/01/2026 22:22,B,IIPR,0.0655267,48.0720"],
+  "th-stock-6.jpg": ["02/03/2026 21:15,B,LOW,0.0121538,260.00","26/02/2026 21:46,B,NUE,0.0181953,175.32","26/02/2026 21:45,B,HPQ,0.1683732,18.9460","19/02/2026 21:40,B,GOOGL,0.0105228,301.25","19/02/2026 21:39,B,MA,0.0060522,523.7680"],
+  "th-stock-7.jpg": ["29/05/2026 11:21,B,NEE,0.0350494,87.02","29/05/2026 11:21,B,HCA,0.0079450,382.63","29/05/2026 11:20,B,APD,0.0108106,282.13","25/05/2026 13:22,B,LOW,0.0141679,215.98","19/05/2026 20:48,B,JPM,0.0101286,299.1520"],
+  "th-stock-8.jpg": ["15/04/2026 21:51,B,CVX,0.0167419,185.1640","14/04/2026 16:43,B,TMUS,0.0162892,190.31","03/04/2026 14:12,B,CRCL,0.0327992,92.99","02/04/2026 13:17,B,ISRG,0.0066409,456.26","02/04/2026 13:16,B,ENPH,0.0820249,36.94"],
+  "th-stock-9.jpg": ["01/07/2026 15:07,S,VIG,0.0140287,236.09","26/06/2026 14:16,B,ASTS,0.0458687,64.75","25/06/2026 14:20,B,PRCT,0.1446601,20.60","25/06/2026 14:20,B,CVX,0.0175479,169.82","24/06/2026 18:56,B,ELV,0.0074888,396.59"],
+  "th-stock-10.jpg": ["14/07/2026 21:07,B,GRBK,0.0415577,71.9480","14/07/2026 21:07,B,DHI,0.0199570,149.8220","14/07/2026 21:06,B,AMPH,0.1589411,18.8120","09/07/2026 22:34,B,SNPS,0.0068129,438.8680"],
+  "th-stock-11.jpg": ["17/06/2026 21:20,B,CRM,0.0190059,160.4760","17/06/2026 21:20,B,ADBE,0.0149609,203.8640","17/06/2026 21:19,B,NOW,0.0298329,102.2360","12/06/2026 20:16,B,META,0.0052834,573.49","12/06/2026 20:15,B,AMZN,0.0124522,243.33"],
+};
+const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4 };
 
 // eng+tha, using the exact self-hosted data the browser ships (public/tesseract)
 const worker = await createWorker("eng+tha", 1, {
@@ -222,6 +237,7 @@ const CASES = [
   { name: "gold DCA Thai (MTS-GOLD)", imgs: [FIX("gold-mts-thai.jpg")], truth: TRUTH_GOLD_THAI, minExact: 4 },
   { name: "Thai stock sells", imgs: [FIX("th-stock-sells.jpg")], truth: TRUTH_TH_SELLS, minExact: 6 },
   { name: "Thai stock buys + CA-skip", imgs: [FIX("th-stock-ca.jpg")], truth: TRUTH_TH_CA, minExact: 3 },
+  ...Object.entries(TH_STOCK_MORE).map(([f, truth]) => ({ name: f, imgs: [FIX(f)], truth, minExact: TH_MIN_EXACT[f] })),
 ];
 for (const c of CASES) {
   const m = mergeParses(await ocrPass(c.imgs, 2), await ocrPass(c.imgs, 3));
