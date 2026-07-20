@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { isGoldSymbol, fetchGold } from "../../lib/goldprice";
 
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -123,11 +124,13 @@ export async function GET(request: NextRequest) {
 
   const symList = symbols.split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
 
-  // 1) Primary pass: Cboe.
-  const results = await mapLimit(symList, 6, fetchCboe);
+  // 1) Primary pass: spot gold (XAUUSD/XAU) → metals providers; everything else → Cboe.
+  const results = await mapLimit(symList, 6, (sym) => isGoldSymbol(sym) ? fetchGold(sym) : fetchCboe(sym));
 
   // 2) Fallback pass: send everything Cboe couldn't resolve to CNBC (batched).
-  const misses = results.filter(r => r.error).map(r => r.symbol);
+  //    Exclude gold — CNBC's "XAU" is the PHLX Gold/Silver *index* (~150), not spot
+  //    gold (~$4000), so it must never fall back there.
+  const misses = results.filter(r => r.error && !isGoldSymbol(r.symbol)).map(r => r.symbol);
   if (misses.length) {
     const cnbc = new Map<string, QuoteResult>();
     for (const grp of chunk(misses, 40)) {
