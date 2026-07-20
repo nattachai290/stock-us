@@ -42,7 +42,10 @@ export default function OcrImport({ onAppend }: { onAppend: (csv: string) => voi
     setBusy(true); setResult(null); setProgress("กำลังโหลดตัวอ่าน OCR (ครั้งแรกอาจใช้เวลาสักครู่)...");
     try {
       const { createWorker } = await import("tesseract.js");
-      const worker = await createWorker("eng", 1, {
+      // eng+tha: the broker app can be in Thai (ขาย/ซื้อ, Thai months, Buddhist year).
+      // Thai data doesn't hurt the English screenshots (verified) and the parser reads
+      // both layouts. Numbers/oz/USD stay Latin either way.
+      const worker = await createWorker("eng+tha", 1, {
         workerPath: "/tesseract/worker.min.js",
         corePath: "/tesseract",
         langPath: "/tesseract",

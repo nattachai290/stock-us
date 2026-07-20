@@ -101,6 +101,39 @@ Weight 0.0029 oz
   check("gold: isGold set", g?.isGold === true);
 }
 
+{
+  // Thai gold layout (deterministic, no OCR): Thai side words, "ราคาที่ได้จริง" +
+  // executed price on the date line, Buddhist year, Thai month, "น้ำหนัก x oz".
+  const sell = `
+ขาย MTS-GOLD 28.66 USD
+ราคาที่ได้จริง 4,094.87 24 มิ.ย. 69 - 08:42:13 น.
+น้ำหนัก 0.0070 oz
+`;
+  const m = mergeParses(parseActivityText(sell), parseActivityText(sell));
+  const r = m.rows[0];
+  check("thai: ขาย → Sell", r?.side === "S", r?.csv);
+  check("thai: → XAUUSD", r?.symbol === "XAUUSD");
+  check("thai: Buddhist 69 → 2026", r?.iso?.startsWith("2026-06-24"));
+  check("thai: 24h time kept", r?.csv.startsWith("24/06/2026 08:42"));
+  check("thai: exec price off date line", r?.priceStr === "4094.87");
+  check("thai: weight → qty", r?.qtyStr === "0.0070");
+  check("thai: USD cross-check ok", r?.check === "ok");
+
+  const buy = `ซื้อ MTS-GOLD 14,000.96 บาท
+ราคาที่ได้จริง 4,357.98 5 มิ.ย. 69 - 21:48:33 น.
+น้ำหนัก 0.0976 oz`;
+  const mb = mergeParses(parseActivityText(buy), parseActivityText(buy));
+  check("thai: ซื้อ → Buy", mb.rows[0]?.side === "B", mb.rows[0]?.csv);
+  check("thai: บาท total → THB (unverified)", mb.rows[0]?.currency === "THB" && mb.rows[0]?.check === "unverified");
+
+  // A side word OCR'd away entirely must flag, never silently pick a side
+  const garbled = `MTS-GOLD 14,000.96 บาท
+ราคาที่ได้จริง 4,357.98 5 มิ.ย. 69 - 21:48:33 น.
+น้ำหนัก 0.0976 oz`;
+  const mg = mergeParses(parseActivityText(garbled), parseActivityText(garbled));
+  check("thai: unreadable side is flagged", mg.rows[0]?.flags.some(f => f.includes("ซื้อ/ขาย")), JSON.stringify(mg.rows[0]?.flags));
+}
+
 // ── End-to-end OCR tests on real screenshots ──────────────────────────────────
 
 const TRUTH_ALL = [
@@ -113,15 +146,24 @@ const TRUTH_ALL = [
 ];
 const TRUTH_SINGLE = TRUTH_ALL.slice(-3);
 
-// Gold DCA screenshot (MTS-GOLD) — Weight/oz, THB totals, all map to XAUUSD
+// Gold DCA screenshot (MTS-GOLD, English) — Weight/oz, THB totals, all map to XAUUSD
 const TRUTH_GOLD = [
   "12/11/2024 21:57,B,XAUUSD,0.0043,2611.23", "08/07/2025 01:20,B,XAUUSD,0.0036,3329.87",
   "22/10/2025 07:42,B,XAUUSD,0.0007,4078.18", "07/11/2025 21:47,B,XAUUSD,0.0030,3990.78",
   "25/11/2025 08:11,B,XAUUSD,0.0029,4127.68",
 ];
+// Thai gold screenshot — Thai side words, Buddhist year, Thai months. Thai OCR of
+// ซื้อ/ขาย is noisy, so the guarantee here is SILENT-wrong===0 (any misread side is
+// flagged); exact ≥4/5 is the measured baseline.
+const TRUTH_GOLD_THAI = [
+  "26/05/2026 17:14,S,XAUUSD,0.0070,4527.64", "26/05/2026 18:50,S,XAUUSD,0.0220,4512.44",
+  "05/06/2026 21:48,B,XAUUSD,0.0976,4357.98", "08/06/2026 09:05,S,XAUUSD,0.0080,4320.64",
+  "24/06/2026 08:42,S,XAUUSD,0.0070,4094.87",
+];
 
-const worker = await createWorker("eng", 1, {
-  langPath: path.join(ROOT, "node_modules", "@tesseract.js-data", "eng", "4.0.0_best_int"),
+// eng+tha, using the exact self-hosted data the browser ships (public/tesseract)
+const worker = await createWorker("eng+tha", 1, {
+  langPath: path.join(ROOT, "public", "tesseract"),
   gzip: true, cacheMethod: "none",
 });
 async function ocrPass(imgs, scale) {
@@ -139,6 +181,7 @@ const CASES = [
   { name: "3-image set", imgs: ["activity-1.jpg", "activity-2.jpg", "activity-3.jpg"].map(FIX), truth: TRUTH_ALL, minExact: 10 },
   { name: "single image", imgs: [FIX("activity-4-single.jpg")], truth: TRUTH_SINGLE, minExact: 2 },
   { name: "gold DCA (MTS-GOLD)", imgs: [FIX("gold-mts.jpg")], truth: TRUTH_GOLD, minExact: 5 },
+  { name: "gold DCA Thai (MTS-GOLD)", imgs: [FIX("gold-mts-thai.jpg")], truth: TRUTH_GOLD_THAI, minExact: 4 },
 ];
 for (const c of CASES) {
   const m = mergeParses(await ocrPass(c.imgs, 2), await ocrPass(c.imgs, 3));
