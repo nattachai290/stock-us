@@ -505,7 +505,7 @@ const CASES = [
 // count. Real-screenshot OCR can't hit 100% exact (even the English fixtures don't), so
 // treating a low exact threshold as "passed" would be misleading. The exact recall is
 // reported as a number for transparency, and an aggregate regression floor guards it.
-let exactTotal = 0, truthTotal = 0, cleanTotal = 0, flagOkTotal = 0, flagWrongTotal = 0, missTotal = 0;
+let exactTotal = 0, truthTotal = 0, cleanTotal = 0, flagOkTotal = 0, flagWrongTotal = 0, missTotal = 0, incTotal = 0;
 console.log("\n— OCR exact-match recall (reported, not a pass/fail) —");
 for (const c of CASES) {
   const hints = extractTickerHints(await ocrText(engWorker, c.imgs, 2));
@@ -523,7 +523,7 @@ for (const c of CASES) {
   const flagWrong = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length > 0).length;
   const miss = c.truth.length - exact;
   exactTotal += exact; truthTotal += c.truth.length;
-  cleanTotal += clean; flagOkTotal += flagOk; flagWrongTotal += flagWrong; missTotal += miss;
+  cleanTotal += clean; flagOkTotal += flagOk; flagWrongTotal += flagWrong; missTotal += miss; incTotal += m.incomplete;
   const fl = flagOk + flagWrong;
   console.log(`   ${c.name}: ผ่านสะอาด ${clean}/${c.truth.length} · ติดธง ${fl}${fl ? ` (ค่าถูก ${flagOk}${flagWrong ? `, ค่าคลาดเคลื่อน ${flagWrong}` : ""})` : ""} · หายไป ${miss} · อ่านไม่ครบ ${m.incomplete}`);
   // ── hard guarantees (these decide pass/fail) ──
@@ -539,7 +539,7 @@ await engWorker.terminate();
 
 // Aggregate regression floor (so a code change that tanks recall is caught), reported honestly
 const pct = Math.round(exactTotal / truthTotal * 100);
-console.log(`\nOCR exact recall overall: ${exactTotal}/${truthTotal} rows (${pct}%) — ผ่านสะอาด ${cleanTotal} · ติดธงให้ตรวจ ${flagOkTotal + flagWrongTotal} (ค่าถูก ${flagOkTotal}, ค่าคลาดเคลื่อน ${flagWrongTotal}) · หายไป ${missTotal}`);
+console.log(`\nOCR exact recall overall: ${exactTotal}/${truthTotal} rows (${pct}%) — ผ่านสะอาด ${cleanTotal} · ติดธงให้ตรวจ ${flagOkTotal + flagWrongTotal} (ค่าถูก ${flagOkTotal}, ค่าคลาดเคลื่อน ${flagWrongTotal}) · หายไป ${missTotal} · อ่านไม่ครบ ${incTotal}`);
 check(`recall did not regress (>= 95/${truthTotal})`, exactTotal >= 95, `got ${exactTotal}`);
 
 console.log(`\n${pass} passed, ${fail} failed`);
