@@ -85,6 +85,83 @@ Shares 0.1740529`;
 }
 
 {
+  // Thousands separator read as a space ("3 130.88") must still yield the full price
+  const t = `ซื้อ MTS-GOLD 249.90 บาท
+ราคาที่ได้จริง 3 130.88 1 เม.ย. 68 - 22:12:59 น.
+น้ำหนัก 0.0023 oz`;
+  const m = mergeParses(parseActivityText(t), parseActivityText(t));
+  check("space-thousands price joined", m.rows[0]?.priceStr === "3130.88", m.rows[0]?.csv);
+}
+
+{
+  // Cross-text confirmation: pass B's parse tripped on the row (month mangled beyond
+  // repair) but its raw text still carries the price+time line and the oz line — the
+  // "seen in one pass" flag must clear. Without that evidence the flag stays.
+  const goodText = `ซื้อ MTS-GOLD 249.85 บาท
+ราคาที่ได้จริง 3,076.18 9 เม.ย. 68 - 21:00:59 น.
+น้ำหนัก 0.0023 oz`;
+  const brokenText = goodText.replace("9 เม.ย. 68", "9 ฌฆ.ฑ. 68"); // month unreadable → row drops
+  const a = parseActivityText(goodText), b = parseActivityText(brokenText);
+  check("cross-text setup: broken pass parses nothing", b.rows.length === 0);
+  const m = mergeParses(a, b, { a: goodText, b: brokenText });
+  check("cross-text: confirmed row not flagged seen-once", m.rows.length === 1 && !m.rows[0].flags.some(f => f.includes("รอบ OCR เดียว")), JSON.stringify(m.rows[0]?.flags));
+  const m2 = mergeParses(a, b, { a: goodText, b: "ไม่มีอะไรเกี่ยวข้องเลย" });
+  check("cross-text: unconfirmed row keeps the flag", m2.rows[0]?.flags.some(f => f.includes("รอบ OCR เดียว")), JSON.stringify(m2.rows[0]?.flags));
+  // no texts passed (old callers) → behaves as before
+  const m3 = mergeParses(a, b);
+  check("cross-text: no texts → flag as before", m3.rows[0]?.flags.some(f => f.includes("รอบ OCR เดียว")));
+}
+
+{
+  // Thai STOCK total-style header = structurally a BUY even in USD (sell headers
+  // print "<qty> หุ้น", never a money total) — no side flag despite unreadable ซื้อ
+  const t = `ขื้อ SNPS 3.00 USD
+ราคาที่ได้จริง 438.8680 9 ก.ค. 69 - 22:34:42 น.
+จำนวนหุ้น 0.0068129`;
+  const m = mergeParses(parseActivityText(t), parseActivityText(t));
+  check("thai-stock USD total: confident B, no side flag", m.rows[0]?.side === "B" && !m.rows[0]?.flags.some(f => f.includes("ซื้อ/ขาย")), JSON.stringify(m.rows[0]));
+
+  // ...but only for Thai lines: a mangled ENGLISH header (sells DO print USD totals) stays flagged
+  const en = `8uy XYZ 12.09 USD
+Executed Price 325.00 3 Jul 2026 - 06:03:10 PM
+Shares 0.0371384`;
+  const men = mergeParses(parseActivityText(en), parseActivityText(en));
+  check("mangled EN header: side stays flagged", men.rows[0]?.flags.some(f => f.includes("ซื้อ/ขาย")), JSON.stringify(men.rows[0]?.flags));
+
+  // ...and a block that turns out GOLD (oz line) with a USD total could be sale
+  // proceeds — even with the product name mangled past recognition, flush downgrades
+  const g = `ขอ M7S-G01D 31.69 USD
+ราคาที่ได้จริง 4,527.64 26 พ.ค. 69 - 17:14:24 น.
+น้ำหนัก 0.0070 oz`;
+  const mg = mergeParses(parseActivityText(g), parseActivityText(g));
+  check("mangled-gold USD total: downgraded to uncertain", mg.rows[0]?.symbol === "XAUUSD" && mg.rows[0]?.flags.some(f => f.includes("ซื้อ/ขาย")), JSON.stringify(mg.rows[0]));
+}
+
+{
+  // eng-rescued name that the portfolio confirms (share count matched + user holds
+  // it) has two independent confirmations → clean; not-held stays flagged (tested
+  // in the rescue block above).
+  const tha = `ยาย เง 0.0045730 หุ้น
+ราคาที่ได้จริง 748.48 1 ก.ค. 69 - 20:20:39 น.`;
+  const hints = { "0.0045730": "IVV" };
+  const m = mergeParses(parseActivityText(tha, hints, ["IVV"]), parseActivityText(tha, hints, ["IVV"]));
+  check("rescued name in portfolio: no flag", m.rows[0]?.symbol === "IVV" && !m.rows[0]?.flags.some(f => f.includes("อังกฤษ")), JSON.stringify(m.rows[0]?.flags));
+}
+
+{
+  // Cross-text confirmation path 2: the other pass's date/time collapsed entirely but
+  // its header (symbol + share count) and the price survived → seen-once flag clears.
+  const good = `ยาย VIG 0.0140287 หุ้น
+ราคาที่ได้จริง 236.09 1 ก.ค. 69 - 15:07:40 น.`;
+  const broken = `ยาย VIG 0.0140287 หุ้น
+ราคาที่ได้จริง 236.09 เววรงซอ`;
+  const a = parseActivityText(good), b = parseActivityText(broken);
+  check("cross-text-2 setup: broken pass drops the row", b.rows.length === 0);
+  const m = mergeParses(a, b, { a: good, b: broken });
+  check("cross-text-2: header+price confirms, no seen-once flag", m.rows.length === 1 && !m.rows[0].flags.some(f => f.includes("รอบ OCR เดียว")), JSON.stringify(m.rows[0]?.flags));
+}
+
+{
   // AM/PM edge cases + oldest-first ordering
   const t = `
 Buy AAA 10.00 USD
@@ -266,6 +343,13 @@ const TRUTH_GOLD_THAI = [
   "05/06/2026 21:48,B,XAUUSD,0.0976,4357.98", "08/06/2026 09:05,S,XAUUSD,0.0080,4320.64",
   "24/06/2026 08:42,S,XAUUSD,0.0070,4094.87",
 ];
+// Thai gold, LIGHT theme — invert-preprocessing must handle both themes; the
+// 3,130.88 price is prone to "3 130.88" (thousands separator read as a space).
+const TRUTH_GOLD_THAI_LIGHT = [
+  "13/03/2025 10:14,B,XAUUSD,0.0075,2944.63", "18/03/2025 22:19,B,XAUUSD,0.0024,3028.29",
+  "24/03/2025 22:24,B,XAUUSD,0.0024,3012.06", "01/04/2025 22:12,B,XAUUSD,0.0023,3130.88",
+  "09/04/2025 21:00,B,XAUUSD,0.0023,3076.18", "15/04/2025 20:56,B,XAUUSD,0.0023,3213.12",
+];
 // Thai STOCK screenshots (ซื้อ/ขาย + US tickers, จำนวนหุ้น). Thai OCR of symbols/side is
 // noisy, so the guarantee is SILENT-wrong===0 (mangled rows drop or flag). CA (รับ/หัก)
 // rows are skipped. exact baselines are the measured minimums.
@@ -322,6 +406,7 @@ const CASES = [
   { name: "US DCA (activity-5)", imgs: [FIX("activity-5-dca.jpg")], truth: TRUTH_DCA, minExact: 4 },
   { name: "gold DCA (MTS-GOLD)", imgs: [FIX("gold-mts.jpg")], truth: TRUTH_GOLD, minExact: 5 },
   { name: "gold DCA Thai (MTS-GOLD)", imgs: [FIX("gold-mts-thai.jpg")], truth: TRUTH_GOLD_THAI, minExact: 4 },
+  { name: "gold DCA Thai light theme", imgs: [FIX("gold-mts-thai-light.jpg")], truth: TRUTH_GOLD_THAI_LIGHT, minExact: 6 },
   { name: "Thai stock sells", imgs: [FIX("th-stock-sells.jpg")], truth: TRUTH_TH_SELLS, minExact: 6 },
   { name: "Thai stock buys + CA-skip", imgs: [FIX("th-stock-ca.jpg")], truth: TRUTH_TH_CA, minExact: 3 },
   ...Object.entries(TH_STOCK_MORE).map(([f, truth]) => ({ name: f, imgs: [FIX(f)], truth, minExact: TH_MIN_EXACT[f] })),
@@ -330,19 +415,27 @@ const CASES = [
 // count. Real-screenshot OCR can't hit 100% exact (even the English fixtures don't), so
 // treating a low exact threshold as "passed" would be misleading. The exact recall is
 // reported as a number for transparency, and an aggregate regression floor guards it.
-let exactTotal = 0, truthTotal = 0;
+let exactTotal = 0, truthTotal = 0, cleanTotal = 0, flagOkTotal = 0, flagWrongTotal = 0, missTotal = 0;
 console.log("\n— OCR exact-match recall (reported, not a pass/fail) —");
 for (const c of CASES) {
   const hints = extractTickerHints(await ocrText(engWorker, c.imgs, 2));
   // The app passes the portfolio's symbols in; screenshots ARE of the user's own
   // portfolio, so the truth symbols are exactly what the app would supply.
   const known = [...new Set(c.truth.map(t => t.split(",")[2]))];
-  const m = mergeParses(parseActivityText(await ocrText(worker, c.imgs, 2), hints, known),
-                        parseActivityText(await ocrText(worker, c.imgs, 3), hints, known));
+  const textA = await ocrText(worker, c.imgs, 2), textB = await ocrText(worker, c.imgs, 3);
+  const m = mergeParses(parseActivityText(textA, hints, known),
+                        parseActivityText(textB, hints, known), { a: textA, b: textB });
   const exact = c.truth.filter(t => m.rows.some(r => r.csv === t)).length;
   const silent = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length === 0);
+  // Honest per-case breakdown: clean pass / flagged (right vs off) / missing
+  const clean = m.rows.filter(r => c.truth.includes(r.csv) && r.flags.length === 0).length;
+  const flagOk = m.rows.filter(r => c.truth.includes(r.csv) && r.flags.length > 0).length;
+  const flagWrong = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length > 0).length;
+  const miss = c.truth.length - exact;
   exactTotal += exact; truthTotal += c.truth.length;
-  console.log(`   ${c.name}: exact ${exact}/${c.truth.length}${exact < c.truth.length ? `  (${c.truth.length - exact} dropped/flagged)` : "  ✓ all matched"}`);
+  cleanTotal += clean; flagOkTotal += flagOk; flagWrongTotal += flagWrong; missTotal += miss;
+  const fl = flagOk + flagWrong;
+  console.log(`   ${c.name}: ผ่านสะอาด ${clean}/${c.truth.length} · ติดธง ${fl}${fl ? ` (ค่าถูก ${flagOk}${flagWrong ? `, ค่าคลาดเคลื่อน ${flagWrong}` : ""})` : ""} · หายไป ${miss}`);
   // ── hard guarantees (these decide pass/fail) ──
   check(`${c.name}: no row is silently wrong (matches expect or is flagged)`, silent.length === 0, silent.map(r => r.csv).join(" | "));
   check(`${c.name}: no spurious rows invented (<= ${c.truth.length})`, m.rows.length <= c.truth.length, `got ${m.rows.length}`);
@@ -353,7 +446,7 @@ await engWorker.terminate();
 
 // Aggregate regression floor (so a code change that tanks recall is caught), reported honestly
 const pct = Math.round(exactTotal / truthTotal * 100);
-console.log(`\nOCR exact recall overall: ${exactTotal}/${truthTotal} rows (${pct}%).${exactTotal < truthTotal ? " OCR drops/flags the rest; use English screenshots for higher accuracy." : ""}`);
+console.log(`\nOCR exact recall overall: ${exactTotal}/${truthTotal} rows (${pct}%) — ผ่านสะอาด ${cleanTotal} · ติดธงให้ตรวจ ${flagOkTotal + flagWrongTotal} (ค่าถูก ${flagOkTotal}, ค่าคลาดเคลื่อน ${flagWrongTotal}) · หายไป ${missTotal}`);
 check(`recall did not regress (>= 75/${truthTotal})`, exactTotal >= 75, `got ${exactTotal}`);
 
 console.log(`\n${pass} passed, ${fail} failed`);

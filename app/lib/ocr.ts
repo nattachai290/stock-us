@@ -19,6 +19,7 @@ export type OcrTxRow = {
   symbolFromHint?: boolean;// ticker came from the eng-only rescue pass — flag for review
   symbolHintMismatch?: string;// eng pass read a DIFFERENT ticker for this row — flag for review
   symbolCorrected?: string;// what OCR actually read, before the portfolio-whitelist fix
+  sideFromTotal?: boolean; // side B inferred from a Thai total-style header (internal)
 };
 
 export type OcrParseResult = { rows: OcrTxRow[]; incomplete: number };
@@ -144,6 +145,10 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
   const flush = () => {
     if (!cur) return;
     if (cur.skip) { cur = null; return; } // corporate action — dropped on purpose
+    // The "Thai total-header = buy" inference only holds for stocks; if the block
+    // turned out to be gold (an oz weight line appeared, even with the product name
+    // mangled), a USD total could be sale proceeds — downgrade to uncertain.
+    if (cur.sideFromTotal && cur.isGold && cur.currency !== "THB") cur.sideUncertain = true;
     // eng-rescue: when the main pass couldn't read this block's ticker, adopt the
     // eng-only pass's reading for this exact share count (flagged in mergeParses).
     // A ticker the main pass DID read cleanly is never overridden — the eng pass can
@@ -151,7 +156,13 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     if (!cur.isGold && cur.qtyStr && hints) {
       const hint = hints[cur.qtyStr];
       const valid = cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol);
-      if (hint && !valid) { cur.symbol = hint; cur.symbolFromHint = true; }
+      if (hint && !valid) {
+        cur.symbol = hint;
+        // A rescued name the user actually holds has two independent confirmations
+        // (the 7-decimal share count matched AND the portfolio contains it) — clean.
+        // A rescued name NOT in the portfolio keeps the review flag.
+        cur.symbolFromHint = !knownSet.has(hint);
+      }
       else if (hint && valid && hint !== cur.symbol) cur.symbolHintMismatch = hint;
     }
     // Portfolio-whitelist fix: a read ticker the user doesn't hold, one edit away from
@@ -244,12 +255,19 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
         // ขาย), else a baht total (definitely a buy). A USD total is ambiguous (a buy can
         // be USD-funded; a gold sale shows USD proceeds), so if the word is unreadable we
         // flag rather than guess silently.
-        let side: "B" | "S", uncertain = false;
+        let side: "B" | "S", uncertain = false, fromTotal = false;
         if (sellWord) side = "S";
         else if (buyWord) side = "B";
         else if (bahtTotal && !sellM) side = "B";
+        else if (anyTotal && !sellM && !gold && /[฀-๿]/.test(line)) {
+          // Thai STOCK layout: a sell header prints "<qty> หุ้น", never a money total —
+          // so a total-style Thai header is structurally a BUY even when USD-funded.
+          // (English headers do print totals on sells → Thai-glyph guard; gold sells
+          // print USD proceeds → if the block turns out gold, flush downgrades this.)
+          side = "B"; fromTotal = true;
+        }
         else { side = sellM ? "S" : "B"; uncertain = true; }
-        cur = { side, symbol: gold ? "MTS-GOLD" : (ticker ?? sellM?.[1])?.toUpperCase(), isGold: gold, sideUncertain: uncertain };
+        cur = { side, symbol: gold ? "MTS-GOLD" : (ticker ?? sellM?.[1])?.toUpperCase(), isGold: gold, sideUncertain: uncertain, sideFromTotal: fromTotal };
         const qtyTok = sellM ? sellM[2] : qtyUnit?.[1];
         if (qtyTok && !bahtTotal) { const f = qtyFix(qtyTok, 7); const v = parseFloat(f); if (v > 0) { cur.qty = v; cur.qtyStr = f; } }
       } else if (cur && cur.price != null && (compact.includes("จริง") || /Executed\s*Price/i.test(line))) {
@@ -331,8 +349,9 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
         if (cur.price == null) {
           // The executed price sits before the date; keep ALL its decimals (broker shows
           // 2 or 4, e.g. 48.35 / 449.8440). Searching only the pre-date prefix means a
-          // mangled price can never be silently replaced by the time digits.
-          const pm = pricePrefix.match(/([\d,.OolI|]+\.\d{2,})/);
+          // mangled price can never be silently replaced by the time digits. A thousands
+          // separator read as a space ("3 130.88") is joined first.
+          const pm = pricePrefix.replace(/(\d)\s+(?=\d{3}\.\d{2})/g, "$1").match(/([\d,.OolI|]+\.\d{2,})/);
           if (pm) { const v = toNum(pm[1]); if (v > 0) { cur.price = v; cur.priceStr = numFix(pm[1]); } }
         }
       }
@@ -370,10 +389,38 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
 export type MergedRow = OcrTxRow & { flags: string[] };
 export type MergeResult = { rows: MergedRow[]; incomplete: number };
 
+// A row only ONE pass managed to parse can still be confirmed against the OTHER
+// pass's raw text: if that text has a line carrying the row's price AND its hh:mm
+// (the executed-price line — a misassociated price would sit next to a different
+// time), with the share count on a nearby line, then all three numbers existed in
+// the other pass's view too and its parse merely tripped on layout noise.
+function confirmedInText(r: OcrTxRow, text?: string): boolean {
+  if (!text) return false;
+  const hhmm = r.csv.slice(11, 16);
+  const priceKey = r.priceStr.replace(/\./g, "");
+  const qtyKey = r.qtyStr.replace(/\./g, "");
+  const lines = text.split("\n").map(l => l.replace(/[Oo]/g, "0").replace(/[lI|]/g, "1").replace(/[,\s]/g, ""));
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].includes(hhmm) || !lines[i].replace(/\./g, "").includes(priceKey)) continue;
+    for (let j = Math.max(0, i - 2); j <= Math.min(lines.length - 1, i + 2); j++)
+      if (lines[j].replace(/\./g, "").includes(qtyKey)) return true;
+  }
+  // Second path: the header line carries symbol + share count together (a sell
+  // header) with the price on one of the next lines — covers a pass whose date/time
+  // collapsed entirely while the header itself stayed readable.
+  const symKey = r.symbol.replace(/[Oo]/g, "0").replace(/[lI|]/g, "1");
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].includes(symKey) || !lines[i].replace(/\./g, "").includes(qtyKey)) continue;
+    for (let j = i; j <= Math.min(lines.length - 1, i + 2); j++)
+      if (lines[j].replace(/\./g, "").includes(priceKey)) return true;
+  }
+  return false;
+}
+
 const decimals = (s: string) => (s.split(".")[1] || "").length;
 const SHARE_DECIMALS = 7;
 
-export function mergeParses(a: OcrParseResult, b: OcrParseResult): MergeResult {
+export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: string; b?: string }): MergeResult {
   // Key on date+symbol (NOT side): the Thai side word is noisy, so two passes can
   // disagree on Buy/Sell for the same transaction — we reconcile side here rather than
   // emit two rows. A single symbol won't have two transactions at the same minute.
@@ -411,7 +458,10 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult): MergeResult {
       }
     }
 
-    if (!rb) { flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป"); finalize(ra, side, flags); continue; }
+    if (!rb) {
+      if (!confirmedInText(ra, texts?.b)) flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป");
+      finalize(ra, side, flags); continue;
+    }
 
     // Resolve qty/price: the reading whose price×qty matches the printed USD total wins
     // (arithmetic can't lie); else prefer the 7-decimal Shares read.
@@ -441,7 +491,8 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult): MergeResult {
   // rows the 2nd pass found that the 1st missed entirely
   for (const rb of b.rows) {
     if (seen.has(key(rb))) continue;
-    const flags = ["เห็นในรอบ OCR เดียว — ตรวจกับรูป"];
+    const flags: string[] = [];
+    if (!confirmedInText(rb, texts?.a)) flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป");
     if (rb.sideUncertain) flags.push("อ่านชนิด ซื้อ/ขาย ไม่ชัด — ตรวจกับรูป");
     finalize(rb, rb.side, flags);
   }

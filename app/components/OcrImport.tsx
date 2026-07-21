@@ -82,7 +82,8 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       await engWorker.terminate();
       const hints = extractTickerHints(engText);
       const merged = mergeParses(parseActivityText(texts[2], hints, knownSymbols),
-                                 parseActivityText(texts[3], hints, knownSymbols));
+                                 parseActivityText(texts[3], hints, knownSymbols),
+                                 { a: texts[2], b: texts[3] });
       setResult(merged);
       setProgress(merged.rows.length ? "" : "อ่านไม่พบรายการในรูป — ใช้ภาพแคปหน้า Activity ที่เห็นบรรทัดเต็มๆ");
     } catch (e: any) {
