@@ -525,11 +525,14 @@ for (const c of CASES) {
   exactTotal += exact; truthTotal += c.truth.length;
   cleanTotal += clean; flagOkTotal += flagOk; flagWrongTotal += flagWrong; missTotal += miss;
   const fl = flagOk + flagWrong;
-  console.log(`   ${c.name}: ผ่านสะอาด ${clean}/${c.truth.length} · ติดธง ${fl}${fl ? ` (ค่าถูก ${flagOk}${flagWrong ? `, ค่าคลาดเคลื่อน ${flagWrong}` : ""})` : ""} · หายไป ${miss}`);
+  console.log(`   ${c.name}: ผ่านสะอาด ${clean}/${c.truth.length} · ติดธง ${fl}${fl ? ` (ค่าถูก ${flagOk}${flagWrong ? `, ค่าคลาดเคลื่อน ${flagWrong}` : ""})` : ""} · หายไป ${miss} · อ่านไม่ครบ ${m.incomplete}`);
   // ── hard guarantees (these decide pass/fail) ──
   check(`${c.name}: no row is silently wrong (matches expect or is flagged)`, silent.length === 0, silent.map(r => r.csv).join(" | "));
   check(`${c.name}: no spurious rows invented (<= ${c.truth.length})`, m.rows.length <= c.truth.length, `got ${m.rows.length}`);
   check(`${c.name}: every emitted symbol is a valid ticker`, m.rows.every(r => /^([A-Z]{1,6}|XAUUSD)$/.test(r.symbol)), m.rows.map(r => r.symbol).join(","));
+  // The "อ่านไม่ครบ" count the user sees must match the rows genuinely missing from the
+  // merged output — never inflated by per-pass failures that the other pass recovered.
+  check(`${c.name}: incomplete count matches missing rows (expect ${c.expIncomplete ?? 0})`, m.incomplete === (c.expIncomplete ?? 0), `got ${m.incomplete}`);
 }
 await worker.terminate();
 await engWorker.terminate();
