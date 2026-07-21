@@ -1,6 +1,6 @@
 "use client";
 import { useRef, useState } from "react";
-import { parseActivityText, mergeParses, extractTickerHints, type MergeResult } from "../lib/ocr";
+import { parseActivityText, mergeParses, extractTickerHints, extractMonthHints, type MergeResult } from "../lib/ocr";
 import { grayscaleInvert, resizeBilinear } from "../lib/preprocess";
 import { btnGhost, btnPrimary } from "../lib/ui";
 
@@ -54,32 +54,36 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       const texts: Record<number, string> = { 2: "", 3: "" };
       for (const scale of [2, 3]) {
         for (let i = 0; i < list.length; i++) {
-          setProgress(`กำลังอ่านรูป ${i + 1}/${list.length} (รอบ ${scale - 1}/3)...`);
+          setProgress(`กำลังอ่านรูป ${i + 1}/${list.length} (รอบ ${scale - 1}/4)...`);
           const blob = await preprocess(list[i], scale);
           const { data } = await worker.recognize(blob);
           texts[scale] += data.text + "\n";
         }
       }
       await worker.terminate();
-      // Third pass, English-only: the eng model reads Latin tickers the Thai model
-      // mangles; its text is used solely to rescue symbols (keyed by share count).
-      const engWorker = await createWorker("eng", 1, {
-        workerPath: "/tesseract/worker.min.js",
-        corePath: "/tesseract",
-        langPath: "/tesseract",
-        gzip: true,
-      });
-      let engText = "";
-      for (let i = 0; i < list.length; i++) {
-        setProgress(`กำลังอ่านรูป ${i + 1}/${list.length} (รอบ 3/3)...`);
-        const blob = await preprocess(list[i], 2);
-        const { data } = await engWorker.recognize(blob);
-        engText += data.text + "\n";
-      }
-      await engWorker.terminate();
+      // Specialist single-language passes: the eng-only model reads Latin tickers the
+      // Thai model mangles; the tha-only model reads Thai month abbreviations the eng+tha
+      // model renders as Latin ("ต.ค." → "A.A."). Each rescues just its strength — tickers
+      // (keyed by share count) and months (keyed by day+time) — from the main passes.
+      const runLang = async (lang: string, label: string) => {
+        const w = await createWorker(lang, 1, {
+          workerPath: "/tesseract/worker.min.js", corePath: "/tesseract", langPath: "/tesseract", gzip: true,
+        });
+        let text = "";
+        for (let i = 0; i < list.length; i++) {
+          setProgress(`กำลังอ่านรูป ${i + 1}/${list.length} (${label})...`);
+          const { data } = await w.recognize(await preprocess(list[i], 2));
+          text += data.text + "\n";
+        }
+        await w.terminate();
+        return text;
+      };
+      const engText = await runLang("eng", "รอบ 3/4 · ชื่อหุ้น");
+      const thaText = await runLang("tha", "รอบ 4/4 · เดือน");
       const hints = extractTickerHints(engText);
-      const merged = mergeParses(parseActivityText(texts[2], hints, knownSymbols),
-                                 parseActivityText(texts[3], hints, knownSymbols),
+      const monthHints = extractMonthHints(thaText);
+      const merged = mergeParses(parseActivityText(texts[2], hints, knownSymbols, monthHints),
+                                 parseActivityText(texts[3], hints, knownSymbols, monthHints),
                                  { a: texts[2], b: texts[3] });
       setResult(merged);
       setProgress(merged.rows.length ? "" : "อ่านไม่พบรายการในรูป — ใช้ภาพแคปหน้า Activity ที่เห็นบรรทัดเต็มๆ");

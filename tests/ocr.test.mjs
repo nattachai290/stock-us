@@ -22,7 +22,7 @@ const FIX = (f) => path.join(ROOT, "tests", "fixtures", f);
 
 // compile the TS modules on the fly so the test always runs the current source
 const src = execSync("npx esbuild app/lib/ocr.ts --format=esm", { cwd: ROOT }).toString();
-const { parseActivityText, mergeParses, extractTickerHints } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
+const { parseActivityText, mergeParses, extractTickerHints, extractMonthHints } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 const preSrc = execSync("npx esbuild app/lib/preprocess.ts --format=esm", { cwd: ROOT }).toString();
 const { grayscaleInvert, resizeBilinear } = await import("data:text/javascript;base64," + Buffer.from(preSrc).toString("base64"));
 
@@ -354,6 +354,22 @@ Weight 0.0029 oz
 }
 
 {
+  // tha-only month rescue: eng+tha rendered the month as Latin ("A.A."), but a tha-only
+  // pass read it (keyed by day+time). The month is FILLED as a real read → clean, no flag.
+  const main = `ขาย MTS-GOLD 24.45 USD
+ราคาที่ได้จริง 4076.61 27 A.A. 68 - 08:00:49 น.
+น้ำหนัก 0.0060 oz`;
+  const monthHints = extractMonthHints("ราคาที่ได้จริง 4076.61 27 ต.ค. 68 - 08:00:49 น.");
+  check("month-hints: extracts day+time → month", monthHints["27|08:00"]?.mon === "10", JSON.stringify(monthHints));
+  const m = mergeParses(parseActivityText(main, undefined, undefined, monthHints), parseActivityText(main, undefined, undefined, monthHints), { a: main, b: main });
+  check("tha-month: filled from tha-only read", m.rows[0]?.csv === "27/10/2025 08:00,S,XAUUSD,0.0060,4076.61", m.rows[0]?.csv);
+  check("tha-month: clean, NOT flagged", m.rows[0]?.flags.length === 0, JSON.stringify(m.rows[0]?.flags));
+  // No hint for that day+time → still deferred to neighbour inference (unchanged path).
+  const m2 = mergeParses(parseActivityText(main, undefined, undefined, {}), parseActivityText(main, undefined, undefined, {}));
+  check("tha-month: no hint → not filled (drops without anchors)", m2.rows.length === 0 && m2.incomplete === 1, `rows=${m2.rows.length} inc=${m2.incomplete}`);
+}
+
+{
   // Section header ("ตุลาคม 2568") supplies a month anchor for rows under it.
   const withHeader = `ตุลาคม 2568
 ขาย MTS-GOLD 24.45 USD
@@ -602,6 +618,10 @@ const engWorker = await createWorker("eng", 1, {
   langPath: path.join(ROOT, "public", "tesseract"),
   gzip: true, cacheMethod: "none",
 });
+const thaWorker = await createWorker("tha", 1, {
+  langPath: path.join(ROOT, "public", "tesseract"),
+  gzip: true, cacheMethod: "none",
+});
 async function ocrText(w, imgs, scale) {
   let text = "";
   for (const p of imgs) {
@@ -644,12 +664,13 @@ let exactTotal = 0, truthTotal = 0, cleanTotal = 0, flagOkTotal = 0, flagWrongTo
 console.log("\n— OCR exact-match recall (reported, not a pass/fail) —");
 for (const c of CASES) {
   const hints = extractTickerHints(await ocrText(engWorker, c.imgs, 2));
+  const monthHints = extractMonthHints(await ocrText(thaWorker, c.imgs, 2));
   // The app passes the portfolio's symbols in; screenshots ARE of the user's own
   // portfolio, so the truth symbols are exactly what the app would supply.
   const known = [...new Set(c.truth.map(t => t.split(",")[2]))];
   const textA = await ocrText(worker, c.imgs, 2), textB = await ocrText(worker, c.imgs, 3);
-  const m = mergeParses(parseActivityText(textA, hints, known),
-                        parseActivityText(textB, hints, known), { a: textA, b: textB });
+  const m = mergeParses(parseActivityText(textA, hints, known, monthHints),
+                        parseActivityText(textB, hints, known, monthHints), { a: textA, b: textB });
   const exact = c.truth.filter(t => m.rows.some(r => r.csv === t)).length;
   const silent = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length === 0);
   // Honest per-case breakdown: clean pass / flagged (right vs off) / missing
@@ -692,6 +713,7 @@ for (const c of CASES) {
 }
 await worker.terminate();
 await engWorker.terminate();
+await thaWorker.terminate();
 
 // Aggregate regression floor (so a code change that tanks recall is caught), reported honestly
 const pct = Math.round(exactTotal / truthTotal * 100);

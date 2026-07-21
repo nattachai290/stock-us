@@ -184,7 +184,27 @@ export function extractTickerHints(text: string): Record<string, string> {
   return hints;
 }
 
-export function parseActivityText(text: string, hints?: Record<string, string>, known?: string[]): OcrParseResult {
+// Read months from a Thai-ONLY OCR pass. The eng+tha model renders many Thai month
+// abbreviations as Latin ("ต.ค." → "A.A.", "ก.พ." → "n.w."), but a tha-only pass reads
+// them correctly — at the cost of mangling the Latin tickers/numbers, which the main
+// passes already have. Keyed by day+time (both passes read those alike), so the main
+// parse can borrow the correctly-read month for a line whose month it lost. Ambiguous
+// keys (two dates at the same day+minute — effectively impossible) are dropped.
+export function extractMonthHints(thaText: string): Record<string, { mon: string; year: string }> {
+  const hints: Record<string, { mon: string; year: string }> = {};
+  const clash = new Set<string>();
+  for (const raw of thaText.split("\n")) {
+    const pd = parseThaiDate(raw.trim().replace(/\](?=\d)/g, "1").replace(/(?<=\d)\]/g, "1"));
+    if (!pd?.mon) continue;
+    const k = `${pd.day.padStart(2, "0")}|${pd.hh.padStart(2, "0")}:${pd.mm}`;
+    if (clash.has(k)) continue;
+    if (hints[k] && (hints[k].mon !== pd.mon || hints[k].year !== pd.year)) { delete hints[k]; clash.add(k); continue; }
+    hints[k] = { mon: pd.mon, year: pd.year };
+  }
+  return hints;
+}
+
+export function parseActivityText(text: string, hints?: Record<string, string>, known?: string[], monthHints?: Record<string, { mon: string; year: string }>): OcrParseResult {
   const knownSet = new Set((known ?? []).map(s => s.toUpperCase()));
   const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
   const rows: OcrTxRow[] = [];
@@ -396,8 +416,12 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       const numLine = line.replace(/\](?=\d)/g, "1").replace(/(?<=\d)\]/g, "1");
       const pd = parseThaiDate(numLine);
       if (pd) {
-        // Month read → set the date now; month unreadable → defer for anchor inference.
+        // Month read here → use it. Else borrow the month a tha-only pass read for this
+        // exact day+time (a real read, cross-confirmed by day/time → clean, no flag).
+        // Only if that also fails do we defer for same-month-neighbour inference.
+        const mh = !pd.mon ? monthHints?.[`${pd.day.padStart(2, "0")}|${pd.hh.padStart(2, "0")}:${pd.mm}`] : undefined;
         if (pd.mon) cur.iso = `${toCEYear(pd.year)}-${pd.mon}-${pd.day.padStart(2, "0")}T${pd.hh.padStart(2, "0")}:${pd.mm}:00`;
+        else if (mh) cur.iso = `${toCEYear(mh.year)}-${mh.mon}-${pd.day.padStart(2, "0")}T${pd.hh.padStart(2, "0")}:${pd.mm}:00`;
         else { cur.pendDay = pd.day; cur.pendYear = pd.year; cur.pendHH = pd.hh; cur.pendMM = pd.mm; cur.ord = li; cur.monthReadAs = pd.rawMon; }
         if (cur.price == null) {
           // The executed price sits before the date; keep ALL its decimals (broker shows
