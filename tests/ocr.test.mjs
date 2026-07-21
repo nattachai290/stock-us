@@ -321,7 +321,8 @@ Weight 0.0029 oz
   const m = mergeParses(parseActivityText(bracketed), parseActivityText(bracketed), { a: bracketed, b: bracketed });
   const r = m.rows.find(x => x.csv.includes("08:00"));
   check("month-anchor: same-month bracket fills the month", r?.csv === "27/10/2025 08:00,S,XAUUSD,0.0060,4076.61", r?.csv);
-  check("month-anchor: inferred month is flagged", r?.flags.some(f => f.includes("เดือนเดา")), JSON.stringify(r?.flags));
+  check("month-anchor: inferred month is flagged", r?.flags.some(f => f.includes("เดาเป็นเดือน")), JSON.stringify(r?.flags));
+  check("month-anchor: flag records what OCR read", r?.flags.some(f => f.includes('อ่านเดือนได้ "A.A."')), JSON.stringify(r?.flags));
   check("month-anchor: all 3 rows present", m.rows.length === 3 && m.incomplete === 0, `rows=${m.rows.length} inc=${m.incomplete}`);
 
   // A month boundary between the neighbours (Oct above, Nov below) is NOT safe → drop.

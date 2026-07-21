@@ -21,6 +21,7 @@ export type OcrTxRow = {
   symbolCorrected?: string;// what OCR actually read, before the portfolio-whitelist fix
   sideFromTotal?: boolean; // side B inferred from a Thai total-style header (internal)
   monthInferred?: boolean; // month was filled from same-month neighbours, not read — flag
+  monthReadAs?: string;    // what OCR actually rendered the month token as ("A.A.")
 };
 
 export type OcrParseResult = { rows: OcrTxRow[]; incomplete: number };
@@ -53,7 +54,7 @@ const thaiMonth = (tok: string): string | undefined => {
 // undefined when the month glyphs are unreadable/ambiguous — day/year/time are still
 // trusted (validated in range) so the caller can defer for month inference. `prefix`
 // is the text before the date, where the executed price sits.
-type ThaiDate = { day: string; mon?: string; year: string; hh: string; mm: string; prefix: string };
+type ThaiDate = { day: string; mon?: string; rawMon: string; year: string; hh: string; mm: string; prefix: string };
 function parseThaiDate(numLine: string): ThaiDate | null {
   // Strict path (clean spacing). Preferred for the day/time/prefix fields.
   let a: ThaiDate | null = null;
@@ -61,7 +62,7 @@ function parseThaiDate(numLine: string): ThaiDate | null {
   if (td) {
     const dN = +td[1], hN = +td[4], mN = +td[5];
     if (dN >= 1 && dN <= 31 && hN <= 23 && mN <= 59)
-      a = { day: td[1], mon: thaiMonth(td[2]), year: td[3], hh: td[4], mm: td[5], prefix: numLine.slice(0, td.index) };
+      a = { day: td[1], mon: thaiMonth(td[2]), rawMon: td[2].trim(), year: td[3], hh: td[4], mm: td[5], prefix: numLine.slice(0, td.index) };
   }
   if (a?.mon) return a;
   // Degraded fallback: month/day glyphs collapsed into Latin/digits ("26 0.9. 69",
@@ -83,7 +84,7 @@ function parseThaiDate(numLine: string): ThaiDate | null {
       }
       const dN = parseInt(dd, 10), hN = +t[2], mN = +t[3];
       if (dd && dN >= 1 && dN <= 31 && hN <= 23 && mN <= 59)
-        b = { day: dd, mon: thaiMonth(monToks.join("")), year: y, hh: t[2], mm: t[3], prefix: toks.join(" ") };
+        b = { day: dd, mon: thaiMonth(monToks.join("")), rawMon: monToks.join(" ").trim(), year: y, hh: t[2], mm: t[3], prefix: toks.join(" ") };
     }
   }
   if (b?.mon) return b;
@@ -195,7 +196,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
   // month must share it. We collect every readable (day,month,year) as a positional
   // "anchor" (including section headers), and defer blocks whose month didn't resolve
   // until after the pass, then fill them only when the bracketing anchors agree.
-  type Draft = Partial<OcrTxRow> & { pendDay?: string; pendHH?: string; pendMM?: string; pendYear?: string; ord?: number };
+  type Draft = Partial<OcrTxRow> & { pendDay?: string; pendHH?: string; pendMM?: string; pendYear?: string; ord?: number; monthReadAs?: string };
   let cur: Draft | null = null;
   const anchors: { ord: number; mon: string; year: number }[] = [];
   const pending: Draft[] = [];
@@ -218,7 +219,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       total: c.total, currency: c.currency, check, isGold: c.isGold,
       sideUncertain: c.sideUncertain, symbolFromHint: c.symbolFromHint,
       symbolHintMismatch: c.symbolHintMismatch, symbolCorrected: c.symbolCorrected,
-      monthInferred: c.monthInferred,
+      monthInferred: c.monthInferred, monthReadAs: c.monthReadAs,
     });
   };
 
@@ -397,7 +398,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       if (pd) {
         // Month read → set the date now; month unreadable → defer for anchor inference.
         if (pd.mon) cur.iso = `${toCEYear(pd.year)}-${pd.mon}-${pd.day.padStart(2, "0")}T${pd.hh.padStart(2, "0")}:${pd.mm}:00`;
-        else { cur.pendDay = pd.day; cur.pendYear = pd.year; cur.pendHH = pd.hh; cur.pendMM = pd.mm; cur.ord = li; }
+        else { cur.pendDay = pd.day; cur.pendYear = pd.year; cur.pendHH = pd.hh; cur.pendMM = pd.mm; cur.ord = li; cur.monthReadAs = pd.rawMon; }
         if (cur.price == null) {
           // The executed price sits before the date; keep ALL its decimals (broker shows
           // 2 or 4, e.g. 48.35 / 449.8440). Searching only the pre-date prefix means a
@@ -511,7 +512,7 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
   const rows: MergedRow[] = [];
 
   const finalize = (best: OcrTxRow, side: "B" | "S", flags: string[]) => {
-    if (best.monthInferred) flags.push("เดือนเดาจากรายการข้างเคียง — ตรวจกับรูป");
+    if (best.monthInferred) flags.push(`OCR อ่านเดือนได้ "${best.monthReadAs}" — เดาเป็นเดือน ${best.csv.slice(3, 5)} จากรายการข้างเคียง ตรวจกับรูป`);
     if (best.symbolFromHint) flags.push("ชื่อหุ้นอ่านจากรอบภาษาอังกฤษ — ตรวจกับรูป");
     if (best.symbolHintMismatch) flags.push(`รอบภาษาอังกฤษอ่านชื่อหุ้นเป็น ${best.symbolHintMismatch} — ตรวจกับรูป`);
     if (best.symbolCorrected) flags.push(`OCR อ่านได้ "${best.symbolCorrected}" — แก้เป็น ${best.symbol} ตามหุ้นในพอร์ต ตรวจกับรูป`);
