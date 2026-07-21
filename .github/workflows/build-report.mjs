@@ -30,12 +30,19 @@ const tail = (log, n = 60) => {
   return (lines.length > n ? lines.slice(-n) : lines).join("\n");
 };
 
-// Pull the per-row "⚠ [fixture] ได้: ..." / "✗ [fixture] หาย: ..." detail lines out of
-// the OCR log so they can be shown OUTSIDE the collapsed log block — the flagged and
-// missing rows are what a reviewer actually needs to eyeball, so they shouldn't be
-// buried in a dropdown (or truncated by the log tail).
-const ocrReviewRows = (log) =>
-  log.split("\n").map(l => l.trim()).filter(l => /^[⚠✗] \[/.test(l));
+// Pull the per-row detail lines out of the OCR log and sort them into the categories a
+// reviewer scans by — flagged (value-correct vs value-off), missing, unread — so they
+// can be shown OUTSIDE the collapsed log block. Empty categories are dropped entirely.
+const ocrReview = (log) => {
+  const L = log.split("\n").map(l => l.trim());
+  const flagOk = L.filter(l => l.startsWith("⚠ [") && l.includes("(ตรง expect)"));
+  const flagBad = L.filter(l => l.startsWith("⚠ [") && l.includes("(ไม่ตรง)"));
+  const missing = L.filter(l => l.startsWith("✗ ["));
+  const incomplete = L.filter(l => l.startsWith("⊘ ["));
+  const total = flagOk.length + flagBad.length + missing.length + incomplete.length;
+  return { flagOk, flagBad, missing, incomplete, total };
+};
+const codeBlock = (lines) => ["```", ...lines, "```"];
 
 let anyFail = false, anyMissing = false;
 const rows = [];
@@ -51,7 +58,7 @@ for (const c of CHECKS) {
   else { icon = "❌"; status = `failed (exit ${code})`; anyFail = true; }
   const extra = summarize(log);
   rows.push(`| ${icon} ${c.label} | \`${c.cmd}\` | ${status}${extra ? ` — ${extra}` : ""} |`);
-  if (c.key === "ocr") review = ocrReviewRows(log);
+  if (c.key === "ocr") review = ocrReview(log);
   if (log.trim()) {
     // The OCR log is long (unit tests + per-fixture detail); keep more of its tail so
     // the per-row lines aren't cut off.
@@ -59,11 +66,22 @@ for (const c of CHECKS) {
   }
 }
 
-// Always-visible "rows to review" section (flagged + missing), so a reviewer sees the
-// specific rows without expanding the log. Empty → a clean "nothing to review" note.
-const reviewBlock = review.length
-  ? ["#### 🔍 OCR — แถวที่ต้องตรวจ (" + review.length + ")", "", "```", ...review, "```"]
-  : ["_🔍 OCR: ทุกแถวผ่านสะอาด — ไม่มีแถวต้องตรวจ_"];
+// Always-visible "rows to review" section, grouped by category. Each header (and the
+// flagged sub-headers) appears ONLY when it has rows; a fully clean run shows one note.
+const reviewBlock = [];
+if (!review || review.total === 0) {
+  reviewBlock.push("_🔍 OCR: ทุกแถวผ่านสะอาด — ไม่มีแถวต้องตรวจ_");
+} else {
+  reviewBlock.push(`#### 🔍 OCR — รายการที่ต้องดู (${review.total})`, "");
+  const flagged = review.flagOk.length + review.flagBad.length;
+  if (flagged) {
+    reviewBlock.push(`**⚠ ติดธง (${flagged})**`, "");
+    if (review.flagOk.length) reviewBlock.push(`ค่าถูก (${review.flagOk.length})`, ...codeBlock(review.flagOk));
+    if (review.flagBad.length) reviewBlock.push(`ค่าคลาดเคลื่อน (${review.flagBad.length})`, ...codeBlock(review.flagBad));
+  }
+  if (review.missing.length) reviewBlock.push(`**✗ หายไป (${review.missing.length})**`, ...codeBlock(review.missing));
+  if (review.incomplete.length) reviewBlock.push(`**⊘ อ่านไม่ครบ (${review.incomplete.length})**`, ...codeBlock(review.incomplete));
+}
 
 const header = anyFail ? "### ❌ Tests: some checks failed"
   : anyMissing ? "### ⚠️ Tests: incomplete run"

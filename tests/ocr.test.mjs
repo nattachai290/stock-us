@@ -670,8 +670,9 @@ for (const c of CASES) {
   for (const t of c.truth) {
     if (m.rows.some(r => r.csv === t)) continue;
     const near = m.rows.find(r => r.csv.slice(0, 16) === t.slice(0, 16));
-    console.log(`      ✗ [${c.name}] หาย/ไม่ตรง expect: ${t}${near ? `  (ได้: ${near.csv})` : "  (ไม่มีแถวออกมา)"}`);
+    console.log(`      ✗ [${c.name}] expect: ${t}${near ? `  (ได้: ${near.csv})` : "  (ไม่มีแถวออกมา)"}`);
   }
+  if (m.incomplete > 0) console.log(`      ⊘ [${c.name}] อ่านไม่ครบ ${m.incomplete} รายการ (ตรวจไม่ออกว่าแถวไหน — เทียบกับรูป)`);
   // ── hard guarantees (these decide pass/fail) ──
   check(`${c.name}: no row is silently wrong (matches expect or is flagged)`, silent.length === 0, silent.map(r => r.csv).join(" | "));
   check(`${c.name}: no spurious rows invented (<= ${c.truth.length})`, m.rows.length <= c.truth.length, `got ${m.rows.length}`);
