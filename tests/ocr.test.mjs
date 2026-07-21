@@ -366,7 +366,7 @@ const CASES = [
 // count. Real-screenshot OCR can't hit 100% exact (even the English fixtures don't), so
 // treating a low exact threshold as "passed" would be misleading. The exact recall is
 // reported as a number for transparency, and an aggregate regression floor guards it.
-let exactTotal = 0, truthTotal = 0;
+let exactTotal = 0, truthTotal = 0, cleanTotal = 0, flagOkTotal = 0, flagWrongTotal = 0, missTotal = 0;
 console.log("\n— OCR exact-match recall (reported, not a pass/fail) —");
 for (const c of CASES) {
   const hints = extractTickerHints(await ocrText(engWorker, c.imgs, 2));
@@ -378,8 +378,15 @@ for (const c of CASES) {
                         parseActivityText(textB, hints, known), { a: textA, b: textB });
   const exact = c.truth.filter(t => m.rows.some(r => r.csv === t)).length;
   const silent = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length === 0);
+  // Honest per-case breakdown: clean pass / flagged (right vs off) / missing
+  const clean = m.rows.filter(r => c.truth.includes(r.csv) && r.flags.length === 0).length;
+  const flagOk = m.rows.filter(r => c.truth.includes(r.csv) && r.flags.length > 0).length;
+  const flagWrong = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length > 0).length;
+  const miss = c.truth.length - exact;
   exactTotal += exact; truthTotal += c.truth.length;
-  console.log(`   ${c.name}: exact ${exact}/${c.truth.length}${exact < c.truth.length ? `  (${c.truth.length - exact} dropped/flagged)` : "  ✓ all matched"}`);
+  cleanTotal += clean; flagOkTotal += flagOk; flagWrongTotal += flagWrong; missTotal += miss;
+  const fl = flagOk + flagWrong;
+  console.log(`   ${c.name}: ผ่านสะอาด ${clean}/${c.truth.length} · ติดธง ${fl}${fl ? ` (ค่าถูก ${flagOk}${flagWrong ? `, ค่าคลาดเคลื่อน ${flagWrong}` : ""})` : ""} · หายไป ${miss}`);
   // ── hard guarantees (these decide pass/fail) ──
   check(`${c.name}: no row is silently wrong (matches expect or is flagged)`, silent.length === 0, silent.map(r => r.csv).join(" | "));
   check(`${c.name}: no spurious rows invented (<= ${c.truth.length})`, m.rows.length <= c.truth.length, `got ${m.rows.length}`);
@@ -390,7 +397,7 @@ await engWorker.terminate();
 
 // Aggregate regression floor (so a code change that tanks recall is caught), reported honestly
 const pct = Math.round(exactTotal / truthTotal * 100);
-console.log(`\nOCR exact recall overall: ${exactTotal}/${truthTotal} rows (${pct}%).${exactTotal < truthTotal ? " OCR drops/flags the rest; use English screenshots for higher accuracy." : ""}`);
+console.log(`\nOCR exact recall overall: ${exactTotal}/${truthTotal} rows (${pct}%) — ผ่านสะอาด ${cleanTotal} · ติดธงให้ตรวจ ${flagOkTotal + flagWrongTotal} (ค่าถูก ${flagOkTotal}, ค่าคลาดเคลื่อน ${flagWrongTotal}) · หายไป ${missTotal}`);
 check(`recall did not regress (>= 75/${truthTotal})`, exactTotal >= 75, `got ${exactTotal}`);
 
 console.log(`\n${pass} passed, ${fail} failed`);
