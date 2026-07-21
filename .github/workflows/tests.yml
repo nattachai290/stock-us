@@ -56,6 +56,7 @@ jobs:
           run tsc     "Type-check (tsc --noEmit)"      npx tsc --noEmit
           run build   "Production build (next build)"  npm run build
           run gold    "Gold-price tests (test:gold)"   npm run test:gold
+          run invest  "Invested-series tests (test:invested)" npm run test:invested
           run ocr     "OCR pipeline tests (test:ocr)"  npm run test:ocr
 
           echo "overall=$overall" >> "$GITHUB_OUTPUT"

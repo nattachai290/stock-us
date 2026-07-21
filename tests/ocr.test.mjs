@@ -68,6 +68,23 @@ const passB = passA.replace("December 2025\nExecuted Price", "December 2025\nBuy
 }
 
 {
+  // Both passes agree on qty/price but one misread the printed TOTAL ("11.92"→"1.92",
+  // a real browser-run case) — the pass whose arithmetic agrees must win: no mismatch flag.
+  const good = `Buy RKLB 11.92 USD
+Executed Price 68.37 20 Jul 2026 - 09:41:42 AM
+Shares 0.1740529`;
+  const bad = good.replace("11.92 USD", "1.92 USD");
+  for (const [a, b] of [[bad, good], [good, bad]]) {
+    const m = mergeParses(parseActivityText(a), parseActivityText(b));
+    check(`total-misread (${a === bad ? "A" : "B"} bad): check ok, no flag`,
+      m.rows[0]?.check === "ok" && !m.rows[0]?.flags.some(f => f.includes("ยอดรวม")), JSON.stringify(m.rows[0]?.flags));
+  }
+  // but when BOTH passes read the bad total, the mismatch flag must stay
+  const mb = mergeParses(parseActivityText(bad), parseActivityText(bad));
+  check("total-misread (both bad): mismatch stays flagged", mb.rows[0]?.flags.some(f => f.includes("ยอดรวม")), JSON.stringify(mb.rows[0]?.flags));
+}
+
+{
   // AM/PM edge cases + oldest-first ordering
   const t = `
 Buy AAA 10.00 USD
@@ -225,6 +242,16 @@ const TRUTH_ALL = [
 ];
 const TRUTH_SINGLE = TRUTH_ALL.slice(-3);
 
+// English US-stock DCA screenshot (dark theme) — three same-day 11.92-USD DCA buys
+// + one lump buy. The 11.92 totals are prone to leading-digit drops ("1.92"), which
+// the cross-pass arithmetic tiebreak must absorb without flagging.
+const TRUTH_DCA = [
+  "16/07/2026 20:09,B,IONQ,10.7935135,37.00",
+  "20/07/2026 09:41,B,ASTS,0.2052431,57.98",
+  "20/07/2026 09:41,B,RKLB,0.1740529,68.37",
+  "20/07/2026 09:42,B,SPCX,0.0949493,125.33",
+];
+
 // Gold DCA screenshot (MTS-GOLD, English) — Weight/oz, THB totals, all map to XAUUSD
 const TRUTH_GOLD = [
   "12/11/2024 21:57,B,XAUUSD,0.0043,2611.23", "08/07/2025 01:20,B,XAUUSD,0.0036,3329.87",
@@ -292,6 +319,7 @@ async function ocrText(w, imgs, scale) {
 const CASES = [
   { name: "3-image set", imgs: ["activity-1.jpg", "activity-2.jpg", "activity-3.jpg"].map(FIX), truth: TRUTH_ALL, minExact: 10 },
   { name: "single image", imgs: [FIX("activity-4-single.jpg")], truth: TRUTH_SINGLE, minExact: 2 },
+  { name: "US DCA (activity-5)", imgs: [FIX("activity-5-dca.jpg")], truth: TRUTH_DCA, minExact: 4 },
   { name: "gold DCA (MTS-GOLD)", imgs: [FIX("gold-mts.jpg")], truth: TRUTH_GOLD, minExact: 5 },
   { name: "gold DCA Thai (MTS-GOLD)", imgs: [FIX("gold-mts-thai.jpg")], truth: TRUTH_GOLD_THAI, minExact: 4 },
   { name: "Thai stock sells", imgs: [FIX("th-stock-sells.jpg")], truth: TRUTH_TH_SELLS, minExact: 6 },

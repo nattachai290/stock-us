@@ -416,7 +416,12 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult): MergeResult {
     // Resolve qty/price: the reading whose price×qty matches the printed USD total wins
     // (arithmetic can't lie); else prefer the 7-decimal Shares read.
     let best = ra;
-    if (ra.qtyStr !== rb.qtyStr || ra.priceStr !== rb.priceStr) {
+    if (ra.qtyStr === rb.qtyStr && ra.priceStr === rb.priceStr) {
+      // Same numbers in both passes, but one pass misread the printed TOTAL (a leading
+      // digit drops easily: "11.92" → "1.92") — trust the pass where arithmetic agrees
+      // rather than flagging a row that is actually consistent.
+      if (ra.check !== "ok" && rb.check === "ok") best = rb;
+    } else {
       const aUsd = ra.check === "ok", bUsd = rb.check === "ok";
       if (aUsd !== bUsd) {
         best = aUsd ? ra : rb;

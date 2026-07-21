@@ -7,6 +7,7 @@ const CHECKS = [
   { key: "tsc", label: "Type-check", cmd: "npx tsc --noEmit" },
   { key: "build", label: "Build", cmd: "next build" },
   { key: "gold", label: "Gold-price tests", cmd: "npm run test:gold" },
+  { key: "invest", label: "Invested-series tests", cmd: "npm run test:invested" },
   { key: "ocr", label: "OCR pipeline tests", cmd: "npm run test:ocr" },
 ];
 
