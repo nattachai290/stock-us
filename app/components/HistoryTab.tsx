@@ -142,7 +142,7 @@ export default function HistoryTab({
       {showTxImport&&(
         <div style={{background:"var(--card)",borderRadius:8,padding:16,marginBottom:12,border:"1px solid var(--line)"}}>
           <div style={{fontSize:13,fontWeight:600,color:"var(--brass)",marginBottom:6}}>Import ประวัติ ซื้อ/ขาย</div>
-          <div style={{fontSize:12,color:"var(--mut)",marginBottom:8}}>Format: <code style={{color:"var(--brass)"}}>DD/MM/YYYY HH:MM,Side(B/S),Symbol,จำนวน,ราคา</code> — เวลาใส่หรือไม่ใส่ก็ได้, <code style={{color:"var(--brass)"}}>BRK.B → BRK-B</code> อัตโนมัติ</div>
+          <div style={{fontSize:12,color:"var(--mut)",marginBottom:8}}>Format: <code style={{color:"var(--brass)"}}>DD/MM/YYYY HH:MM,Side(B/S),Symbol,จำนวน,ราคา</code> — เวลาใส่หรือไม่ใส่ก็ได้</div>
           <textarea value={txImportText} onChange={e=>setTxImportText(e.target.value)}
             placeholder={"01/11/2025 21:21,B,ACLS,0.1499694,81.95\n18/06/2026 07:20,S,ACLS,0.0445361,184.12\n02/07/2026 15:03,SPLIT,CRWD,4\n02/07/2026 15:03,+,CRWD,0.5311213,0\n02/07/2026 15:03,-,CRWD,0.1327803"}
             style={{width:"100%",minHeight:140,background:"var(--bg)",color:"var(--ink)",border:"1px solid var(--line)",borderRadius:6,padding:10,fontSize:12,resize:"vertical",fontFamily:"monospace",boxSizing:"border-box"}}/>

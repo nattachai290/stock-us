@@ -901,14 +901,6 @@ export default function App() {
   const totalRealizedAll = holdings.reduce((s:number,h:any) => s + (h.realizedHistory||[]).reduce((s2:number,r:any)=>s2+r.gain,0), 0);
   const realizedTxCount = holdings.reduce((s:number,h:any) => s + (h.realizedHistory||[]).length, 0);
 
-  // Gross capital ever put in (every buy, incl. positions later sold/removed) — over raw
-  // `holdings` like Realized above so the two stats cover the same universe. Entries
-  // imported without buyHistory fall back to their stored starting basis shares×avgCost.
-  const totalInvested = holdings.reduce((s:number,h:any) => {
-    const buys = h.buyHistory||[];
-    return s + (buys.length ? buys.reduce((s2:number,b:any)=>s2+(b.qty*b.price||0),0) : (h.shares*h.avgCost||0));
-  }, 0);
-
   // Today's % across the whole portfolio, derived from each position's already-fetched changePct
   // (per-share prev-close implied by currentPrice/changePct) — purely a render-time aggregate, no new data source.
   const todayBase = activeHoldings.reduce((s:number,h:any)=>{
@@ -1063,10 +1055,6 @@ export default function App() {
               </div>
               <div style={{display:"flex",gap:16,marginTop:14,paddingTop:12,borderTop:"1px solid var(--line)",flexWrap:"wrap"}}>
                 <div>
-                  <div style={{fontSize:10,color:"var(--faint)"}}>ลงทุนสะสมทั้งหมด</div>
-                  <div style={{fontSize:13,fontWeight:700,color:"var(--ink)"}}>${totalInvested.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-                </div>
-                <div>
                   <div style={{fontSize:10,color:"var(--faint)"}}>ต้นทุนรวม (ถืออยู่)</div>
                   <div style={{fontSize:13,fontWeight:700,color:"var(--ink)"}}>${tc.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
                 </div>
@@ -1088,7 +1076,7 @@ export default function App() {
                 {refreshing ? (status||"กำลังดึงราคา...") : "อัพเดทราคา"}
               </button>
               <div style={{fontSize:11,color:"var(--faint)",marginTop:8,textAlign:"center"}}>
-                {priceAsOf ? `ราคาเมื่อ ${priceAsOf.toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})} · Cboe + CNBC` : "ยังไม่เคยอัพเดทราคา — กดปุ่มด้านบน"}
+                {priceAsOf ? `ราคาเมื่อ ${priceAsOf.toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}` : "ยังไม่เคยอัพเดทราคา — กดปุ่มด้านบน"}
               </div>
             </div>
 

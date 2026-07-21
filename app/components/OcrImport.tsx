@@ -13,7 +13,8 @@ import { btnGhost, btnPrimary } from "../lib/ui";
 // automatically; the user reviews the textarea and presses นำเข้า as usual.
 export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: string) => void; knownSymbols?: string[] }) {
   const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState("");
+  const [progress, setProgress] = useState("");     // "รูปที่ x/y" label (no round numbers shown)
+  const [pct, setPct] = useState<number | null>(null); // 0..100 for the progress bar; null = no bar
   const [result, setResult] = useState<MergeResult | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -38,29 +39,31 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
 
   const run = async (files: FileList) => {
     if (!files.length) return;
-    setBusy(true); setResult(null); setProgress("กำลังโหลดตัวอ่าน OCR (ครั้งแรกอาจใช้เวลาสักครู่)...");
+    setBusy(true); setResult(null); setPct(0); setProgress("กำลังโหลดตัวอ่าน OCR (ครั้งแรกอาจใช้เวลาสักครู่)...");
     try {
       const { createWorker } = await import("tesseract.js");
-      // eng+tha: the broker app can be in Thai (ขาย/ซื้อ, Thai months, Buddhist year).
-      // Thai data doesn't hurt the English screenshots (verified) and the parser reads
-      // both layouts. Numbers/oz/USD stay Latin either way.
-      const worker = await createWorker("eng+tha", 1, {
-        workerPath: "/tesseract/worker.min.js",
-        corePath: "/tesseract",
-        langPath: "/tesseract",
-        gzip: true,
+      const mkWorker = (lang: string) => createWorker(lang, 1, {
+        workerPath: "/tesseract/worker.min.js", corePath: "/tesseract", langPath: "/tesseract", gzip: true,
       });
       const list = Array.from(files);
+      const N = list.length;
+
+      // Two eng+tha workers so the 2x and 3x upscales of the SAME image are recognised
+      // concurrently instead of one after the other — halves the main-pass wall time. Images
+      // are still processed one at a time (peak 2 workers, bounded memory), so "รูปที่ x/y"
+      // stays meaningful. eng+tha: the broker app can be Thai (ขาย/ซื้อ, Thai months, Buddhist
+      // year); Thai data doesn't hurt English screenshots and numbers/oz/USD stay Latin.
+      const [w2, w3] = await Promise.all([mkWorker("eng+tha"), mkWorker("eng+tha")]);
       const texts: Record<number, string> = { 2: "", 3: "" };
-      for (const scale of [2, 3]) {
-        for (let i = 0; i < list.length; i++) {
-          setProgress(`กำลังอ่านรูป ${i + 1}/${list.length} (รอบหลัก ${scale - 1}/2)...`);
-          const blob = await preprocess(list[i], scale);
-          const { data } = await worker.recognize(blob);
-          texts[scale] += data.text + "\n";
-        }
+      for (let i = 0; i < N; i++) {
+        setProgress(`กำลังอ่านรูปที่ ${i + 1}/${N}`); setPct(Math.round((i / N) * 100));
+        const [b2, b3] = await Promise.all([preprocess(list[i], 2), preprocess(list[i], 3)]);
+        const [r2, r3] = await Promise.all([w2.recognize(b2), w3.recognize(b3)]);
+        texts[2] += r2.data.text + "\n";
+        texts[3] += r3.data.text + "\n";
+        setPct(Math.round(((i + 1) / N) * 100));
       }
-      await worker.terminate();
+      await Promise.all([w2.terminate(), w3.terminate()]);
       // The two eng+tha passes alone often read everything. The specialist single-language
       // passes below only ever help blocks the main passes couldn't finish (a Thai-mangled
       // ticker → dropped → incomplete; a Latin-rendered month → inferred). So parse the
@@ -75,26 +78,36 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       if (needsSpecialists) {
         // eng-only reads Latin tickers the Thai model mangles (keyed by share count);
         // tha-only reads Thai month abbreviations eng+tha renders as Latin (keyed by day+time).
-        const runLang = async (lang: string, label: string) => {
-          const w = await createWorker(lang, 1, {
-            workerPath: "/tesseract/worker.min.js", corePath: "/tesseract", langPath: "/tesseract", gzip: true,
-          });
+        // Both specialist workers run concurrently (still peak 2 workers, since the main pair
+        // was terminated first). Progress tracks the slower of the two over the same images.
+        setProgress(`กำลังอ่านรูปที่ 1/${N}`); setPct(0);
+        const done = [0, 0];
+        const bump = (k: number) => {
+          done[k]++;
+          const slow = Math.min(done[0], done[1]);
+          setProgress(`กำลังอ่านรูปที่ ${Math.min(slow + 1, N)}/${N}`);
+          setPct(Math.round(((done[0] + done[1]) / (2 * N)) * 100));
+        };
+        const runLang = async (lang: string, k: number) => {
+          const w = await mkWorker(lang);
           let text = "";
-          for (let i = 0; i < list.length; i++) {
-            setProgress(`กำลังอ่านรูป ${i + 1}/${list.length} (${label})...`);
+          for (let i = 0; i < N; i++) {
             const { data } = await w.recognize(await preprocess(list[i], 2));
-            text += data.text + "\n";
+            text += data.text + "\n"; bump(k);
           }
           await w.terminate();
           return text;
         };
-        const hints = extractTickerHints(await runLang("eng", "รอบเสริม · ชื่อหุ้น"));
-        const monthHints = extractMonthHints(await runLang("tha", "รอบเสริม · เดือน"));
+        const [engText, thaText] = await Promise.all([runLang("eng", 0), runLang("tha", 1)]);
+        const hints = extractTickerHints(engText);
+        const monthHints = extractMonthHints(thaText);
         merged = parseMain(hints, monthHints);
       }
       setResult(merged);
+      setPct(null);
       setProgress(merged.rows.length ? "" : "อ่านไม่พบรายการในรูป — ใช้ภาพแคปหน้า Activity ที่เห็นบรรทัดเต็มๆ");
     } catch (e: any) {
+      setPct(null);
       setProgress("OCR ล้มเหลว: " + (e?.message || String(e)));
     }
     setBusy(false);
@@ -111,9 +124,13 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
         <button onClick={() => fileRef.current?.click()} disabled={busy} style={{ ...btnGhost({ fontSize: 12, opacity: busy ? 0.6 : 1 }) }}>
           {busy ? "กำลังอ่าน..." : "อัพโหลดรูป"}
         </button>
-        <span style={{ fontSize: 11, color: "var(--faint)" }}>ภาพแคปหน้า Activity ของโบรกเกอร์ · เลือกได้หลายรูป · OCR ในเครื่อง ฟรี</span>
       </div>
       {progress && <div style={{ fontSize: 12, color: "var(--warn)", marginTop: 6 }}>{progress}</div>}
+      {pct !== null && (
+        <div style={{ marginTop: 6, height: 6, background: "var(--line)", borderRadius: 999, overflow: "hidden" }}>
+          <div style={{ width: `${pct}%`, height: "100%", background: "var(--brass)", borderRadius: 999, transition: "width 0.2s ease" }} />
+        </div>
+      )}
 
       {result && result.rows.length > 0 && (
         <div style={{ marginTop: 8 }}>
