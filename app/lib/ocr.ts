@@ -493,7 +493,25 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
           else if (bOk && !aOk) best = rb;
           else { best = aOk ? ra : rb; if (!ra.isGold && !rb.isGold) flags.push(`จำนวนหุ้นสองรอบไม่ตรงกัน (${ra.qtyStr} / ${rb.qtyStr})`); }
         }
-        if (ra.priceStr !== rb.priceStr) flags.push(`ราคาสองรอบไม่ตรงกัน (${ra.priceStr} / ${rb.priceStr})`);
+        if (ra.priceStr !== rb.priceStr) {
+          // Arithmetic cross-tiebreak: a USD total from EITHER pass settles which price
+          // is right — even when the pass that read the price correctly misread its own
+          // total. (Real case: "5,189.88" kept but "31.13 USD" mangled to THB in one
+          // pass, while the other pass dropped the price's leading digit → "189.88" but
+          // kept the USD total.) Applied only when qty agrees, so `best` already carries
+          // the right quantity; picks a price only when exactly one satisfies the total.
+          const usd = [ra, rb].find(r => r.currency === "USD" && r.total);
+          let picked: OcrTxRow | null = null;
+          if (usd && usd.total && ra.qtyStr === rb.qtyStr && best.qty) {
+            const tol = Math.max(0.6, usd.total * 0.03);
+            const okA = Math.abs(ra.price * best.qty - usd.total) <= tol;
+            const okB = Math.abs(rb.price * best.qty - usd.total) <= tol;
+            if (okA && !okB) picked = ra;
+            else if (okB && !okA) picked = rb;
+          }
+          if (picked) best = picked;
+          else flags.push(`ราคาสองรอบไม่ตรงกัน (${ra.priceStr} / ${rb.priceStr})`);
+        }
       }
     }
     finalize(best, side, flags);

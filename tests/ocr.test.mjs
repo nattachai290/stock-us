@@ -106,6 +106,23 @@ Shares 0.1740529`;
 }
 
 {
+  // Prices disagree across passes; a USD total from EITHER pass settles it. Real case:
+  // one pass keeps "5,189.88" but its "31.13 USD" got mangled to THB ("บ"); the other
+  // pass drops the leading digit → "189.88" but keeps the USD total. 5189.88×0.0060 ≈
+  // 31.13 while 189.88×0.0060 ≈ 1.14, so the merge picks 5189.88 with no disagreement flag.
+  const A = `ขาย MTS-GOLD 31.13 บ\nราคาที่ได้จริง 5,189.88 11 มี.ค. 69 - 16:55:45 น.\nน้ำหนัก 0.0060 oz`;
+  const B = `ขาย MTS-GOLD 31.13 USD\nราคาที่ได้จริง 189.88 11 มี.ค. 69 - 16:55:45 น.\nน้ำหนัก 0.0060 oz`;
+  const m = mergeParses(parseActivityText(A), parseActivityText(B), { a: A, b: B });
+  check("price-tiebreak: cross-pass USD total picks right price", m.rows[0]?.priceStr === "5189.88", m.rows[0]?.csv);
+  check("price-tiebreak: no disagreement flag when arithmetic settles it", !m.rows[0]?.flags.some(f => f.includes("ราคาสองรอบ")), JSON.stringify(m.rows[0]?.flags));
+  // But when NEITHER candidate price satisfies the USD total, the flag must stay.
+  const D = `ขาย MTS-GOLD 99.99 USD\nราคาที่ได้จริง 5,189.88 11 มี.ค. 69 - 16:55:45 น.\nน้ำหนัก 0.0060 oz`;
+  const E = `ขาย MTS-GOLD 99.99 USD\nราคาที่ได้จริง 189.88 11 มี.ค. 69 - 16:55:45 น.\nน้ำหนัก 0.0060 oz`;
+  const m2 = mergeParses(parseActivityText(D), parseActivityText(E), { a: D, b: E });
+  check("price-tiebreak: neither matches → disagreement flag stays", m2.rows[0]?.flags.some(f => f.includes("ราคาสองรอบ")), JSON.stringify(m2.rows[0]?.flags));
+}
+
+{
   // Thousands separator read as a space ("3 130.88") must still yield the full price
   const t = `ซื้อ MTS-GOLD 249.90 บาท
 ราคาที่ได้จริง 3 130.88 1 เม.ย. 68 - 22:12:59 น.
