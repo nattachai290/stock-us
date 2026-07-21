@@ -113,6 +113,55 @@ Shares 0.1740529`;
 }
 
 {
+  // Thai STOCK total-style header = structurally a BUY even in USD (sell headers
+  // print "<qty> หุ้น", never a money total) — no side flag despite unreadable ซื้อ
+  const t = `ขื้อ SNPS 3.00 USD
+ราคาที่ได้จริง 438.8680 9 ก.ค. 69 - 22:34:42 น.
+จำนวนหุ้น 0.0068129`;
+  const m = mergeParses(parseActivityText(t), parseActivityText(t));
+  check("thai-stock USD total: confident B, no side flag", m.rows[0]?.side === "B" && !m.rows[0]?.flags.some(f => f.includes("ซื้อ/ขาย")), JSON.stringify(m.rows[0]));
+
+  // ...but only for Thai lines: a mangled ENGLISH header (sells DO print USD totals) stays flagged
+  const en = `8uy XYZ 12.09 USD
+Executed Price 325.00 3 Jul 2026 - 06:03:10 PM
+Shares 0.0371384`;
+  const men = mergeParses(parseActivityText(en), parseActivityText(en));
+  check("mangled EN header: side stays flagged", men.rows[0]?.flags.some(f => f.includes("ซื้อ/ขาย")), JSON.stringify(men.rows[0]?.flags));
+
+  // ...and a block that turns out GOLD (oz line) with a USD total could be sale
+  // proceeds — even with the product name mangled past recognition, flush downgrades
+  const g = `ขอ M7S-G01D 31.69 USD
+ราคาที่ได้จริง 4,527.64 26 พ.ค. 69 - 17:14:24 น.
+น้ำหนัก 0.0070 oz`;
+  const mg = mergeParses(parseActivityText(g), parseActivityText(g));
+  check("mangled-gold USD total: downgraded to uncertain", mg.rows[0]?.symbol === "XAUUSD" && mg.rows[0]?.flags.some(f => f.includes("ซื้อ/ขาย")), JSON.stringify(mg.rows[0]));
+}
+
+{
+  // eng-rescued name that the portfolio confirms (share count matched + user holds
+  // it) has two independent confirmations → clean; not-held stays flagged (tested
+  // in the rescue block above).
+  const tha = `ยาย เง 0.0045730 หุ้น
+ราคาที่ได้จริง 748.48 1 ก.ค. 69 - 20:20:39 น.`;
+  const hints = { "0.0045730": "IVV" };
+  const m = mergeParses(parseActivityText(tha, hints, ["IVV"]), parseActivityText(tha, hints, ["IVV"]));
+  check("rescued name in portfolio: no flag", m.rows[0]?.symbol === "IVV" && !m.rows[0]?.flags.some(f => f.includes("อังกฤษ")), JSON.stringify(m.rows[0]?.flags));
+}
+
+{
+  // Cross-text confirmation path 2: the other pass's date/time collapsed entirely but
+  // its header (symbol + share count) and the price survived → seen-once flag clears.
+  const good = `ยาย VIG 0.0140287 หุ้น
+ราคาที่ได้จริง 236.09 1 ก.ค. 69 - 15:07:40 น.`;
+  const broken = `ยาย VIG 0.0140287 หุ้น
+ราคาที่ได้จริง 236.09 เววรงซอ`;
+  const a = parseActivityText(good), b = parseActivityText(broken);
+  check("cross-text-2 setup: broken pass drops the row", b.rows.length === 0);
+  const m = mergeParses(a, b, { a: good, b: broken });
+  check("cross-text-2: header+price confirms, no seen-once flag", m.rows.length === 1 && !m.rows[0].flags.some(f => f.includes("รอบ OCR เดียว")), JSON.stringify(m.rows[0]?.flags));
+}
+
+{
   // AM/PM edge cases + oldest-first ordering
   const t = `
 Buy AAA 10.00 USD
