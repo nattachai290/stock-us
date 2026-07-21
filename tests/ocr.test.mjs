@@ -283,6 +283,29 @@ Weight 0.0029 oz
 }
 
 {
+  // A stray dot on the WRONG side of a share count ("0.1.480446" → the FIRST dot is
+  // the decimal): qtyFix must try both keep-first and keep-last dot and pick the
+  // variant with the layout's 7 decimals.
+  const t = `ซื้อ HPQ 99.88 บาท
+ราคาที่ได้จริง 21.48 12 ม.ค. 69 - 14:59:24 น.
+จำนวนหุ้น 0.1.480446`;
+  const m = mergeParses(parseActivityText(t), parseActivityText(t));
+  check("dot-variant qty: first-dot decimal recovered", m.rows[0]?.qtyStr === "0.1480446", m.rows[0]?.csv);
+}
+
+{
+  // The ๐-digit oz variant must NEVER convert a known stock block into gold — junk
+  // "๐" on a Thai stock line once invented a spurious XAUUSD row. Even a 4-decimal
+  // number doesn't qualify when the block already has a non-gold ticker.
+  const t = `ซื้อ EOSE 99.82 บาท
+ราคาที่ได้จริง 12.9380 4 ก.พ. 69 - 22:02:21 น.
+1.9380 ๐ 8
+จำนวนหุ้น 0.2419230`;
+  const m = mergeParses(parseActivityText(t), parseActivityText(t));
+  check("๐-oz guard: stock block stays a stock", m.rows.length === 1 && m.rows[0]?.symbol === "EOSE" && m.rows[0]?.qtyStr === "0.2419230", JSON.stringify(m.rows.map(r => r.csv)));
+}
+
+{
   // "ต.ค." (October) misread as the Thai digit ๓ — either replacing ต entirely
   // ("๓ . ค .") or appearing alongside it ("ต ๓. ค.") — must still resolve to month 10.
   const replaced = `ซื้อ MTS-GOLD 70,172.96 บาท
@@ -542,7 +565,11 @@ const CASES = [
   { name: "gold DCA (MTS-GOLD)", imgs: [FIX("gold-mts.jpg")], truth: TRUTH_GOLD, minExact: 5 },
   { name: "gold DCA Thai (MTS-GOLD)", imgs: [FIX("gold-mts-thai.jpg")], truth: TRUTH_GOLD_THAI, minExact: 4 },
   { name: "gold DCA Thai light theme", imgs: [FIX("gold-mts-thai-light.jpg")], truth: TRUTH_GOLD_THAI_LIGHT, minExact: 6 },
-  { name: "gold DCA Thai (refund-line, 2 images)", imgs: [FIX("gold-mts-thai-2a.jpg"), FIX("gold-mts-thai-2b.jpg")], truth: TRUTH_GOLD_THAI_2, minExact: 9 },
+  // expIncomplete 1: under the shared (deterministic) preprocessing, the 27/10 row's
+  // ต.ค. month OCRs as "A.A." in BOTH passes — genuinely ambiguous ("A" has stood for
+  // both ก and ค in other misreads, so A.A could be ก.ค or ต.ค) — and mapping a guess
+  // would risk a silently wrong date. Dropping it as unread is the correct behaviour.
+  { name: "gold DCA Thai (refund-line, 2 images)", imgs: [FIX("gold-mts-thai-2a.jpg"), FIX("gold-mts-thai-2b.jpg")], truth: TRUTH_GOLD_THAI_2, minExact: 9, expIncomplete: 1 },
   { name: "gold DCA Thai (cross-pass month recovery)", imgs: [FIX("gold-mts-thai-3.jpg")], truth: TRUTH_GOLD_THAI_3, minExact: 6 },
   { name: "gold DCA Thai (USD-total sells)", imgs: [FIX("gold-mts-thai-4.jpg")], truth: TRUTH_GOLD_THAI_4, minExact: 6 },
   { name: "Thai stock sells", imgs: [FIX("th-stock-sells.jpg")], truth: TRUTH_TH_SELLS, minExact: 6 },

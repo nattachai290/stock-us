@@ -66,16 +66,21 @@ const numFix = (s: string) => {
 };
 const toNum = (s: string) => parseFloat(numFix(s));
 // A "]" in a share count is either a misread trailing 1 ("0.588568]") or inserted
-// noise ("0.144660]1") — the broker always prints dp decimals, so pick the variant
-// that lands on exactly dp.
+// noise ("0.144660]1"), and an extra dot can land on either side of the real one
+// ("0.1.480446" — the FIRST dot is the decimal there, unlike prices). The broker
+// always prints dp decimals, so try every repair variant and pick the one that
+// lands on exactly dp.
 const qtyFix = (s: string, dp: number) => {
-  if (s.includes("]")) {
-    for (const v of [s.replace(/\]/g, "1"), s.replace(/\]/g, "")]) {
-      const f = numFix(v);
-      if ((f.split(".")[1] || "").length === dp) return f;
+  const variants: string[] = [];
+  for (const b of s.includes("]") ? [s.replace(/\]/g, "1"), s.replace(/\]/g, "")] : [s]) {
+    variants.push(numFix(b)); // keep-last-dot (numFix default)
+    const i = b.indexOf(".");
+    if (i >= 0 && i !== b.lastIndexOf(".")) {
+      variants.push(numFix(b.slice(0, i + 1) + b.slice(i + 1).replace(/\./g, ""))); // keep-first-dot
     }
   }
-  return numFix(s);
+  for (const v of variants) if ((v.split(".")[1] || "").length === dp) return v;
+  return variants[0];
 };
 // Currency/marker words that match the ticker shape but are never tickers
 const NOT_TICKERS = new Set(["USD", "THB", "DCA", "CA", "GOLD", "OZ", "AM", "PM"]);
@@ -376,7 +381,14 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     };
     const s = line.match(/Shares[\s:]*([\d.,OolI|\]]+)/i);
     if (s && cur.qty == null) setQty(s[1], 7);
-    const w = line.match(/([\d.,OolI|\]]+)\s*(?:[o0]z\b|๐\s?\d)/i);
+    // The ๐-digit variant of the oz marker is riskier than the literal text (a Thai
+    // STOCK line can shed "๐" junk too, which once invented a spurious XAUUSD row),
+    // so it carries two extra guards: the number must be shaped exactly like a gold
+    // weight (4 decimals), AND the block must not already be a known non-gold stock —
+    // a block with a valid ticker that isn't GOLD-ish can never become gold this way.
+    const wOz = line.match(/([\d.,OolI|\]]+)\s*[o0]z\b/i);
+    const goldable = cur.isGold || !cur.symbol || /GOLD/i.test(cur.symbol);
+    const w = wOz || (goldable ? line.match(/(\d+\.\d{4})\s*๐\s?\d/) : null);
     if (w && cur.qty == null) { setQty(w[1], 4); if (cur.qty != null) cur.isGold = true; }
     // Thai buy quantity on its own line ("จำนวนหุ้น 0.0128022"): a Thai-labelled line
     // ending in a 7-decimal number, with no ticker / total / date on it.
