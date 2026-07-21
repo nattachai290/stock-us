@@ -196,6 +196,52 @@ Weight 0.0029 oz
 }
 
 {
+  // Real broker case: sell-BY-WEIGHT gold row — header shows the oz sold (not a
+  // money total), followed by a separate "ยอดที่ได้รับคืน X USD" (refund) detail
+  // line. That line must NOT be mistaken for a new header (it has a total-shaped
+  // number but no ticker/side word/GOLD marker) — doing so would prematurely flush
+  // the still-open block. It DOES still feed cur.total, enabling the USD check.
+  const t = `ขาย MTS-GOLD 0.5449 oz
+ราคาที่ได้จริง 4,014.74 22 ต.ค. 68 - 07:11:45 น.
+ยอดที่ได้รับคืน 2,187.63 USD
+ซื้อ MTS-GOLD 3,899.95 บาท
+ราคาที่ได้จริง 4,251.51 20 ต.ค. 68 - 08:23:13 น.
+น้ำหนัก 0.0278 oz`;
+  const p = parseActivityText(t);
+  check("refund-line: doesn't fragment the block", p.rows.length === 2 && p.incomplete === 0, JSON.stringify(p));
+  const sell = p.rows.find(r => r.side === "S");
+  check("refund-line: sell row complete", sell?.qtyStr === "0.5449" && sell?.priceStr === "4014.74", sell?.csv);
+  check("refund-line: total captured off the refund line", sell?.total === 2187.63 && sell?.currency === "USD");
+  check("refund-line: USD check now verifiable", sell?.check === "ok", sell?.check);
+}
+
+{
+  // "oz" OCR'd as the Thai digit zero + a stray digit ("๐ 7", "๐ 2") — the ๐ glyph
+  // resembles "o"; the accompanying digit is noise from "z". Seen on both a header
+  // line (qty inline with the ticker) and a standalone weight line.
+  const onHeader = `ขาย MTS-GOLD 0.5189 ๐ 2
+ราคาที่ได้จริง 4,189.33 15 ต.ค. 68 - 20:48:00 น.`;
+  check("oz-as-๐N on header line", parseActivityText(onHeader).rows[0]?.qtyStr === "0.5189", JSON.stringify(parseActivityText(onHeader).rows));
+  const onOwnLine = `ซื้อ MTS-GOLD 70,172.96 บาท
+ราคาที่ได้จริง 4,081.98 22 ต.ค. 68 - 07:46:08 น.
+น้ำหนัก 0.5212 ๐ 7`;
+  check("oz-as-๐N on its own line", parseActivityText(onOwnLine).rows[0]?.qtyStr === "0.5212", JSON.stringify(parseActivityText(onOwnLine).rows));
+}
+
+{
+  // "ต.ค." (October) misread as the Thai digit ๓ — either replacing ต entirely
+  // ("๓ . ค .") or appearing alongside it ("ต ๓. ค.") — must still resolve to month 10.
+  const replaced = `ซื้อ MTS-GOLD 70,172.96 บาท
+ราคาที่ได้จริง 4,081.98 22 ๓ . ค . 68 - 07:46:08 น.
+น้ำหนัก 0.5212 oz`;
+  check("ต→๓ substitution: month resolves", parseActivityText(replaced).rows[0]?.csv.startsWith("22/10/2025"), JSON.stringify(parseActivityText(replaced).rows));
+  const inserted = `ซื้อ MTS-GOLD 3,899.95 บาท
+ราคาที่ได้จริง 4,251.51 20 ต ๓. ค. 68 - 08:23:13 น.
+น้ำหนัก 0.0278 oz`;
+  check("๓ insertion alongside ต: month resolves", parseActivityText(inserted).rows[0]?.csv.startsWith("20/10/2025"), JSON.stringify(parseActivityText(inserted).rows));
+}
+
+{
   // Thai gold layout (deterministic, no OCR): Thai side words, "ราคาที่ได้จริง" +
   // executed price on the date line, Buddhist year, Thai month, "น้ำหนัก x oz".
   const sell = `
@@ -350,6 +396,18 @@ const TRUTH_GOLD_THAI_LIGHT = [
   "24/03/2025 22:24,B,XAUUSD,0.0024,3012.06", "01/04/2025 22:12,B,XAUUSD,0.0023,3130.88",
   "09/04/2025 21:00,B,XAUUSD,0.0023,3076.18", "15/04/2025 20:56,B,XAUUSD,0.0023,3213.12",
 ];
+// Thai gold, 2-image set with sell-BY-WEIGHT rows (header shows oz, not a money
+// total, plus a separate "ยอดที่ได้รับคืน" refund line) and OCR misreads unique to
+// this pair: "ต.ค." → "๓"-variants, "oz" → "๐+digit". The leading cut-off row in
+// image 2a (header off-screen, from an earlier unprovided screenshot) is excluded
+// from truth — expected to stay incomplete, never a wrong row.
+const TRUTH_GOLD_THAI_2 = [
+  "07/10/2025 11:34,B,XAUUSD,0.1630,3974.41", "07/10/2025 11:40,B,XAUUSD,0.1604,3975.18",
+  "08/10/2025 10:46,B,XAUUSD,0.1223,4014.67", "15/10/2025 08:04,B,XAUUSD,0.0732,4170.38",
+  "15/10/2025 20:48,S,XAUUSD,0.5189,4189.33", "15/10/2025 22:30,B,XAUUSD,0.5171,4200.33",
+  "20/10/2025 08:23,B,XAUUSD,0.0278,4251.51", "22/10/2025 07:11,S,XAUUSD,0.5449,4014.74",
+  "22/10/2025 07:46,B,XAUUSD,0.5212,4081.98", "27/10/2025 08:00,S,XAUUSD,0.0060,4076.61",
+];
 // Thai STOCK screenshots (ซื้อ/ขาย + US tickers, จำนวนหุ้น). Thai OCR of symbols/side is
 // noisy, so the guarantee is SILENT-wrong===0 (mangled rows drop or flag). CA (รับ/หัก)
 // rows are skipped. exact baselines are the measured minimums.
@@ -407,6 +465,7 @@ const CASES = [
   { name: "gold DCA (MTS-GOLD)", imgs: [FIX("gold-mts.jpg")], truth: TRUTH_GOLD, minExact: 5 },
   { name: "gold DCA Thai (MTS-GOLD)", imgs: [FIX("gold-mts-thai.jpg")], truth: TRUTH_GOLD_THAI, minExact: 4 },
   { name: "gold DCA Thai light theme", imgs: [FIX("gold-mts-thai-light.jpg")], truth: TRUTH_GOLD_THAI_LIGHT, minExact: 6 },
+  { name: "gold DCA Thai (refund-line, 2 images)", imgs: [FIX("gold-mts-thai-2a.jpg"), FIX("gold-mts-thai-2b.jpg")], truth: TRUTH_GOLD_THAI_2, minExact: 9 },
   { name: "Thai stock sells", imgs: [FIX("th-stock-sells.jpg")], truth: TRUTH_TH_SELLS, minExact: 6 },
   { name: "Thai stock buys + CA-skip", imgs: [FIX("th-stock-ca.jpg")], truth: TRUTH_TH_CA, minExact: 3 },
   ...Object.entries(TH_STOCK_MORE).map(([f, truth]) => ({ name: f, imgs: [FIX(f)], truth, minExact: TH_MIN_EXACT[f] })),
@@ -447,7 +506,7 @@ await engWorker.terminate();
 // Aggregate regression floor (so a code change that tanks recall is caught), reported honestly
 const pct = Math.round(exactTotal / truthTotal * 100);
 console.log(`\nOCR exact recall overall: ${exactTotal}/${truthTotal} rows (${pct}%) — ผ่านสะอาด ${cleanTotal} · ติดธงให้ตรวจ ${flagOkTotal + flagWrongTotal} (ค่าถูก ${flagOkTotal}, ค่าคลาดเคลื่อน ${flagWrongTotal}) · หายไป ${missTotal}`);
-check(`recall did not regress (>= 75/${truthTotal})`, exactTotal >= 75, `got ${exactTotal}`);
+check(`recall did not regress (>= 95/${truthTotal})`, exactTotal >= 95, `got ${exactTotal}`);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
