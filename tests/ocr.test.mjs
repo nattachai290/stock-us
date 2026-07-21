@@ -438,6 +438,14 @@ const TRUTH_GOLD_THAI_3 = [
   "09/06/2025 16:37,B,XAUUSD,0.0022,3321.33", "17/06/2025 22:22,B,XAUUSD,0.0022,3386.27",
   "09/07/2025 18:36,B,XAUUSD,0.0069,3286.86", "14/07/2025 22:35,B,XAUUSD,0.0022,3349.08",
 ];
+// Thai gold, mixed buy + sells — one บาท-total BUY at top, five USD-total SELLS
+// (ขาย + "<total> USD" header, weight on its own line). มี.ค. 69 → March 2026.
+// Exercises confident-sell detection from a readable ขาย word on USD-total gold rows.
+const TRUTH_GOLD_THAI_4 = [
+  "11/03/2026 07:03,S,XAUUSD,0.0060,5190.78", "11/03/2026 16:55,S,XAUUSD,0.0060,5189.88",
+  "11/03/2026 17:51,S,XAUUSD,0.0090,5188.52", "13/03/2026 07:05,S,XAUUSD,0.0060,5101.84",
+  "13/03/2026 21:14,S,XAUUSD,0.0120,5093.40", "16/03/2026 21:59,B,XAUUSD,0.0616,4994.89",
+];
 // Thai STOCK screenshots (ซื้อ/ขาย + US tickers, จำนวนหุ้น). Thai OCR of symbols/side is
 // noisy, so the guarantee is SILENT-wrong===0 (mangled rows drop or flag). CA (รับ/หัก)
 // rows are skipped. exact baselines are the measured minimums.
@@ -497,6 +505,7 @@ const CASES = [
   { name: "gold DCA Thai light theme", imgs: [FIX("gold-mts-thai-light.jpg")], truth: TRUTH_GOLD_THAI_LIGHT, minExact: 6 },
   { name: "gold DCA Thai (refund-line, 2 images)", imgs: [FIX("gold-mts-thai-2a.jpg"), FIX("gold-mts-thai-2b.jpg")], truth: TRUTH_GOLD_THAI_2, minExact: 9 },
   { name: "gold DCA Thai (cross-pass month recovery)", imgs: [FIX("gold-mts-thai-3.jpg")], truth: TRUTH_GOLD_THAI_3, minExact: 6 },
+  { name: "gold DCA Thai (USD-total sells)", imgs: [FIX("gold-mts-thai-4.jpg")], truth: TRUTH_GOLD_THAI_4, minExact: 6 },
   { name: "Thai stock sells", imgs: [FIX("th-stock-sells.jpg")], truth: TRUTH_TH_SELLS, minExact: 6 },
   { name: "Thai stock buys + CA-skip", imgs: [FIX("th-stock-ca.jpg")], truth: TRUTH_TH_CA, minExact: 3 },
   ...Object.entries(TH_STOCK_MORE).map(([f, truth]) => ({ name: f, imgs: [FIX(f)], truth, minExact: TH_MIN_EXACT[f] })),
