@@ -54,37 +54,44 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       const texts: Record<number, string> = { 2: "", 3: "" };
       for (const scale of [2, 3]) {
         for (let i = 0; i < list.length; i++) {
-          setProgress(`กำลังอ่านรูป ${i + 1}/${list.length} (รอบ ${scale - 1}/4)...`);
+          setProgress(`กำลังอ่านรูป ${i + 1}/${list.length} (รอบหลัก ${scale - 1}/2)...`);
           const blob = await preprocess(list[i], scale);
           const { data } = await worker.recognize(blob);
           texts[scale] += data.text + "\n";
         }
       }
       await worker.terminate();
-      // Specialist single-language passes: the eng-only model reads Latin tickers the
-      // Thai model mangles; the tha-only model reads Thai month abbreviations the eng+tha
-      // model renders as Latin ("ต.ค." → "A.A."). Each rescues just its strength — tickers
-      // (keyed by share count) and months (keyed by day+time) — from the main passes.
-      const runLang = async (lang: string, label: string) => {
-        const w = await createWorker(lang, 1, {
-          workerPath: "/tesseract/worker.min.js", corePath: "/tesseract", langPath: "/tesseract", gzip: true,
-        });
-        let text = "";
-        for (let i = 0; i < list.length; i++) {
-          setProgress(`กำลังอ่านรูป ${i + 1}/${list.length} (${label})...`);
-          const { data } = await w.recognize(await preprocess(list[i], 2));
-          text += data.text + "\n";
-        }
-        await w.terminate();
-        return text;
-      };
-      const engText = await runLang("eng", "รอบ 3/4 · ชื่อหุ้น");
-      const thaText = await runLang("tha", "รอบ 4/4 · เดือน");
-      const hints = extractTickerHints(engText);
-      const monthHints = extractMonthHints(thaText);
-      const merged = mergeParses(parseActivityText(texts[2], hints, knownSymbols, monthHints),
-                                 parseActivityText(texts[3], hints, knownSymbols, monthHints),
-                                 { a: texts[2], b: texts[3] });
+      // The two eng+tha passes alone often read everything. The specialist single-language
+      // passes below only ever help blocks the main passes couldn't finish (a Thai-mangled
+      // ticker → dropped → incomplete; a Latin-rendered month → inferred). So parse the
+      // main passes first and run the specialists ONLY when there's something for them to
+      // fix — clean screenshots (English, or Thai that OCR'd well) skip them and finish in
+      // two passes instead of four.
+      const parseMain = (h?: Record<string, string>, mh?: Record<string, { mon: string; year: string }>) =>
+        mergeParses(parseActivityText(texts[2], h, knownSymbols, mh),
+                    parseActivityText(texts[3], h, knownSymbols, mh), { a: texts[2], b: texts[3] });
+      let merged = parseMain();
+      const needsSpecialists = merged.incomplete > 0 || merged.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน")));
+      if (needsSpecialists) {
+        // eng-only reads Latin tickers the Thai model mangles (keyed by share count);
+        // tha-only reads Thai month abbreviations eng+tha renders as Latin (keyed by day+time).
+        const runLang = async (lang: string, label: string) => {
+          const w = await createWorker(lang, 1, {
+            workerPath: "/tesseract/worker.min.js", corePath: "/tesseract", langPath: "/tesseract", gzip: true,
+          });
+          let text = "";
+          for (let i = 0; i < list.length; i++) {
+            setProgress(`กำลังอ่านรูป ${i + 1}/${list.length} (${label})...`);
+            const { data } = await w.recognize(await preprocess(list[i], 2));
+            text += data.text + "\n";
+          }
+          await w.terminate();
+          return text;
+        };
+        const hints = extractTickerHints(await runLang("eng", "รอบเสริม · ชื่อหุ้น"));
+        const monthHints = extractMonthHints(await runLang("tha", "รอบเสริม · เดือน"));
+        merged = parseMain(hints, monthHints);
+      }
       setResult(merged);
       setProgress(merged.rows.length ? "" : "อ่านไม่พบรายการในรูป — ใช้ภาพแคปหน้า Activity ที่เห็นบรรทัดเต็มๆ");
     } catch (e: any) {

@@ -663,14 +663,20 @@ const CASES = [
 let exactTotal = 0, truthTotal = 0, cleanTotal = 0, flagOkTotal = 0, flagWrongTotal = 0, missTotal = 0, incTotal = 0;
 console.log("\n— OCR exact-match recall (reported, not a pass/fail) —");
 for (const c of CASES) {
-  const hints = extractTickerHints(await ocrText(engWorker, c.imgs, 2));
-  const monthHints = extractMonthHints(await ocrText(thaWorker, c.imgs, 2));
   // The app passes the portfolio's symbols in; screenshots ARE of the user's own
   // portfolio, so the truth symbols are exactly what the app would supply.
   const known = [...new Set(c.truth.map(t => t.split(",")[2]))];
   const textA = await ocrText(worker, c.imgs, 2), textB = await ocrText(worker, c.imgs, 3);
-  const m = mergeParses(parseActivityText(textA, hints, known, monthHints),
-                        parseActivityText(textB, hints, known, monthHints), { a: textA, b: textB });
+  // MIRROR OcrImport's lazy orchestration exactly: parse the two main passes first, and
+  // run the eng/tha specialist passes only when there's something for them to fix.
+  const parseMain = (h, mh) =>
+    mergeParses(parseActivityText(textA, h, known, mh), parseActivityText(textB, h, known, mh), { a: textA, b: textB });
+  let m = parseMain();
+  if (m.incomplete > 0 || m.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน")))) {
+    const hints = extractTickerHints(await ocrText(engWorker, c.imgs, 2));
+    const monthHints = extractMonthHints(await ocrText(thaWorker, c.imgs, 2));
+    m = parseMain(hints, monthHints);
+  }
   const exact = c.truth.filter(t => m.rows.some(r => r.csv === t)).length;
   const silent = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length === 0);
   // Honest per-case breakdown: clean pass / flagged (right vs off) / missing
