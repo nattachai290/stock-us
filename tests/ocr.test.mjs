@@ -306,6 +306,66 @@ Weight 0.0029 oz
 }
 
 {
+  // Month-anchor inference: a row whose month is unreadable ("A.A.") is filled from
+  // its neighbours ONLY when the nearest readable month before and after agree — the
+  // broker's strict chronological order makes a same-month bracket safe. Filled → flagged.
+  const bracketed = `ซื้อ MTS-GOLD 100.00 บาท
+ราคาที่ได้จริง 4000.00 30 ต.ค. 68 - 10:00:00 น.
+น้ำหนัก 0.0100 oz
+ขาย MTS-GOLD 24.45 USD
+ราคาที่ได้จริง 4076.61 27 A.A. 68 - 08:00:49 น.
+น้ำหนัก 0.0060 oz
+ซื้อ MTS-GOLD 100.00 บาท
+ราคาที่ได้จริง 4081.98 22 ต.ค. 68 - 07:46:08 น.
+น้ำหนัก 0.0050 oz`;
+  const m = mergeParses(parseActivityText(bracketed), parseActivityText(bracketed), { a: bracketed, b: bracketed });
+  const r = m.rows.find(x => x.csv.includes("08:00"));
+  check("month-anchor: same-month bracket fills the month", r?.csv === "27/10/2025 08:00,S,XAUUSD,0.0060,4076.61", r?.csv);
+  check("month-anchor: inferred month is flagged", r?.flags.some(f => f.includes("เดือนเดา")), JSON.stringify(r?.flags));
+  check("month-anchor: all 3 rows present", m.rows.length === 3 && m.incomplete === 0, `rows=${m.rows.length} inc=${m.incomplete}`);
+
+  // A month boundary between the neighbours (Oct above, Nov below) is NOT safe → drop.
+  const boundary = bracketed.replace("22 ต.ค. 68", "22 พ.ย. 68");
+  const mb = mergeParses(parseActivityText(boundary), parseActivityText(boundary));
+  check("month-anchor: boundary bracket stays unread", !mb.rows.some(x => x.csv.includes("08:00")) && mb.incomplete === 1, `rows=${mb.rows.length} inc=${mb.incomplete}`);
+
+  // No anchor on one side (row is the very first date, nothing before it) → drop.
+  const oneSide = `ขาย MTS-GOLD 24.45 USD
+ราคาที่ได้จริง 4076.61 27 A.A. 68 - 08:00:49 น.
+น้ำหนัก 0.0060 oz
+ซื้อ MTS-GOLD 100.00 บาท
+ราคาที่ได้จริง 4081.98 22 ต.ค. 68 - 07:46:08 น.
+น้ำหนัก 0.0050 oz`;
+  const mo = mergeParses(parseActivityText(oneSide), parseActivityText(oneSide));
+  check("month-anchor: single-sided bracket stays unread", !mo.rows.some(x => x.csv.includes("08:00")) && mo.incomplete === 1, `rows=${mo.rows.length} inc=${mo.incomplete}`);
+
+  // A cut-off headerless date line still contributes its month as an anchor.
+  const headerless = `ราคาที่ได้จริง 3934.68 30 ต.ค. 68 - 10:42:12 น.
+น้ำหนัก 0.0623 oz
+ขาย MTS-GOLD 24.45 USD
+ราคาที่ได้จริง 4076.61 27 A.A. 68 - 08:00:49 น.
+น้ำหนัก 0.0060 oz
+ซื้อ MTS-GOLD 100.00 บาท
+ราคาที่ได้จริง 4081.98 22 ต.ค. 68 - 07:46:08 น.
+น้ำหนัก 0.0050 oz`;
+  const mh = mergeParses(parseActivityText(headerless), parseActivityText(headerless), { a: headerless, b: headerless });
+  check("month-anchor: headerless date line anchors too", mh.rows.some(x => x.csv === "27/10/2025 08:00,S,XAUUSD,0.0060,4076.61"), JSON.stringify(mh.rows.map(x => x.csv)));
+}
+
+{
+  // Section header ("ตุลาคม 2568") supplies a month anchor for rows under it.
+  const withHeader = `ตุลาคม 2568
+ขาย MTS-GOLD 24.45 USD
+ราคาที่ได้จริง 4076.61 27 A.A. 68 - 08:00:49 น.
+น้ำหนัก 0.0060 oz
+ซื้อ MTS-GOLD 100.00 บาท
+ราคาที่ได้จริง 4081.98 22 ต.ค. 68 - 07:46:08 น.
+น้ำหนัก 0.0050 oz`;
+  const m = mergeParses(parseActivityText(withHeader), parseActivityText(withHeader), { a: withHeader, b: withHeader });
+  check("month-anchor: section header anchors the month", m.rows.some(x => x.csv === "27/10/2025 08:00,S,XAUUSD,0.0060,4076.61"), JSON.stringify(m.rows.map(x => x.csv)));
+}
+
+{
   // "ต.ค." (October) misread as the Thai digit ๓ — either replacing ต entirely
   // ("๓ . ค .") or appearing alongside it ("ต ๓. ค.") — must still resolve to month 10.
   const replaced = `ซื้อ MTS-GOLD 70,172.96 บาท
@@ -565,11 +625,10 @@ const CASES = [
   { name: "gold DCA (MTS-GOLD)", imgs: [FIX("gold-mts.jpg")], truth: TRUTH_GOLD, minExact: 5 },
   { name: "gold DCA Thai (MTS-GOLD)", imgs: [FIX("gold-mts-thai.jpg")], truth: TRUTH_GOLD_THAI, minExact: 4 },
   { name: "gold DCA Thai light theme", imgs: [FIX("gold-mts-thai-light.jpg")], truth: TRUTH_GOLD_THAI_LIGHT, minExact: 6 },
-  // expIncomplete 1: under the shared (deterministic) preprocessing, the 27/10 row's
-  // ต.ค. month OCRs as "A.A." in BOTH passes — genuinely ambiguous ("A" has stood for
-  // both ก and ค in other misreads, so A.A could be ก.ค or ต.ค) — and mapping a guess
-  // would risk a silently wrong date. Dropping it as unread is the correct behaviour.
-  { name: "gold DCA Thai (refund-line, 2 images)", imgs: [FIX("gold-mts-thai-2a.jpg"), FIX("gold-mts-thai-2b.jpg")], truth: TRUTH_GOLD_THAI_2, minExact: 9, expIncomplete: 1 },
+  // The 27/10 row's ต.ค. month OCRs as "A.A." in BOTH passes (ambiguous on its own),
+  // but it's bracketed by readable ต.ค. anchors above and below in the chronological
+  // list, so month-anchor inference recovers it (flagged). All 10 rows now parse.
+  { name: "gold DCA Thai (refund-line, 2 images)", imgs: [FIX("gold-mts-thai-2a.jpg"), FIX("gold-mts-thai-2b.jpg")], truth: TRUTH_GOLD_THAI_2, minExact: 10 },
   { name: "gold DCA Thai (cross-pass month recovery)", imgs: [FIX("gold-mts-thai-3.jpg")], truth: TRUTH_GOLD_THAI_3, minExact: 6 },
   { name: "gold DCA Thai (USD-total sells)", imgs: [FIX("gold-mts-thai-4.jpg")], truth: TRUTH_GOLD_THAI_4, minExact: 6 },
   { name: "Thai stock sells", imgs: [FIX("th-stock-sells.jpg")], truth: TRUTH_TH_SELLS, minExact: 6 },

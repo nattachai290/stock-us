@@ -20,6 +20,7 @@ export type OcrTxRow = {
   symbolHintMismatch?: string;// eng pass read a DIFFERENT ticker for this row — flag for review
   symbolCorrected?: string;// what OCR actually read, before the portfolio-whitelist fix
   sideFromTotal?: boolean; // side B inferred from a Thai total-style header (internal)
+  monthInferred?: boolean; // month was filled from same-month neighbours, not read — flag
 };
 
 export type OcrParseResult = { rows: OcrTxRow[]; incomplete: number };
@@ -31,6 +32,7 @@ const MONTHS: Record<string, string> = { jan:"01", feb:"02", mar:"03", apr:"04",
 const THAI_MON: Record<string, string> = { "มค":"01", "กพ":"02", "มีค":"03", "เมย":"04", "พค":"05", "มิย":"06", "กค":"07", "สค":"08", "กย":"09", "ตค":"10", "พย":"11", "ธค":"12" };
 // Full Thai month names appear in the section headers ("มิถุนายน 2569")
 const THAI_FULL_MON = /(มกราคม|กุมภาพันธ์|มีนาคม|เมษายน|พฤษภาคม|มิถุนายน|กรกฎาคม|สิงหาคม|กันยายน|ตุลาคม|พฤศจิกายน|ธันวาคม)/;
+const THAI_FULL_MON_MAP: Record<string, string> = { "มกราคม":"01","กุมภาพันธ์":"02","มีนาคม":"03","เมษายน":"04","พฤษภาคม":"05","มิถุนายน":"06","กรกฎาคม":"07","สิงหาคม":"08","กันยายน":"09","ตุลาคม":"10","พฤศจิกายน":"11","ธันวาคม":"12" };
 const despace = (s: string) => s.replace(/\s+/g, "");
 const dedot = (s: string) => s.replace(/[.\s]/g, "");
 // OCR renderings of Thai month abbreviations that degraded into Latin/digits, mapped
@@ -46,6 +48,39 @@ const thaiMonth = (tok: string): string | undefined => {
   const k = monKey(tok);
   return THAI_MON[k] ?? DEGRADED_MON[k.toLowerCase()];
 };
+
+// Parse a Thai date line ("24 มิ.ย. 69 - 08:42:13 น.") into its parts. `mon` is
+// undefined when the month glyphs are unreadable/ambiguous — day/year/time are still
+// trusted (validated in range) so the caller can defer for month inference. `prefix`
+// is the text before the date, where the executed price sits.
+function parseThaiDate(numLine: string): { day: string; mon?: string; year: string; hh: string; mm: string; prefix: string } | null {
+  const td = numLine.match(/(\d{1,2})\s+([฀-๿.\s]+?)\s*(\d{2,4})\s*[-–—]\s*(\d{1,2})[:.](\d{2})/);
+  if (td) {
+    const dN = +td[1], hN = +td[4], mN = +td[5];
+    if (dN >= 1 && dN <= 31 && hN <= 23 && mN <= 59)
+      return { day: td[1], mon: thaiMonth(td[2]), year: td[3], hh: td[4], mm: td[5], prefix: numLine.slice(0, td.index) };
+  }
+  // Degraded fallback: month/day glyphs collapsed into Latin/digits ("26 0.9. 69",
+  // "| ก.ค. 69"). Anchor on "- hh:mm", then walk tokens before it: year, month, day.
+  const t = numLine.match(/^(.*?)[-–—]\s*(\d{1,2})[:.](\d{2})/);
+  if (t) {
+    const toks = t[1].trim().split(/\s+/);
+    const y = toks.pop();
+    if (y && /^\d{2,4}$/.test(y)) {
+      const monToks: string[] = [];
+      let dd = "";
+      while (toks.length && monToks.length <= 6) {
+        const tk = toks.pop()!;
+        if (/^[\d|lI]{1,2}$/.test(tk) && monToks.length) { dd = numFix(tk); break; }
+        monToks.unshift(tk);
+      }
+      const dN = parseInt(dd, 10), hN = +t[2], mN = +t[3];
+      if (dd && dN >= 1 && dN <= 31 && hN <= 23 && mN <= 59)
+        return { day: dd, mon: thaiMonth(monToks.join("")), year: y, hh: t[2], mm: t[3], prefix: toks.join(" ") };
+    }
+  }
+  return null;
+}
 // Thai screenshots print the Buddhist year, short ("69") or full ("2569"); English
 // screenshots print the CE year (2026). Normalise everything to CE.
 function toCEYear(y: string): number {
@@ -146,8 +181,38 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
   const rows: OcrTxRow[] = [];
   let incomplete = 0;
 
-  type Draft = Partial<OcrTxRow>;
+  // Month glyphs OCR the worst ("ต.ค." → "A.A."), and are sometimes genuinely
+  // ambiguous. The broker lists transactions in strict reverse-chronological order, so
+  // a row whose month is unreadable but which sits between two neighbours of the SAME
+  // month must share it. We collect every readable (day,month,year) as a positional
+  // "anchor" (including section headers), and defer blocks whose month didn't resolve
+  // until after the pass, then fill them only when the bracketing anchors agree.
+  type Draft = Partial<OcrTxRow> & { pendDay?: string; pendHH?: string; pendMM?: string; pendYear?: string; ord?: number };
   let cur: Draft | null = null;
+  const anchors: { ord: number; mon: string; year: number }[] = [];
+  const pending: Draft[] = [];
+
+  // Emit a completed draft (iso already set) as a CSV row.
+  const emitRow = (c: Draft) => {
+    let check: OcrTxRow["check"] = "unverified";
+    if (c.currency === "USD" && c.total) {
+      const expect = c.qty! * c.price!;
+      check = Math.abs(expect - c.total) <= Math.max(0.6, c.total * 0.03) ? "ok" : "mismatch";
+    }
+    const symbol = c.isGold ? "XAUUSD" : c.symbol!;
+    const d = new Date(c.iso!);
+    const csvDate = `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+    rows.push({
+      csv: `${csvDate},${c.side},${symbol},${c.qtyStr},${c.priceStr}`,
+      iso: c.iso!, side: c.side!, symbol,
+      qty: c.qty!, qtyStr: c.qtyStr || String(c.qty),
+      price: c.price!, priceStr: c.priceStr || String(c.price),
+      total: c.total, currency: c.currency, check, isGold: c.isGold,
+      sideUncertain: c.sideUncertain, symbolFromHint: c.symbolFromHint,
+      symbolHintMismatch: c.symbolHintMismatch, symbolCorrected: c.symbolCorrected,
+      monthInferred: c.monthInferred,
+    });
+  };
 
   const flush = () => {
     if (!cur) return;
@@ -182,27 +247,12 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     }
     // A ticker that OCR mangled must not be emitted with a wrong symbol
     const cleanSym = cur.isGold || (cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol));
-    if (cur.side && cleanSym && cur.qty && cur.price && cur.iso) {
-      let check: OcrTxRow["check"] = "unverified";
-      if (cur.currency === "USD" && cur.total) {
-        const expect = cur.qty * cur.price;
-        // fees make the shown total differ a little from price×qty
-        check = Math.abs(expect - cur.total) <= Math.max(0.6, cur.total * 0.03) ? "ok" : "mismatch";
-      }
-      // Gold DCA (e.g. MTS-GOLD) is priced in USD/oz — same unit as the XAUUSD spot
-      // source in /api/price — so map it there regardless of the broker's product name.
-      const symbol = cur.isGold ? "XAUUSD" : cur.symbol!;
-      const d = new Date(cur.iso);
-      const csvDate = `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
-      rows.push({
-        csv: `${csvDate},${cur.side},${symbol},${cur.qtyStr},${cur.priceStr}`,
-        iso: cur.iso, side: cur.side, symbol,
-        qty: cur.qty, qtyStr: cur.qtyStr || String(cur.qty),
-        price: cur.price, priceStr: cur.priceStr || String(cur.price),
-        total: cur.total, currency: cur.currency, check, isGold: cur.isGold,
-        sideUncertain: cur.sideUncertain, symbolFromHint: cur.symbolFromHint,
-        symbolHintMismatch: cur.symbolHintMismatch, symbolCorrected: cur.symbolCorrected,
-      });
+    const complete = cur.side && cleanSym && cur.qty && cur.price;
+    if (complete && cur.iso) {
+      emitRow(cur);
+    } else if (complete && cur.pendDay && cur.pendYear) {
+      // Everything but the month — defer for anchor-based month inference after the pass.
+      pending.push(cur);
     } else if (cur.side || cur.price || cur.qty) {
       incomplete++;
     }
@@ -212,13 +262,20 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
   // Month section headers ("December 2025") sit between transaction blocks — treat
   // them as record boundaries so a missed/garbled "Buy XXX" header line can't make
   // the previous record absorb the next block's numbers.
-  const MONTH_HEADER = /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b/i;
+  const MONTH_HEADER = /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})\b/i;
 
-  for (const line of lines) {
-    if (MONTH_HEADER.test(line)) { flush(); continue; }
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
+    const enHdr = line.match(MONTH_HEADER);
+    if (enHdr) { flush(); anchors.push({ ord: li, mon: MONTHS[enHdr[1].slice(0, 3).toLowerCase()], year: parseInt(enHdr[2] ?? line.match(/\d{4}/)![0], 10) }); continue; }
     const compact = despace(line);
     // Thai section header ("มิถุนายน 2569") — full month name + year, no tx content
-    if (THAI_FULL_MON.test(compact) && /\d{4}/.test(line) && !/GOLD|oz|USD/i.test(line)) { flush(); continue; }
+    const thHdr = compact.match(THAI_FULL_MON);
+    if (thHdr && /\d{4}/.test(line) && !/GOLD|oz|USD/i.test(line)) {
+      flush();
+      anchors.push({ ord: li, mon: THAI_FULL_MON_MAP[thHdr[1]], year: toCEYear(line.match(/\d{4}/)![0]) });
+      continue;
+    }
 
     // Corporate action ("CA - แตกหรือรวมหุ้น", i.e. a split) — the "CA" marker is Latin
     // and reliable. These map to +/- share adjustments that the FIFO importer treats
@@ -290,6 +347,13 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
         flush();
       }
     }
+    // Collect a month anchor from ANY readable date line — even one whose transaction
+    // block was cut off (no header) contributes its month to bracket nearby ambiguous
+    // rows. Runs regardless of whether a block is currently open.
+    {
+      const pd = parseThaiDate(line.replace(/\](?=\d)/g, "1").replace(/(?<=\d)\]/g, "1"));
+      if (pd?.mon) anchors.push({ ord: li, mon: pd.mon, year: toCEYear(pd.year) });
+    }
     if (!cur) continue;
 
     // All fields are first-value-wins: within one block each label appears once, so a
@@ -319,52 +383,19 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     // Thai date: "24 มิ.ย. 69 - 08:42:13 น." (24h clock, Buddhist year). The executed
     // price sits on this same line before the day, so grab it here too. The time
     // separator tolerates a misread dot ("17.14:24"); "]" next to a digit is a 1.
-    if (!cur.iso) {
+    if (!cur.iso && !cur.pendDay) {
       const numLine = line.replace(/\](?=\d)/g, "1").replace(/(?<=\d)\]/g, "1");
-      let iso: string | null = null;
-      let pricePrefix = ""; // only the part of the line BEFORE the date may hold the price
-      const td = numLine.match(/(\d{1,2})\s+([฀-๿.\s]+?)\s*(\d{2,4})\s*[-–—]\s*(\d{1,2})[:.](\d{2})/);
-      if (td) {
-        const mon = thaiMonth(td[2]);
-        if (mon) {
-          iso = `${toCEYear(td[3])}-${mon}-${td[1].padStart(2, "0")}T${td[4].padStart(2, "0")}:${td[5]}:00`;
-          pricePrefix = numLine.slice(0, td.index);
-        }
-      }
-      if (!iso) {
-        // Degraded fallback: the month glyphs collapsed into Latin/digits ("26 0.9. 69",
-        // "9 n.A. 69") or the day did ("| ก.ค. 69"), which the strict pattern can't see.
-        // Anchor on "- hh:mm", then walk the tokens before it: year, month token(s),
-        // then a 1-2 char day. Only accepted when the month maps unambiguously.
-        const t = numLine.match(/^(.*?)[-–—]\s*(\d{1,2})[:.](\d{2})/);
-        if (t) {
-          const toks = t[1].trim().split(/\s+/);
-          const year = toks.pop();
-          if (year && /^\d{2,4}$/.test(year)) {
-            const monToks: string[] = [];
-            let day = "";
-            while (toks.length && monToks.length <= 6) {
-              const tk = toks.pop()!;
-              if (/^[\d|lI]{1,2}$/.test(tk) && monToks.length) { day = numFix(tk); break; }
-              monToks.unshift(tk);
-            }
-            const mon = day ? thaiMonth(monToks.join("")) : undefined;
-            const d = parseInt(day, 10), hh = parseInt(t[2], 10), mm = parseInt(t[3], 10);
-            if (mon && d >= 1 && d <= 31 && hh <= 23 && mm <= 59) {
-              iso = `${toCEYear(year)}-${mon}-${day.padStart(2, "0")}T${t[2].padStart(2, "0")}:${t[3]}:00`;
-              pricePrefix = toks.join(" "); // what's left before the day token
-            }
-          }
-        }
-      }
-      if (iso) {
-        cur.iso = iso;
+      const pd = parseThaiDate(numLine);
+      if (pd) {
+        // Month read → set the date now; month unreadable → defer for anchor inference.
+        if (pd.mon) cur.iso = `${toCEYear(pd.year)}-${pd.mon}-${pd.day.padStart(2, "0")}T${pd.hh.padStart(2, "0")}:${pd.mm}:00`;
+        else { cur.pendDay = pd.day; cur.pendYear = pd.year; cur.pendHH = pd.hh; cur.pendMM = pd.mm; cur.ord = li; }
         if (cur.price == null) {
           // The executed price sits before the date; keep ALL its decimals (broker shows
           // 2 or 4, e.g. 48.35 / 449.8440). Searching only the pre-date prefix means a
           // mangled price can never be silently replaced by the time digits. A thousands
           // separator read as a space ("3 130.88") is joined first.
-          const pm = pricePrefix.replace(/(\d)\s+(?=\d{3}\.\d{2})/g, "$1").match(/([\d,.OolI|]+\.\d{2,})/);
+          const pm = pd.prefix.replace(/(\d)\s+(?=\d{3}\.\d{2})/g, "$1").match(/([\d,.OolI|]+\.\d{2,})/);
           if (pm) { const v = toNum(pm[1]); if (v > 0) { cur.price = v; cur.priceStr = numFix(pm[1]); } }
         }
       }
@@ -398,6 +429,26 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     }
   }
   flush();
+
+  // Resolve deferred (unreadable-month) blocks from positional anchors. A block is
+  // filled ONLY when the nearest readable month before it and the nearest after it
+  // agree on month+year — a same-month bracket in the broker's strict chronological
+  // list. Straddling a month boundary, or missing a neighbour on either side, leaves
+  // it unread (never a guessed date). Filled rows are flagged for review.
+  for (const p of pending) {
+    let before: typeof anchors[0] | undefined, after: typeof anchors[0] | undefined;
+    for (const a of anchors) {
+      if (a.ord < p.ord!) before = a;                 // anchors are in ascending ord
+      else if (a.ord > p.ord! && !after) { after = a; break; }
+    }
+    if (before && after && before.mon === after.mon && before.year === after.year) {
+      p.iso = `${before.year}-${before.mon}-${p.pendDay!.padStart(2, "0")}T${p.pendHH!.padStart(2, "0")}:${p.pendMM}:00`;
+      p.monthInferred = true;
+      emitRow(p);
+    } else {
+      incomplete++;
+    }
+  }
 
   rows.sort((a, b) => new Date(a.iso).getTime() - new Date(b.iso).getTime());
   return { rows, incomplete };
@@ -452,6 +503,7 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
   const rows: MergedRow[] = [];
 
   const finalize = (best: OcrTxRow, side: "B" | "S", flags: string[]) => {
+    if (best.monthInferred) flags.push("เดือนเดาจากรายการข้างเคียง — ตรวจกับรูป");
     if (best.symbolFromHint) flags.push("ชื่อหุ้นอ่านจากรอบภาษาอังกฤษ — ตรวจกับรูป");
     if (best.symbolHintMismatch) flags.push(`รอบภาษาอังกฤษอ่านชื่อหุ้นเป็น ${best.symbolHintMismatch} — ตรวจกับรูป`);
     if (best.symbolCorrected) flags.push(`OCR อ่านได้ "${best.symbolCorrected}" — แก้เป็น ${best.symbol} ตามหุ้นในพอร์ต ตรวจกับรูป`);
