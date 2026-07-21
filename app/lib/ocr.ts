@@ -508,5 +508,11 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
   }
 
   rows.sort((x, y) => new Date(x.iso).getTime() - new Date(y.iso).getTime());
-  return { rows, incomplete: Math.max(a.incomplete, b.incomplete) };
+  // "incomplete" must count transactions MISSING FROM THE FINAL output, not per-pass
+  // parse failures: a block one pass couldn't finish is often recovered by the other,
+  // and must not be reported as unread. Each pass detected (rows + incomplete) record
+  // starts; the pass that saw the most is the best estimate of the true transaction
+  // count, and anything beyond the merged rows is what genuinely didn't come through.
+  const starts = Math.max(a.rows.length + a.incomplete, b.rows.length + b.incomplete);
+  return { rows, incomplete: Math.max(0, starts - rows.length) };
 }
