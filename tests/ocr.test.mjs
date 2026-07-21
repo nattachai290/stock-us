@@ -1,7 +1,8 @@
 // Regression tests for the OCR screenshot-import pipeline (app/lib/ocr.ts).
-// Runs the REAL pipeline — preprocess (jimp mirrors the browser canvas steps) →
-// tesseract.js OCR → parseActivityText → mergeParses — against real broker
-// screenshots in tests/fixtures/ with hand-verified ground truth.
+// Runs the REAL pipeline — the SAME shared preprocessing the browser runs
+// (lib/preprocess; jimp only decodes/encodes) → tesseract.js OCR →
+// parseActivityText → mergeParses — against real broker screenshots in
+// tests/fixtures/ with hand-verified ground truth.
 //
 // Run: npm run test:ocr   (no network needed — language data comes from
 // node_modules/@tesseract.js-data/eng, a devDependency)
@@ -19,9 +20,11 @@ import path from "path";
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FIX = (f) => path.join(ROOT, "tests", "fixtures", f);
 
-// compile the TS module on the fly so the test always runs the current source
+// compile the TS modules on the fly so the test always runs the current source
 const src = execSync("npx esbuild app/lib/ocr.ts --format=esm", { cwd: ROOT }).toString();
 const { parseActivityText, mergeParses, extractTickerHints } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
+const preSrc = execSync("npx esbuild app/lib/preprocess.ts --format=esm", { cwd: ROOT }).toString();
+const { grayscaleInvert, resizeBilinear } = await import("data:text/javascript;base64," + Buffer.from(preSrc).toString("base64"));
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = "") => {
@@ -30,6 +33,19 @@ const check = (name, cond, detail = "") => {
 };
 
 // ── Unit tests (no OCR, synthetic text) ───────────────────────────────────────
+
+{
+  // Shared preprocessing must be deterministic and match the documented math.
+  const px = new Uint8ClampedArray([255, 255, 255, 255, 0, 0, 0, 255]); // white, black
+  grayscaleInvert(px);
+  check("preprocess: white → 0, black → 255", px[0] === 0 && px[4] === 255, `${px[0]},${px[4]}`);
+  const r = resizeBilinear(new Uint8ClampedArray([100, 100, 100, 255]), 1, 1, 2);
+  check("preprocess: 1x1 → 2x2, value preserved", r.width === 2 && r.height === 2 && [0, 4, 8, 12].every(i => r.data[i] === 100), JSON.stringify([...r.data]));
+  // two-pixel gradient upscaled 2x: center-aligned sampling gives 0,0,100,100 → interpolated midpoints
+  const g = resizeBilinear(new Uint8ClampedArray([0, 0, 0, 255, 100, 100, 100, 255]), 2, 1, 2);
+  check("preprocess: gradient interpolates deterministically", g.width === 4 && g.data[0] === 0 && g.data[4] === 25 && g.data[8] === 75 && g.data[12] === 100,
+    [0, 4, 8, 12].map(i => g.data[i]).join(","));
+}
 
 // Reproduction of a real bug: OCR missed the "Buy ARM" header of the December
 // block, which used to overwrite the still-open Sell record's qty/price.
@@ -505,9 +521,15 @@ const engWorker = await createWorker("eng", 1, {
 async function ocrText(w, imgs, scale) {
   let text = "";
   for (const p of imgs) {
+    // jimp only decodes/encodes; the actual preprocessing is the SAME shared code
+    // (lib/preprocess) the browser runs, so app and CI feed tesseract identical pixels.
     const img = await Jimp.read(p);
-    img.greyscale().invert().scale(scale); // mirrors OcrImport.tsx canvas preprocessing
-    const { data } = await w.recognize(await img.getBufferAsync(Jimp.MIME_PNG));
+    const { data: raw, width, height } = img.bitmap;
+    const view = new Uint8ClampedArray(raw.buffer, raw.byteOffset, raw.length);
+    grayscaleInvert(view);
+    const r = resizeBilinear(view, width, height, scale);
+    const out = new Jimp({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height });
+    const { data } = await w.recognize(await out.getBufferAsync(Jimp.MIME_PNG));
     text += data.text + "\n";
   }
   return text;

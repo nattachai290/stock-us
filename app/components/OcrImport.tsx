@@ -1,6 +1,7 @@
 "use client";
 import { useRef, useState } from "react";
 import { parseActivityText, mergeParses, extractTickerHints, type MergeResult } from "../lib/ocr";
+import { grayscaleInvert, resizeBilinear } from "../lib/preprocess";
 import { btnGhost, btnPrimary } from "../lib/ui";
 
 // Upload broker-app Activity screenshots → OCR (tesseract.js, fully client-side,
@@ -16,8 +17,10 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
   const [result, setResult] = useState<MergeResult | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Same pipeline verified against real screenshots: grayscale+invert at native
-  // size (white-on-dark → black-on-white), then smooth upscale.
+  // Grayscale+invert at native size (white-on-dark → black-on-white), then a
+  // DETERMINISTIC bilinear upscale from lib/preprocess — shared verbatim with the
+  // test harness, so the app and CI feed tesseract identical pixels on the same
+  // image regardless of browser engine. Canvas is used only to decode/encode.
   const preprocess = async (file: File, scale: number): Promise<Blob> => {
     const bmp = await createImageBitmap(file);
     const c1 = document.createElement("canvas");
@@ -25,17 +28,11 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
     const x1 = c1.getContext("2d")!;
     x1.drawImage(bmp, 0, 0);
     const id = x1.getImageData(0, 0, c1.width, c1.height);
-    const d = id.data;
-    for (let i = 0; i < d.length; i += 4) {
-      const g = 255 - (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
-      d[i] = d[i + 1] = d[i + 2] = g;
-    }
-    x1.putImageData(id, 0, 0);
+    grayscaleInvert(id.data);
+    const r = resizeBilinear(id.data, c1.width, c1.height, scale);
     const c2 = document.createElement("canvas");
-    c2.width = Math.round(bmp.width * scale); c2.height = Math.round(bmp.height * scale);
-    const x2 = c2.getContext("2d")!;
-    x2.imageSmoothingEnabled = true; x2.imageSmoothingQuality = "high";
-    x2.drawImage(c1, 0, 0, c2.width, c2.height);
+    c2.width = r.width; c2.height = r.height;
+    c2.getContext("2d")!.putImageData(new ImageData(r.data, r.width, r.height), 0, 0);
     return new Promise((res, rej) => c2.toBlob(b => b ? res(b) : rej(new Error("canvas.toBlob failed")), "image/png"));
   };
 
