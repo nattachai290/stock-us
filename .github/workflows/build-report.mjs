@@ -36,7 +36,7 @@ const tail = (log, n = 60) => {
 const ocrReview = (log) => {
   const L = log.split("\n").map(l => l.trim());
   const flagOk = L.filter(l => l.startsWith("⚠ [") && l.includes("(ตรง expect)"));
-  const flagBad = L.filter(l => l.startsWith("⚠ [") && l.includes("(ไม่ตรง)"));
+  const flagBad = L.filter(l => l.startsWith("⚠ [") && l.includes("(ไม่ตรง"));
   const missing = L.filter(l => l.startsWith("✗ ["));
   const incomplete = L.filter(l => l.startsWith("⊘ ["));
   const total = flagOk.length + flagBad.length + missing.length + incomplete.length;

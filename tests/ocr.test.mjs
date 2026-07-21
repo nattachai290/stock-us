@@ -662,16 +662,24 @@ for (const c of CASES) {
   const fl = flagOk + flagWrong;
   console.log(`   ${c.name}: ผ่านสะอาด ${clean}/${c.truth.length} · ติดธง ${fl}${fl ? ` (ค่าถูก ${flagOk}${flagWrong ? `, ค่าคลาดเคลื่อน ${flagWrong}` : ""})` : ""} · หายไป ${miss} · อ่านไม่ครบ ${m.incomplete}`);
   // Per-row detail for anything not clean, so the CI comment shows exactly which row of
-  // which fixture is flagged/missing and why — no need to re-run to inspect.
+  // which fixture is flagged/missing, what OCR read, and (when wrong) what it SHOULD be
+  // — no need to re-run to inspect. Value-wrong rows print the expected value inline.
+  const nearestTruth = (csv) =>
+    c.truth.find(t => t.slice(0, 16) === csv.slice(0, 16)) ||      // same date+time
+    c.truth.find(t => t.split(",")[2] === csv.split(",")[2]);      // else same symbol
   for (const r of m.rows) {
     if (!r.flags.length) continue;
-    const ok = c.truth.includes(r.csv);
-    console.log(`      ⚠ [${c.name}] ได้: ${r.csv} ${ok ? "(ตรง expect)" : "(ไม่ตรง)"} — ${r.flags.join(" ; ")}`);
+    if (c.truth.includes(r.csv)) {
+      console.log(`      ⚠ [${c.name}] อ่านได้: ${r.csv} (ตรง expect) — ${r.flags.join(" ; ")}`);
+    } else {
+      const exp = nearestTruth(r.csv);
+      console.log(`      ⚠ [${c.name}] อ่านได้: ${r.csv} (ไม่ตรง${exp ? ` — ที่ถูก: ${exp}` : ""}) — ${r.flags.join(" ; ")}`);
+    }
   }
   for (const t of c.truth) {
     if (m.rows.some(r => r.csv === t)) continue;
-    const near = m.rows.find(r => r.csv.slice(0, 16) === t.slice(0, 16));
-    console.log(`      ✗ [${c.name}] expect: ${t}${near ? `  (ได้: ${near.csv})` : "  (ไม่มีแถวออกมา)"}`);
+    const near = m.rows.find(r => r.csv.slice(0, 16) === t.slice(0, 16) || r.csv.split(",")[2] === t.split(",")[2]);
+    console.log(`      ✗ [${c.name}] ที่ถูก: ${t}${near ? `  (OCR อ่านได้: ${near.csv})` : "  (ไม่มีแถวออกมาเลย)"}`);
   }
   if (m.incomplete > 0) console.log(`      ⊘ [${c.name}] อ่านไม่ครบ ${m.incomplete} รายการ (ตรวจไม่ออกว่าแถวไหน — เทียบกับรูป)`);
   // ── hard guarantees (these decide pass/fail) ──
