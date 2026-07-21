@@ -35,8 +35,10 @@ const despace = (s: string) => s.replace(/\s+/g, "");
 const dedot = (s: string) => s.replace(/[.\s]/g, "");
 // OCR renderings of Thai month abbreviations that degraded into Latin/digits, mapped
 // back. Each key is unambiguous: only one month fits the surviving glyph shapes
-// (ก.พ→"AW" is the only ก-then-พ month; มิ.ย→"09" the only ม-then-ย; ก.ค→"nA"/"คค").
-const DEGRADED_MON: Record<string, string> = { aw: "02", "09": "06", na: "07", "คค": "07" };
+// (ก.พ→"AW" is the only ก-then-พ month; มิ.ย→"09" the only ม-then-ย; ก.ค→"nA"/"คค";
+// ต.ค→"๓ค"/"ต๓ค" — the ต glyph misread as the Thai digit ๓, either replacing it or
+// appearing alongside it — is the only ต-then-ค month).
+const DEGRADED_MON: Record<string, string> = { aw: "02", "09": "06", na: "07", "คค": "07", "๓ค": "10", "ต๓ค": "10" };
 // Stray combining vowels/tone marks OCR injects mid-abbreviation ("พ.ุย." → พย);
 // none of the real abbreviation keys use these marks, so stripping them is lossless.
 const monKey = (s: string) => dedot(s).replace(/[ุู่้๊๋็์ํๆ]/g, "");
@@ -248,7 +250,13 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       // Share-count + หุ้น unit with an unreadable ticker ("ยาย เง 0.0045730 หุ้น") —
       // still a header; the eng-rescue pass may recover the symbol at flush time.
       const qtyUnit = !sellM && (sellWord || buyWord) ? line.match(/(-?[\d.OolI|\]]{6,})\s*(?:ห|Ku|Au|Kn)/) : null;
-      if (goldHdr || anyTotal || sellM || qtyUnit) {
+      // "ยอดที่ได้รับคืน X USD" (amount refunded) is an auxiliary detail line on a
+      // sell-BY-WEIGHT gold row (header shows the oz sold, not a money total; this
+      // line gives the USD equivalent afterward) — it carries a total-shaped number
+      // but is never itself a header, so it must not open (and thereby prematurely
+      // flush) a new record. Field-extraction below still runs on it as normal.
+      const isRefundLine = compact.includes("ได้รับคืน");
+      if (!isRefundLine && (goldHdr || anyTotal || sellM || qtyUnit)) {
         flush();
         const gold = !!goldHdr;
         // Side priority: the readable Thai word (ยาย/บาย are common OCR renderings of
@@ -359,6 +367,8 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
 
     // "Shares 0.0371384" (stocks) or "Weight 0.0029 oz" / "น้ำหนัก 0.0976 oz" (gold, 4dp).
     // The "oz" unit is Latin, so anchoring on it works regardless of label language.
+    // OCR sometimes renders "oz" as the Thai digit zero + a stray digit ("๐ 7", "๐ 2") —
+    // the Thai glyph for ๐ resembles "o", and the accompanying digit is noise from "z".
     const setQty = (raw: string, dp: number) => {
       const f = qtyFix(raw, dp);
       const v = parseFloat(f);
@@ -366,7 +376,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     };
     const s = line.match(/Shares[\s:]*([\d.,OolI|\]]+)/i);
     if (s && cur.qty == null) setQty(s[1], 7);
-    const w = line.match(/([\d.,OolI|\]]+)\s*[o0]z\b/i);
+    const w = line.match(/([\d.,OolI|\]]+)\s*(?:[o0]z\b|๐\s?\d)/i);
     if (w && cur.qty == null) { setQty(w[1], 4); if (cur.qty != null) cur.isGold = true; }
     // Thai buy quantity on its own line ("จำนวนหุ้น 0.0128022"): a Thai-labelled line
     // ending in a 7-decimal number, with no ticker / total / date on it.
