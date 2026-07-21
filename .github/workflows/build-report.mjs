@@ -30,9 +30,17 @@ const tail = (log, n = 60) => {
   return (lines.length > n ? lines.slice(-n) : lines).join("\n");
 };
 
+// Pull the per-row "⚠ [fixture] ได้: ..." / "✗ [fixture] หาย: ..." detail lines out of
+// the OCR log so they can be shown OUTSIDE the collapsed log block — the flagged and
+// missing rows are what a reviewer actually needs to eyeball, so they shouldn't be
+// buried in a dropdown (or truncated by the log tail).
+const ocrReviewRows = (log) =>
+  log.split("\n").map(l => l.trim()).filter(l => /^[⚠✗] \[/.test(l));
+
 let anyFail = false, anyMissing = false;
 const rows = [];
 const details = [];
+let review = [];
 
 for (const c of CHECKS) {
   const code = codeOf(c.key);
@@ -43,10 +51,19 @@ for (const c of CHECKS) {
   else { icon = "❌"; status = `failed (exit ${code})`; anyFail = true; }
   const extra = summarize(log);
   rows.push(`| ${icon} ${c.label} | \`${c.cmd}\` | ${status}${extra ? ` — ${extra}` : ""} |`);
+  if (c.key === "ocr") review = ocrReviewRows(log);
   if (log.trim()) {
-    details.push(`<details><summary>${icon} ${c.label} — output</summary>\n\n\`\`\`\n${tail(log)}\n\`\`\`\n\n</details>`);
+    // The OCR log is long (unit tests + per-fixture detail); keep more of its tail so
+    // the per-row lines aren't cut off.
+    details.push(`<details><summary>${icon} ${c.label} — output</summary>\n\n\`\`\`\n${tail(log, c.key === "ocr" ? 200 : 60)}\n\`\`\`\n\n</details>`);
   }
 }
+
+// Always-visible "rows to review" section (flagged + missing), so a reviewer sees the
+// specific rows without expanding the log. Empty → a clean "nothing to review" note.
+const reviewBlock = review.length
+  ? ["#### 🔍 OCR — แถวที่ต้องตรวจ (" + review.length + ")", "", "```", ...review, "```"]
+  : ["_🔍 OCR: ทุกแถวผ่านสะอาด — ไม่มีแถวต้องตรวจ_"];
 
 const header = anyFail ? "### ❌ Tests: some checks failed"
   : anyMissing ? "### ⚠️ Tests: incomplete run"
@@ -59,6 +76,8 @@ const body = [
   "| Check | Command | Result |",
   "| --- | --- | --- |",
   ...rows,
+  "",
+  ...reviewBlock,
   "",
   ...details,
   "",
