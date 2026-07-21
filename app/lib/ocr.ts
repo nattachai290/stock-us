@@ -331,8 +331,9 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
         if (cur.price == null) {
           // The executed price sits before the date; keep ALL its decimals (broker shows
           // 2 or 4, e.g. 48.35 / 449.8440). Searching only the pre-date prefix means a
-          // mangled price can never be silently replaced by the time digits.
-          const pm = pricePrefix.match(/([\d,.OolI|]+\.\d{2,})/);
+          // mangled price can never be silently replaced by the time digits. A thousands
+          // separator read as a space ("3 130.88") is joined first.
+          const pm = pricePrefix.replace(/(\d)\s+(?=\d{3}\.\d{2})/g, "$1").match(/([\d,.OolI|]+\.\d{2,})/);
           if (pm) { const v = toNum(pm[1]); if (v > 0) { cur.price = v; cur.priceStr = numFix(pm[1]); } }
         }
       }
@@ -370,10 +371,29 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
 export type MergedRow = OcrTxRow & { flags: string[] };
 export type MergeResult = { rows: MergedRow[]; incomplete: number };
 
+// A row only ONE pass managed to parse can still be confirmed against the OTHER
+// pass's raw text: if that text has a line carrying the row's price AND its hh:mm
+// (the executed-price line — a misassociated price would sit next to a different
+// time), with the share count on a nearby line, then all three numbers existed in
+// the other pass's view too and its parse merely tripped on layout noise.
+function confirmedInText(r: OcrTxRow, text?: string): boolean {
+  if (!text) return false;
+  const hhmm = r.csv.slice(11, 16);
+  const priceKey = r.priceStr.replace(/\./g, "");
+  const qtyKey = r.qtyStr.replace(/\./g, "");
+  const lines = text.split("\n").map(l => l.replace(/[Oo]/g, "0").replace(/[lI|]/g, "1").replace(/[,\s]/g, ""));
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].includes(hhmm) || !lines[i].replace(/\./g, "").includes(priceKey)) continue;
+    for (let j = Math.max(0, i - 2); j <= Math.min(lines.length - 1, i + 2); j++)
+      if (lines[j].replace(/\./g, "").includes(qtyKey)) return true;
+  }
+  return false;
+}
+
 const decimals = (s: string) => (s.split(".")[1] || "").length;
 const SHARE_DECIMALS = 7;
 
-export function mergeParses(a: OcrParseResult, b: OcrParseResult): MergeResult {
+export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: string; b?: string }): MergeResult {
   // Key on date+symbol (NOT side): the Thai side word is noisy, so two passes can
   // disagree on Buy/Sell for the same transaction — we reconcile side here rather than
   // emit two rows. A single symbol won't have two transactions at the same minute.
@@ -411,7 +431,10 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult): MergeResult {
       }
     }
 
-    if (!rb) { flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป"); finalize(ra, side, flags); continue; }
+    if (!rb) {
+      if (!confirmedInText(ra, texts?.b)) flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป");
+      finalize(ra, side, flags); continue;
+    }
 
     // Resolve qty/price: the reading whose price×qty matches the printed USD total wins
     // (arithmetic can't lie); else prefer the 7-decimal Shares read.
@@ -441,7 +464,8 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult): MergeResult {
   // rows the 2nd pass found that the 1st missed entirely
   for (const rb of b.rows) {
     if (seen.has(key(rb))) continue;
-    const flags = ["เห็นในรอบ OCR เดียว — ตรวจกับรูป"];
+    const flags: string[] = [];
+    if (!confirmedInText(rb, texts?.a)) flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป");
     if (rb.sideUncertain) flags.push("อ่านชนิด ซื้อ/ขาย ไม่ชัด — ตรวจกับรูป");
     finalize(rb, rb.side, flags);
   }
