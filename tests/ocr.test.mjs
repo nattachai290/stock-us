@@ -59,6 +59,27 @@ const passB = passA.replace("December 2025\nExecuted Price", "December 2025\nBuy
 }
 
 {
+  // "incomplete" must reflect rows MISSING FROM THE MERGED output, not per-pass parse
+  // failures. Here each pass fails a DIFFERENT row's date (mangled month) that the
+  // other pass reads fine — both rows come through, so incomplete must be 0, not 2.
+  const rowA = "ซื้อ MTS-GOLD 249.81 บาท\nราคาที่ได้จริง 3,349.08 14 ก.ค. 68 - 22:35:39 น.\nน้ำหนัก 0.0022 oz";
+  const rowB = "ซื้อ MTS-GOLD 749.74 บาท\nราคาที่ได้จริง 3,286.86 9 ก.ค. 68 - 18:36:00 น.\nน้ำหนัก 0.0069 oz";
+  const bad = (s) => s.replace(/ก\.ค\./, "n.n."); // month unreadable → that row drops in this pass
+  const passX = `${bad(rowA)}\n${rowB}`;      // pass X fails rowA
+  const passY = `${rowA}\n${bad(rowB)}`;      // pass Y fails rowB
+  const pX = parseActivityText(passX), pY = parseActivityText(passY);
+  check("incomplete-accounting setup: each pass drops one, counts 1", pX.rows.length === 1 && pX.incomplete === 1 && pY.rows.length === 1 && pY.incomplete === 1);
+  const m = mergeParses(pX, pY, { a: passX, b: passY });
+  check("incomplete-accounting: both rows recovered", m.rows.length === 2, JSON.stringify(m.rows.map(r => r.csv)));
+  check("incomplete-accounting: merged incomplete is 0 (not 2)", m.incomplete === 0, `got ${m.incomplete}`);
+
+  // A row NEITHER pass can finish is still correctly counted as incomplete.
+  const orphan = "ซื้อ MTS-GOLD 100.00 บาท\nราคาที่ได้จริง 3,000.00 5 n.n. 68 - 10:00:00 น.\nน้ำหนัก 0.0030 oz";
+  const m2 = mergeParses(parseActivityText(`${rowA}\n${orphan}`), parseActivityText(`${rowA}\n${orphan}`));
+  check("incomplete-accounting: genuinely-unread row still counted", m2.rows.length === 1 && m2.incomplete === 1, `rows=${m2.rows.length} inc=${m2.incomplete}`);
+}
+
+{
   // Passes disagree on the sell price — the reading matching the printed USD total must win, silently
   const passC = passB.replace("Executed Price 441.75 18 Jun", "Executed Price 110.7580 18 Jun");
   const m = mergeParses(parseActivityText(passC), parseActivityText(passB));
@@ -408,6 +429,15 @@ const TRUTH_GOLD_THAI_2 = [
   "20/10/2025 08:23,B,XAUUSD,0.0278,4251.51", "22/10/2025 07:11,S,XAUUSD,0.5449,4014.74",
   "22/10/2025 07:46,B,XAUUSD,0.5212,4081.98", "27/10/2025 08:00,S,XAUUSD,0.0060,4076.61",
 ];
+// Thai gold, all-buys — several rows' ก.ค. month OCR's to "n.n." in one pass but
+// reads fine in the other, so every row is recovered by cross-pass merge. Regression
+// guard for the incomplete-counter fix (per-pass failures must not be reported when
+// the merged output is complete).
+const TRUTH_GOLD_THAI_3 = [
+  "27/05/2025 22:09,B,XAUUSD,0.0018,3302.22", "02/06/2025 16:37,B,XAUUSD,0.0022,3345.63",
+  "09/06/2025 16:37,B,XAUUSD,0.0022,3321.33", "17/06/2025 22:22,B,XAUUSD,0.0022,3386.27",
+  "09/07/2025 18:36,B,XAUUSD,0.0069,3286.86", "14/07/2025 22:35,B,XAUUSD,0.0022,3349.08",
+];
 // Thai STOCK screenshots (ซื้อ/ขาย + US tickers, จำนวนหุ้น). Thai OCR of symbols/side is
 // noisy, so the guarantee is SILENT-wrong===0 (mangled rows drop or flag). CA (รับ/หัก)
 // rows are skipped. exact baselines are the measured minimums.
@@ -466,6 +496,7 @@ const CASES = [
   { name: "gold DCA Thai (MTS-GOLD)", imgs: [FIX("gold-mts-thai.jpg")], truth: TRUTH_GOLD_THAI, minExact: 4 },
   { name: "gold DCA Thai light theme", imgs: [FIX("gold-mts-thai-light.jpg")], truth: TRUTH_GOLD_THAI_LIGHT, minExact: 6 },
   { name: "gold DCA Thai (refund-line, 2 images)", imgs: [FIX("gold-mts-thai-2a.jpg"), FIX("gold-mts-thai-2b.jpg")], truth: TRUTH_GOLD_THAI_2, minExact: 9 },
+  { name: "gold DCA Thai (cross-pass month recovery)", imgs: [FIX("gold-mts-thai-3.jpg")], truth: TRUTH_GOLD_THAI_3, minExact: 6 },
   { name: "Thai stock sells", imgs: [FIX("th-stock-sells.jpg")], truth: TRUTH_TH_SELLS, minExact: 6 },
   { name: "Thai stock buys + CA-skip", imgs: [FIX("th-stock-ca.jpg")], truth: TRUTH_TH_CA, minExact: 3 },
   ...Object.entries(TH_STOCK_MORE).map(([f, truth]) => ({ name: f, imgs: [FIX(f)], truth, minExact: TH_MIN_EXACT[f] })),
@@ -474,7 +505,7 @@ const CASES = [
 // count. Real-screenshot OCR can't hit 100% exact (even the English fixtures don't), so
 // treating a low exact threshold as "passed" would be misleading. The exact recall is
 // reported as a number for transparency, and an aggregate regression floor guards it.
-let exactTotal = 0, truthTotal = 0, cleanTotal = 0, flagOkTotal = 0, flagWrongTotal = 0, missTotal = 0;
+let exactTotal = 0, truthTotal = 0, cleanTotal = 0, flagOkTotal = 0, flagWrongTotal = 0, missTotal = 0, incTotal = 0;
 console.log("\n— OCR exact-match recall (reported, not a pass/fail) —");
 for (const c of CASES) {
   const hints = extractTickerHints(await ocrText(engWorker, c.imgs, 2));
@@ -492,20 +523,23 @@ for (const c of CASES) {
   const flagWrong = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length > 0).length;
   const miss = c.truth.length - exact;
   exactTotal += exact; truthTotal += c.truth.length;
-  cleanTotal += clean; flagOkTotal += flagOk; flagWrongTotal += flagWrong; missTotal += miss;
+  cleanTotal += clean; flagOkTotal += flagOk; flagWrongTotal += flagWrong; missTotal += miss; incTotal += m.incomplete;
   const fl = flagOk + flagWrong;
-  console.log(`   ${c.name}: ผ่านสะอาด ${clean}/${c.truth.length} · ติดธง ${fl}${fl ? ` (ค่าถูก ${flagOk}${flagWrong ? `, ค่าคลาดเคลื่อน ${flagWrong}` : ""})` : ""} · หายไป ${miss}`);
+  console.log(`   ${c.name}: ผ่านสะอาด ${clean}/${c.truth.length} · ติดธง ${fl}${fl ? ` (ค่าถูก ${flagOk}${flagWrong ? `, ค่าคลาดเคลื่อน ${flagWrong}` : ""})` : ""} · หายไป ${miss} · อ่านไม่ครบ ${m.incomplete}`);
   // ── hard guarantees (these decide pass/fail) ──
   check(`${c.name}: no row is silently wrong (matches expect or is flagged)`, silent.length === 0, silent.map(r => r.csv).join(" | "));
   check(`${c.name}: no spurious rows invented (<= ${c.truth.length})`, m.rows.length <= c.truth.length, `got ${m.rows.length}`);
   check(`${c.name}: every emitted symbol is a valid ticker`, m.rows.every(r => /^([A-Z]{1,6}|XAUUSD)$/.test(r.symbol)), m.rows.map(r => r.symbol).join(","));
+  // The "อ่านไม่ครบ" count the user sees must match the rows genuinely missing from the
+  // merged output — never inflated by per-pass failures that the other pass recovered.
+  check(`${c.name}: incomplete count matches missing rows (expect ${c.expIncomplete ?? 0})`, m.incomplete === (c.expIncomplete ?? 0), `got ${m.incomplete}`);
 }
 await worker.terminate();
 await engWorker.terminate();
 
 // Aggregate regression floor (so a code change that tanks recall is caught), reported honestly
 const pct = Math.round(exactTotal / truthTotal * 100);
-console.log(`\nOCR exact recall overall: ${exactTotal}/${truthTotal} rows (${pct}%) — ผ่านสะอาด ${cleanTotal} · ติดธงให้ตรวจ ${flagOkTotal + flagWrongTotal} (ค่าถูก ${flagOkTotal}, ค่าคลาดเคลื่อน ${flagWrongTotal}) · หายไป ${missTotal}`);
+console.log(`\nOCR exact recall overall: ${exactTotal}/${truthTotal} rows (${pct}%) — ผ่านสะอาด ${cleanTotal} · ติดธงให้ตรวจ ${flagOkTotal + flagWrongTotal} (ค่าถูก ${flagOkTotal}, ค่าคลาดเคลื่อน ${flagWrongTotal}) · หายไป ${missTotal} · อ่านไม่ครบ ${incTotal}`);
 check(`recall did not regress (>= 95/${truthTotal})`, exactTotal >= 95, `got ${exactTotal}`);
 
 console.log(`\n${pass} passed, ${fail} failed`);
