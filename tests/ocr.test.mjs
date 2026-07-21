@@ -660,6 +660,18 @@ for (const c of CASES) {
   cleanTotal += clean; flagOkTotal += flagOk; flagWrongTotal += flagWrong; missTotal += miss; incTotal += m.incomplete;
   const fl = flagOk + flagWrong;
   console.log(`   ${c.name}: ผ่านสะอาด ${clean}/${c.truth.length} · ติดธง ${fl}${fl ? ` (ค่าถูก ${flagOk}${flagWrong ? `, ค่าคลาดเคลื่อน ${flagWrong}` : ""})` : ""} · หายไป ${miss} · อ่านไม่ครบ ${m.incomplete}`);
+  // Per-row detail for anything not clean, so the CI comment shows exactly which row of
+  // which fixture is flagged/missing and why — no need to re-run to inspect.
+  for (const r of m.rows) {
+    if (!r.flags.length) continue;
+    const ok = c.truth.includes(r.csv);
+    console.log(`      ⚠ [${c.name}] ได้: ${r.csv} ${ok ? "(ตรง expect)" : "(ไม่ตรง)"} — ${r.flags.join(" ; ")}`);
+  }
+  for (const t of c.truth) {
+    if (m.rows.some(r => r.csv === t)) continue;
+    const near = m.rows.find(r => r.csv.slice(0, 16) === t.slice(0, 16));
+    console.log(`      ✗ [${c.name}] หาย/ไม่ตรง expect: ${t}${near ? `  (ได้: ${near.csv})` : "  (ไม่มีแถวออกมา)"}`);
+  }
   // ── hard guarantees (these decide pass/fail) ──
   check(`${c.name}: no row is silently wrong (matches expect or is flagged)`, silent.length === 0, silent.map(r => r.csv).join(" | "));
   check(`${c.name}: no spurious rows invented (<= ${c.truth.length})`, m.rows.length <= c.truth.length, `got ${m.rows.length}`);

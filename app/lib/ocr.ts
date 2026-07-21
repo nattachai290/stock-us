@@ -53,15 +53,22 @@ const thaiMonth = (tok: string): string | undefined => {
 // undefined when the month glyphs are unreadable/ambiguous — day/year/time are still
 // trusted (validated in range) so the caller can defer for month inference. `prefix`
 // is the text before the date, where the executed price sits.
-function parseThaiDate(numLine: string): { day: string; mon?: string; year: string; hh: string; mm: string; prefix: string } | null {
+type ThaiDate = { day: string; mon?: string; year: string; hh: string; mm: string; prefix: string };
+function parseThaiDate(numLine: string): ThaiDate | null {
+  // Strict path (clean spacing). Preferred for the day/time/prefix fields.
+  let a: ThaiDate | null = null;
   const td = numLine.match(/(\d{1,2})\s+([฀-๿.\s]+?)\s*(\d{2,4})\s*[-–—]\s*(\d{1,2})[:.](\d{2})/);
   if (td) {
     const dN = +td[1], hN = +td[4], mN = +td[5];
     if (dN >= 1 && dN <= 31 && hN <= 23 && mN <= 59)
-      return { day: td[1], mon: thaiMonth(td[2]), year: td[3], hh: td[4], mm: td[5], prefix: numLine.slice(0, td.index) };
+      a = { day: td[1], mon: thaiMonth(td[2]), year: td[3], hh: td[4], mm: td[5], prefix: numLine.slice(0, td.index) };
   }
+  if (a?.mon) return a;
   // Degraded fallback: month/day glyphs collapsed into Latin/digits ("26 0.9. 69",
   // "| ก.ค. 69"). Anchor on "- hh:mm", then walk tokens before it: year, month, day.
+  // Tried whenever the strict path didn't RESOLVE A MONTH — its different tokenization
+  // recovers many months the strict token can't (restoring pre-refactor behaviour).
+  let b: ThaiDate | null = null;
   const t = numLine.match(/^(.*?)[-–—]\s*(\d{1,2})[:.](\d{2})/);
   if (t) {
     const toks = t[1].trim().split(/\s+/);
@@ -76,10 +83,11 @@ function parseThaiDate(numLine: string): { day: string; mon?: string; year: stri
       }
       const dN = parseInt(dd, 10), hN = +t[2], mN = +t[3];
       if (dd && dN >= 1 && dN <= 31 && hN <= 23 && mN <= 59)
-        return { day: dd, mon: thaiMonth(monToks.join("")), year: y, hh: t[2], mm: t[3], prefix: toks.join(" ") };
+        b = { day: dd, mon: thaiMonth(monToks.join("")), year: y, hh: t[2], mm: t[3], prefix: toks.join(" ") };
     }
   }
-  return null;
+  if (b?.mon) return b;
+  return a ?? b; // no month anywhere → return best fields (strict preferred) for deferral
 }
 // Thai screenshots print the Buddhist year, short ("69") or full ("2569"); English
 // screenshots print the CE year (2026). Normalise everything to CE.
