@@ -11,7 +11,7 @@ import { btnGhost, btnPrimary } from "../lib/ui";
 // plus a third eng-ONLY pass whose job is rescuing Latin tickers the Thai model
 // renders as Thai glyphs (see extractTickerHints). Nothing is imported
 // automatically; the user reviews the textarea and presses นำเข้า as usual.
-export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: string) => void; knownSymbols?: string[] }) {
+export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: string, flaggedCsvs: string[]) => void; knownSymbols?: string[] }) {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");     // "รูปที่ x/y" label (no round numbers shown)
   const [pct, setPct] = useState<number | null>(null); // 0..100 for the progress bar; null = no bar
@@ -152,7 +152,7 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
             ))}
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <button onClick={() => { onAppend(result.rows.map(r => r.csv).join("\n")); setResult(null); }}
+            <button onClick={() => { onAppend(result.rows.map(r => r.csv).join("\n"), result.rows.filter(r => r.flags.length).map(r => r.csv)); setResult(null); }}
               style={{ ...btnPrimary({ fontSize: 12, padding: "8px 14px" }) }}>
               วางลงช่อง Import ({result.rows.length} แถว)
             </button>

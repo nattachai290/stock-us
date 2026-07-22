@@ -1,9 +1,52 @@
 "use client";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { IconClock, IconArrowDown, IconArrowUp, IconSplit } from "./icons";
 import { btn, btnGhost } from "../lib/ui";
 import ToolsMenu from "./ToolsMenu";
 import OcrImport from "./OcrImport";
+
+// Import editor with per-line highlighting: a plain <textarea> can't colour individual
+// lines, so a non-interactive backdrop <div> renders the same lines behind a fully
+// transparent textarea and tints the ones OCR flagged — the SAME warn colour the OCR
+// preview used — so a row that needed review still stands out after "วางลงช่อง Import".
+// Metrics (font, padding, border, wrapping) are shared verbatim so the backdrop and the
+// editable text line up exactly; scroll is mirrored.
+function ImportEditor({ value, onChange, flagged, placeholder }: {
+  value: string; onChange: (v: string) => void; flagged: Set<string>; placeholder: string;
+}) {
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const backRef = useRef<HTMLDivElement>(null);
+  const shared: React.CSSProperties = {
+    margin: 0, width: "100%", minHeight: 140, padding: 10, fontSize: 12, lineHeight: 1.5,
+    fontFamily: "monospace", letterSpacing: "normal", tabSize: 4, borderRadius: 6,
+    borderWidth: 1, borderStyle: "solid", boxSizing: "border-box",
+    whiteSpace: "pre-wrap", overflowWrap: "break-word", wordBreak: "break-word",
+  };
+  const lines = value.split("\n");
+  const syncScroll = () => {
+    if (backRef.current && taRef.current) {
+      backRef.current.scrollTop = taRef.current.scrollTop;
+      backRef.current.scrollLeft = taRef.current.scrollLeft;
+    }
+  };
+  return (
+    <div style={{ position: "relative" }}>
+      <div ref={backRef} aria-hidden style={{
+        ...shared, position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none",
+        color: "transparent", background: "var(--bg)", borderColor: "var(--line)",
+      }}>
+        {lines.map((ln, i) => (
+          <div key={i} style={{ background: ln.trim() && flagged.has(ln.trim()) ? "color-mix(in srgb, var(--warn) 22%, transparent)" : "transparent" }}>
+            {ln === "" ? "​" : ln}
+          </div>
+        ))}
+      </div>
+      <textarea ref={taRef} value={value} onChange={e => onChange(e.target.value)} onScroll={syncScroll}
+        placeholder={placeholder} spellCheck={false}
+        style={{ ...shared, position: "relative", background: "transparent", color: "var(--ink)", borderColor: "transparent", resize: "vertical" }} />
+    </div>
+  );
+}
 
 type UnifiedTx = { symbol: string; date: string; kind: "buy"|"sell"|"split"; qty?: number; price?: number; avgCostAtSale?: number; gain?: number; gainPct?: number; ratio?: string; sector: string; fees?: number; grossGain?: number; proceeds?: number; idx: number };
 
@@ -36,6 +79,8 @@ export default function HistoryTab({
   deleteTx: (symbol: string, kind: string, idx: number) => void;
 }) {
   const [txKindFilter, setTxKindFilter] = useState<"all"|"buy"|"sell"|"split">("all");
+  // CSV lines OCR flagged for review — highlighted in the import editor (see ImportEditor).
+  const [flaggedLines, setFlaggedLines] = useState<Set<string>>(new Set());
 
   const allTx: UnifiedTx[] = [];
   holdings.forEach((h: any) => {
@@ -143,14 +188,16 @@ export default function HistoryTab({
         <div style={{background:"var(--card)",borderRadius:8,padding:16,marginBottom:12,border:"1px solid var(--line)"}}>
           <div style={{fontSize:13,fontWeight:600,color:"var(--brass)",marginBottom:6}}>Import ประวัติ ซื้อ/ขาย</div>
           <div style={{fontSize:12,color:"var(--mut)",marginBottom:8}}>Format: <code style={{color:"var(--brass)"}}>DD/MM/YYYY HH:MM,Side(B/S),Symbol,จำนวน,ราคา</code> — เวลาใส่หรือไม่ใส่ก็ได้</div>
-          <textarea value={txImportText} onChange={e=>setTxImportText(e.target.value)}
-            placeholder={"01/11/2025 21:21,B,ACLS,0.1499694,81.95\n18/06/2026 07:20,S,ACLS,0.0445361,184.12\n02/07/2026 15:03,SPLIT,CRWD,4\n02/07/2026 15:03,+,CRWD,0.5311213,0\n02/07/2026 15:03,-,CRWD,0.1327803"}
-            style={{width:"100%",minHeight:140,background:"var(--bg)",color:"var(--ink)",border:"1px solid var(--line)",borderRadius:6,padding:10,fontSize:12,resize:"vertical",fontFamily:"monospace",boxSizing:"border-box"}}/>
+          <ImportEditor value={txImportText} onChange={setTxImportText} flagged={flaggedLines}
+            placeholder={"01/11/2025 21:21,B,ACLS,0.1499694,81.95\n18/06/2026 07:20,S,ACLS,0.0445361,184.12\n02/07/2026 15:03,SPLIT,CRWD,4\n02/07/2026 15:03,+,CRWD,0.5311213,0\n02/07/2026 15:03,-,CRWD,0.1327803"}/>
           <div style={{display:"flex",gap:8,marginTop:8}}>
             <button onClick={importTxCSV} disabled={!txImportText.trim()} style={btn("var(--brass)","var(--on-brass)",{opacity:!txImportText.trim()?0.5:1})}>นำเข้า</button>
-            <button onClick={()=>{setShowTxImport(false);setTxImportText("");}} style={btn("var(--line)","var(--mut)")}>ยกเลิก</button>
+            <button onClick={()=>{setShowTxImport(false);setTxImportText("");setFlaggedLines(new Set());}} style={btn("var(--line)","var(--mut)")}>ยกเลิก</button>
           </div>
-          <OcrImport knownSymbols={holdings.map((h:any)=>h.symbol)} onAppend={(csv)=>setTxImportText((txImportText ? txImportText.trimEnd()+"\n" : "")+csv)}/>
+          <OcrImport knownSymbols={holdings.map((h:any)=>h.symbol)} onAppend={(csv,flaggedCsvs)=>{
+            setTxImportText((txImportText ? txImportText.trimEnd()+"\n" : "")+csv);
+            if (flaggedCsvs?.length) setFlaggedLines(prev => new Set([...prev, ...flaggedCsvs.map(c=>c.trim())]));
+          }}/>
         </div>
       )}
 
