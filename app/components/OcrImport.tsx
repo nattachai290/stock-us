@@ -11,6 +11,9 @@ import { btnGhost, btnPrimary } from "../lib/ui";
 // plus a third eng-ONLY pass whose job is rescuing Latin tickers the Thai model
 // renders as Thai glyphs (see extractTickerHints). Nothing is imported
 // automatically; the user reviews the textarea and presses นำเข้า as usual.
+// Warn tint for a flagged field — matches ImportEditor's field highlight in HistoryTab.
+const FIELD_TINT = "color-mix(in srgb, var(--warn) 32%, transparent)";
+
 // Map a row's review flags to the CSV columns they concern, so the import editor can tint
 // just those fields. CSV is `date,side,symbol,qty,price` → columns 0..4. A flag with no
 // specific field ("เห็นในรอบ OCR เดียว" — the whole row came from one pass) points at the
@@ -161,12 +164,28 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
             {result.incomplete > 0 ? ` · อ่านไม่ครบ ${result.incomplete} รายการ (ไม่ถูกนำมา)` : ""}
           </div>
           <div style={{ maxHeight: 180, overflowY: "auto", background: "var(--bg)", border: "1px solid var(--line)", borderRadius: 6, padding: 8, fontFamily: "monospace", fontSize: 11.5 }}>
-            {result.rows.map((r, i) => (
-              <div key={i} style={{ color: r.flags.length ? "var(--warn)" : "var(--ink)", marginBottom: 2, wordBreak: "break-all" }}>
-                {r.flags.length ? "⚠ " : "✓ "}{r.csv}
-                {r.flags.map((f, j) => <div key={j} style={{ fontSize: 10.5, color: "var(--warn)", paddingLeft: 16 }}>{f}</div>)}
-              </div>
-            ))}
+            {result.rows.map((r, i) => {
+              // Highlight only the flagged CSV fields (symbol / amount / price / …), the
+              // same field-level tint the import editor uses — not the whole row.
+              const cols = r.flags.length ? flagColumns(r.flags) : [];
+              const parts = r.csv.split(",");
+              return (
+                <div key={i} style={{ color: "var(--ink)", marginBottom: 2, wordBreak: "break-all" }}>
+                  <span style={{ color: r.flags.length ? "var(--warn)" : "var(--gain)" }}>{r.flags.length ? "⚠ " : "✓ "}</span>
+                  {r.flags.length
+                    ? parts.map((p, idx) => (
+                        <span key={idx}>
+                          {idx > 0 ? "," : ""}
+                          {cols.includes(idx)
+                            ? <span style={{ background: FIELD_TINT, color: "var(--warn)", borderRadius: 2 }}>{p}</span>
+                            : p}
+                        </span>
+                      ))
+                    : r.csv}
+                  {r.flags.map((f, j) => <div key={j} style={{ fontSize: 10.5, color: "var(--warn)", paddingLeft: 16 }}>{f}</div>)}
+                </div>
+              );
+            })}
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
             <button onClick={() => { onAppend(result.rows.map(r => r.csv).join("\n"), result.rows.filter(r => r.flags.length).map(r => ({ csv: r.csv, cols: flagColumns(r.flags) }))); setResult(null); }}
