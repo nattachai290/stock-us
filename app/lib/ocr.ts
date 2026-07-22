@@ -543,13 +543,19 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
   const seen = new Set<string>();
   const rows: MergedRow[] = [];
 
-  const finalize = (best: OcrTxRow, side: "B" | "S", flags: string[]) => {
+  const finalize = (best: OcrTxRow, side: "B" | "S", flags: string[], valuesOk = false) => {
     if (best.monthInferred) flags.push(`OCR อ่านเดือนได้ "${best.monthReadAs}" — เดาเป็นเดือน ${best.csv.slice(3, 5)} จากรายการข้างเคียง ตรวจกับรูป`);
     if (best.symbolFromHint) flags.push("ชื่อหุ้นอ่านจากรอบภาษาอังกฤษ — ตรวจกับรูป");
     if (best.symbolHintMismatch) flags.push(`รอบภาษาอังกฤษอ่านชื่อหุ้นเป็น ${best.symbolHintMismatch} — ตรวจกับรูป`);
     if (best.symbolCorrected) flags.push(`OCR อ่านได้ "${best.symbolCorrected}" — แก้เป็น ${best.symbol} ตามหุ้นในพอร์ต ตรวจกับรูป`);
     if (!best.isGold && decimals(best.qtyStr) !== SHARE_DECIMALS) flags.push(`ทศนิยมจำนวนหุ้นได้ ${decimals(best.qtyStr)} หลัก (ปกติ 7) — อาจอ่านตกหลัก`);
-    if (best.check === "mismatch") flags.push(`ราคา×จำนวน = ${(best.price * best.qty).toFixed(2)} ไม่ตรงกับยอดรวมในรูป ${best.total?.toFixed(2)} — ตรวจกับรูป`);
+    // A price×qty≠total mismatch only matters if it means the IMPORTED qty or price is
+    // wrong — the total itself is never imported (CSV is date,side,symbol,qty,price). When
+    // qty and price are corroborated (both passes agree, or confirmed in another read) the
+    // odd one out is the misread total, so don't flag: e.g. HEI 340.75×0.0348936=11.89 with
+    // the total OCR'd as "1.91" (leading digit dropped) is a fine row, not a review item.
+    if (best.check === "mismatch" && !valuesOk)
+      flags.push(`ราคา×จำนวน = ${(best.price * best.qty).toFixed(2)} ไม่ตรงกับยอดรวมในรูป ${best.total?.toFixed(2)} — ตรวจกับรูป`);
     const parts = best.csv.split(","); parts[1] = side; // csv was built with best.side; apply the resolved one
     rows.push({ ...best, side, csv: parts.join(","), flags });
   };
@@ -574,13 +580,17 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
     }
 
     if (!rb) {
-      if (!confirmedBy(ra, texts?.b)) flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป");
-      finalize(ra, side, flags); continue;
+      const conf = confirmedBy(ra, texts?.b);
+      if (!conf) flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป");
+      finalize(ra, side, flags, conf); continue;
     }
 
     // Resolve qty/price: the reading whose price×qty matches the printed USD total wins
     // (arithmetic can't lie); else prefer the 7-decimal Shares read.
     let best = ra;
+    // Two independent passes agreeing on both qty AND price corroborates the imported
+    // values — a total mismatch then implicates only the (non-imported) total.
+    const valuesOk = ra.qtyStr === rb.qtyStr && ra.priceStr === rb.priceStr;
     if (ra.qtyStr === rb.qtyStr && ra.priceStr === rb.priceStr) {
       // Same numbers in both passes, but one pass misread the printed TOTAL (a leading
       // digit drops easily: "11.92" → "1.92") — trust the pass where arithmetic agrees
@@ -619,15 +629,16 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
         }
       }
     }
-    finalize(best, side, flags);
+    finalize(best, side, flags, valuesOk);
   }
   // rows the 2nd pass found that the 1st missed entirely
   for (const rb of b.rows) {
     if (seen.has(key(rb))) continue;
     const flags: string[] = [];
-    if (!confirmedBy(rb, texts?.a)) flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป");
+    const conf = confirmedBy(rb, texts?.a);
+    if (!conf) flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป");
     if (rb.sideUncertain) flags.push("อ่านชนิด ซื้อ/ขาย ไม่ชัด — ตรวจกับรูป");
-    finalize(rb, rb.side, flags);
+    finalize(rb, rb.side, flags, conf);
   }
 
   rows.sort((x, y) => new Date(x.iso).getTime() - new Date(y.iso).getTime());
