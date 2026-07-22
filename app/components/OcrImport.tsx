@@ -11,7 +11,24 @@ import { btnGhost, btnPrimary } from "../lib/ui";
 // plus a third eng-ONLY pass whose job is rescuing Latin tickers the Thai model
 // renders as Thai glyphs (see extractTickerHints). Nothing is imported
 // automatically; the user reviews the textarea and presses นำเข้า as usual.
-export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: string, flaggedCsvs: string[]) => void; knownSymbols?: string[] }) {
+// Map a row's review flags to the CSV columns they concern, so the import editor can tint
+// just those fields. CSV is `date,side,symbol,qty,price` → columns 0..4. A flag with no
+// specific field ("เห็นในรอบ OCR เดียว" — the whole row came from one pass) points at the
+// value fields symbol/qty/price, the things a reviewer re-checks against the screenshot.
+const flagColumns = (flags: string[]): number[] => {
+  const cols = new Set<number>();
+  for (const f of flags) {
+    if (f.includes("เดาเป็นเดือน")) cols.add(0);                       // month in the date
+    if (f.includes("ซื้อ/ขาย")) cols.add(1);                          // side
+    if (f.includes("ชื่อหุ้น") || f.includes("หุ้นในพอร์ต")) cols.add(2); // symbol
+    if (f.includes("จำนวน")) cols.add(3);                             // amount / shares
+    if (f.includes("ราคา")) cols.add(4);                             // price
+    if (f.includes("เห็นในรอบ OCR เดียว")) { cols.add(2); cols.add(3); cols.add(4); }
+  }
+  return [...cols].sort((a, b) => a - b);
+};
+
+export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: string, flaggedFields: { csv: string; cols: number[] }[]) => void; knownSymbols?: string[] }) {
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");     // "รูปที่ x/y" label (no round numbers shown)
   const [pct, setPct] = useState<number | null>(null); // 0..100 for the progress bar; null = no bar
@@ -152,7 +169,7 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
             ))}
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <button onClick={() => { onAppend(result.rows.map(r => r.csv).join("\n"), result.rows.filter(r => r.flags.length).map(r => r.csv)); setResult(null); }}
+            <button onClick={() => { onAppend(result.rows.map(r => r.csv).join("\n"), result.rows.filter(r => r.flags.length).map(r => ({ csv: r.csv, cols: flagColumns(r.flags) }))); setResult(null); }}
               style={{ ...btnPrimary({ fontSize: 12, padding: "8px 14px" }) }}>
               วางลงช่อง Import ({result.rows.length} แถว)
             </button>

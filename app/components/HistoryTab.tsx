@@ -5,14 +5,15 @@ import { btn, btnGhost } from "../lib/ui";
 import ToolsMenu from "./ToolsMenu";
 import OcrImport from "./OcrImport";
 
-// Import editor with per-line highlighting: a plain <textarea> can't colour individual
-// lines, so a non-interactive backdrop <div> renders the same lines behind a fully
-// transparent textarea and tints the ones OCR flagged — the SAME warn colour the OCR
-// preview used — so a row that needed review still stands out after "วางลงช่อง Import".
+// Import editor with per-FIELD highlighting: a plain <textarea> can't colour parts of a
+// line, so a non-interactive backdrop <div> renders the same lines behind a fully
+// transparent textarea and tints ONLY the CSV columns OCR flagged (symbol / amount /
+// price / … — keyed per line by `flagged`), in the SAME warn colour the OCR preview used.
 // Metrics (font, padding, border, wrapping) are shared verbatim so the backdrop and the
 // editable text line up exactly; scroll is mirrored.
+const FIELD_TINT = "color-mix(in srgb, var(--warn) 32%, transparent)";
 function ImportEditor({ value, onChange, flagged, placeholder }: {
-  value: string; onChange: (v: string) => void; flagged: Set<string>; placeholder: string;
+  value: string; onChange: (v: string) => void; flagged: Map<string, number[]>; placeholder: string;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const backRef = useRef<HTMLDivElement>(null);
@@ -29,17 +30,28 @@ function ImportEditor({ value, onChange, flagged, placeholder }: {
       backRef.current.scrollLeft = taRef.current.scrollLeft;
     }
   };
+  // Render one backdrop line: split on commas and wrap only the flagged columns in a tinted
+  // span (commas stay untinted so adjacent fields read as separate). The characters are
+  // identical to the textarea's, so the tint sits exactly under the right field.
+  const renderLine = (ln: string) => {
+    const cols = ln.trim() ? flagged.get(ln.trim()) : undefined;
+    if (ln === "") return "​";
+    if (!cols || !cols.length) return ln;
+    const parts = ln.split(",");
+    return parts.map((p, idx) => (
+      <span key={idx}>
+        {idx > 0 ? "," : ""}
+        {cols.includes(idx) ? <span style={{ background: FIELD_TINT, borderRadius: 2 }}>{p}</span> : p}
+      </span>
+    ));
+  };
   return (
     <div style={{ position: "relative" }}>
       <div ref={backRef} aria-hidden style={{
         ...shared, position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none",
         color: "transparent", background: "var(--bg)", borderColor: "var(--line)",
       }}>
-        {lines.map((ln, i) => (
-          <div key={i} style={{ background: ln.trim() && flagged.has(ln.trim()) ? "color-mix(in srgb, var(--warn) 22%, transparent)" : "transparent" }}>
-            {ln === "" ? "​" : ln}
-          </div>
-        ))}
+        {lines.map((ln, i) => <div key={i}>{renderLine(ln)}</div>)}
       </div>
       <textarea ref={taRef} value={value} onChange={e => onChange(e.target.value)} onScroll={syncScroll}
         placeholder={placeholder} spellCheck={false}
@@ -79,8 +91,9 @@ export default function HistoryTab({
   deleteTx: (symbol: string, kind: string, idx: number) => void;
 }) {
   const [txKindFilter, setTxKindFilter] = useState<"all"|"buy"|"sell"|"split">("all");
-  // CSV lines OCR flagged for review — highlighted in the import editor (see ImportEditor).
-  const [flaggedLines, setFlaggedLines] = useState<Set<string>>(new Set());
+  // Per-line map of CSV columns OCR flagged for review (trimmed csv → column indices),
+  // highlighted field-by-field in the import editor (see ImportEditor).
+  const [flaggedLines, setFlaggedLines] = useState<Map<string, number[]>>(new Map());
 
   const allTx: UnifiedTx[] = [];
   holdings.forEach((h: any) => {
@@ -192,11 +205,15 @@ export default function HistoryTab({
             placeholder={"01/11/2025 21:21,B,ACLS,0.1499694,81.95\n18/06/2026 07:20,S,ACLS,0.0445361,184.12\n02/07/2026 15:03,SPLIT,CRWD,4\n02/07/2026 15:03,+,CRWD,0.5311213,0\n02/07/2026 15:03,-,CRWD,0.1327803"}/>
           <div style={{display:"flex",gap:8,marginTop:8}}>
             <button onClick={importTxCSV} disabled={!txImportText.trim()} style={btn("var(--brass)","var(--on-brass)",{opacity:!txImportText.trim()?0.5:1})}>นำเข้า</button>
-            <button onClick={()=>{setShowTxImport(false);setTxImportText("");setFlaggedLines(new Set());}} style={btn("var(--line)","var(--mut)")}>ยกเลิก</button>
+            <button onClick={()=>{setShowTxImport(false);setTxImportText("");setFlaggedLines(new Map());}} style={btn("var(--line)","var(--mut)")}>ยกเลิก</button>
           </div>
-          <OcrImport knownSymbols={holdings.map((h:any)=>h.symbol)} onAppend={(csv,flaggedCsvs)=>{
+          <OcrImport knownSymbols={holdings.map((h:any)=>h.symbol)} onAppend={(csv,flaggedFields)=>{
             setTxImportText((txImportText ? txImportText.trimEnd()+"\n" : "")+csv);
-            if (flaggedCsvs?.length) setFlaggedLines(prev => new Set([...prev, ...flaggedCsvs.map(c=>c.trim())]));
+            if (flaggedFields?.length) setFlaggedLines(prev => {
+              const next = new Map(prev);
+              for (const f of flaggedFields) next.set(f.csv.trim(), f.cols);
+              return next;
+            });
           }}/>
         </div>
       )}
