@@ -526,7 +526,15 @@ function confirmedInText(r: OcrTxRow, text?: string): boolean {
 const decimals = (s: string) => (s.split(".")[1] || "").length;
 const SHARE_DECIMALS = 7;
 
-export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: string; b?: string }): MergeResult {
+export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: string; b?: string; extra?: string[] }): MergeResult {
+  // A row seen in only ONE main pass is flagged unless its time+price+qty can be
+  // corroborated somewhere else. "Somewhere else" is the OTHER main pass's raw text
+  // plus any `extra` texts the caller supplies (the eng-only / tha-only specialist
+  // reads) — an independent OCR of the same pixels finding the same three numbers is
+  // strong evidence the value is right, so the flag is dropped. This never changes a
+  // value; it only clears a review flag when a second reader agrees.
+  const extra = texts?.extra || [];
+  const confirmedBy = (r: OcrTxRow, primary?: string) => confirmedInText(r, primary) || extra.some(t => confirmedInText(r, t));
   // Key on date+symbol (NOT side): the Thai side word is noisy, so two passes can
   // disagree on Buy/Sell for the same transaction — we reconcile side here rather than
   // emit two rows. A single symbol won't have two transactions at the same minute.
@@ -566,7 +574,7 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
     }
 
     if (!rb) {
-      if (!confirmedInText(ra, texts?.b)) flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป");
+      if (!confirmedBy(ra, texts?.b)) flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป");
       finalize(ra, side, flags); continue;
     }
 
@@ -617,7 +625,7 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
   for (const rb of b.rows) {
     if (seen.has(key(rb))) continue;
     const flags: string[] = [];
-    if (!confirmedInText(rb, texts?.a)) flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป");
+    if (!confirmedBy(rb, texts?.a)) flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป");
     if (rb.sideUncertain) flags.push("อ่านชนิด ซื้อ/ขาย ไม่ชัด — ตรวจกับรูป");
     finalize(rb, rb.side, flags);
   }

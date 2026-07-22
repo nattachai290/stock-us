@@ -70,11 +70,16 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       // main passes first and run the specialists ONLY when there's something for them to
       // fix — clean screenshots (English, or Thai that OCR'd well) skip them and finish in
       // two passes instead of four.
-      const parseMain = (h?: Record<string, string>, mh?: Record<string, { mon: string; year: string }>) =>
+      const parseMain = (h?: Record<string, string>, mh?: Record<string, { mon: string; year: string }>, extra?: string[]) =>
         mergeParses(parseActivityText(texts[2], h, knownSymbols, mh),
-                    parseActivityText(texts[3], h, knownSymbols, mh), { a: texts[2], b: texts[3] });
+                    parseActivityText(texts[3], h, knownSymbols, mh), { a: texts[2], b: texts[3], extra });
       let merged = parseMain();
-      const needsSpecialists = merged.incomplete > 0 || merged.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน")));
+      // Run the specialist passes when there's something they can fix: an unfinished block
+      // (incomplete), an inferred month, OR a row only one main pass saw — the specialists'
+      // raw text is a third/fourth reader that can corroborate a single-round row and clear
+      // its "เห็นในรอบ OCR เดียว" flag.
+      const needsSpecialists = merged.incomplete > 0
+        || merged.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน") || f.includes("เห็นในรอบ OCR เดียว")));
       if (needsSpecialists) {
         // eng-only reads Latin tickers the Thai model mangles (keyed by share count);
         // tha-only reads Thai month abbreviations eng+tha renders as Latin (keyed by day+time).
@@ -101,7 +106,7 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
         const [engText, thaText] = await Promise.all([runLang("eng", 0), runLang("tha", 1)]);
         const hints = extractTickerHints(engText);
         const monthHints = extractMonthHints(thaText);
-        merged = parseMain(hints, monthHints);
+        merged = parseMain(hints, monthHints, [engText, thaText]);
       }
       setResult(merged);
       setPct(null);

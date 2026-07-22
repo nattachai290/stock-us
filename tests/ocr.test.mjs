@@ -669,13 +669,15 @@ for (const c of CASES) {
   const textA = await ocrText(worker, c.imgs, 2), textB = await ocrText(worker, c.imgs, 3);
   // MIRROR OcrImport's lazy orchestration exactly: parse the two main passes first, and
   // run the eng/tha specialist passes only when there's something for them to fix.
-  const parseMain = (h, mh) =>
-    mergeParses(parseActivityText(textA, h, known, mh), parseActivityText(textB, h, known, mh), { a: textA, b: textB });
+  const parseMain = (h, mh, extra) =>
+    mergeParses(parseActivityText(textA, h, known, mh), parseActivityText(textB, h, known, mh), { a: textA, b: textB, extra });
   let m = parseMain();
-  if (m.incomplete > 0 || m.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน")))) {
-    const hints = extractTickerHints(await ocrText(engWorker, c.imgs, 2));
-    const monthHints = extractMonthHints(await ocrText(thaWorker, c.imgs, 2));
-    m = parseMain(hints, monthHints);
+  if (m.incomplete > 0 || m.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน") || f.includes("เห็นในรอบ OCR เดียว")))) {
+    const engText = await ocrText(engWorker, c.imgs, 2);
+    const thaText = await ocrText(thaWorker, c.imgs, 2);
+    const hints = extractTickerHints(engText);
+    const monthHints = extractMonthHints(thaText);
+    m = parseMain(hints, monthHints, [engText, thaText]);
   }
   const exact = c.truth.filter(t => m.rows.some(r => r.csv === t)).length;
   const silent = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length === 0);
