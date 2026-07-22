@@ -1,7 +1,8 @@
 // Regression tests for the OCR screenshot-import pipeline (app/lib/ocr.ts).
-// Runs the REAL pipeline — preprocess (jimp mirrors the browser canvas steps) →
-// tesseract.js OCR → parseActivityText → mergeParses — against real broker
-// screenshots in tests/fixtures/ with hand-verified ground truth.
+// Runs the REAL pipeline — the SAME shared preprocessing the browser runs
+// (lib/preprocess; jimp only decodes/encodes) → tesseract.js OCR →
+// parseActivityText → mergeParses — against real broker screenshots in
+// tests/fixtures/ with hand-verified ground truth.
 //
 // Run: npm run test:ocr   (no network needed — language data comes from
 // node_modules/@tesseract.js-data/eng, a devDependency)
@@ -19,9 +20,11 @@ import path from "path";
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FIX = (f) => path.join(ROOT, "tests", "fixtures", f);
 
-// compile the TS module on the fly so the test always runs the current source
+// compile the TS modules on the fly so the test always runs the current source
 const src = execSync("npx esbuild app/lib/ocr.ts --format=esm", { cwd: ROOT }).toString();
-const { parseActivityText, mergeParses, extractTickerHints } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
+const { parseActivityText, mergeParses, extractTickerHints, extractMonthHints } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
+const preSrc = execSync("npx esbuild app/lib/preprocess.ts --format=esm", { cwd: ROOT }).toString();
+const { grayscaleInvert, resizeBilinear } = await import("data:text/javascript;base64," + Buffer.from(preSrc).toString("base64"));
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = "") => {
@@ -30,6 +33,19 @@ const check = (name, cond, detail = "") => {
 };
 
 // ── Unit tests (no OCR, synthetic text) ───────────────────────────────────────
+
+{
+  // Shared preprocessing must be deterministic and match the documented math.
+  const px = new Uint8ClampedArray([255, 255, 255, 255, 0, 0, 0, 255]); // white, black
+  grayscaleInvert(px);
+  check("preprocess: white → 0, black → 255", px[0] === 0 && px[4] === 255, `${px[0]},${px[4]}`);
+  const r = resizeBilinear(new Uint8ClampedArray([100, 100, 100, 255]), 1, 1, 2);
+  check("preprocess: 1x1 → 2x2, value preserved", r.width === 2 && r.height === 2 && [0, 4, 8, 12].every(i => r.data[i] === 100), JSON.stringify([...r.data]));
+  // two-pixel gradient upscaled 2x: center-aligned sampling gives 0,0,100,100 → interpolated midpoints
+  const g = resizeBilinear(new Uint8ClampedArray([0, 0, 0, 255, 100, 100, 100, 255]), 2, 1, 2);
+  check("preprocess: gradient interpolates deterministically", g.width === 4 && g.data[0] === 0 && g.data[4] === 25 && g.data[8] === 75 && g.data[12] === 100,
+    [0, 4, 8, 12].map(i => g.data[i]).join(","));
+}
 
 // Reproduction of a real bug: OCR missed the "Buy ARM" header of the December
 // block, which used to overwrite the still-open Sell record's qty/price.
@@ -103,6 +119,23 @@ Shares 0.1740529`;
   // but when BOTH passes read the bad total, the mismatch flag must stay
   const mb = mergeParses(parseActivityText(bad), parseActivityText(bad));
   check("total-misread (both bad): mismatch stays flagged", mb.rows[0]?.flags.some(f => f.includes("ยอดรวม")), JSON.stringify(mb.rows[0]?.flags));
+}
+
+{
+  // Prices disagree across passes; a USD total from EITHER pass settles it. Real case:
+  // one pass keeps "5,189.88" but its "31.13 USD" got mangled to THB ("บ"); the other
+  // pass drops the leading digit → "189.88" but keeps the USD total. 5189.88×0.0060 ≈
+  // 31.13 while 189.88×0.0060 ≈ 1.14, so the merge picks 5189.88 with no disagreement flag.
+  const A = `ขาย MTS-GOLD 31.13 บ\nราคาที่ได้จริง 5,189.88 11 มี.ค. 69 - 16:55:45 น.\nน้ำหนัก 0.0060 oz`;
+  const B = `ขาย MTS-GOLD 31.13 USD\nราคาที่ได้จริง 189.88 11 มี.ค. 69 - 16:55:45 น.\nน้ำหนัก 0.0060 oz`;
+  const m = mergeParses(parseActivityText(A), parseActivityText(B), { a: A, b: B });
+  check("price-tiebreak: cross-pass USD total picks right price", m.rows[0]?.priceStr === "5189.88", m.rows[0]?.csv);
+  check("price-tiebreak: no disagreement flag when arithmetic settles it", !m.rows[0]?.flags.some(f => f.includes("ราคาสองรอบ")), JSON.stringify(m.rows[0]?.flags));
+  // But when NEITHER candidate price satisfies the USD total, the flag must stay.
+  const D = `ขาย MTS-GOLD 99.99 USD\nราคาที่ได้จริง 5,189.88 11 มี.ค. 69 - 16:55:45 น.\nน้ำหนัก 0.0060 oz`;
+  const E = `ขาย MTS-GOLD 99.99 USD\nราคาที่ได้จริง 189.88 11 มี.ค. 69 - 16:55:45 น.\nน้ำหนัก 0.0060 oz`;
+  const m2 = mergeParses(parseActivityText(D), parseActivityText(E), { a: D, b: E });
+  check("price-tiebreak: neither matches → disagreement flag stays", m2.rows[0]?.flags.some(f => f.includes("ราคาสองรอบ")), JSON.stringify(m2.rows[0]?.flags));
 }
 
 {
@@ -247,6 +280,106 @@ Weight 0.0029 oz
 ราคาที่ได้จริง 4,081.98 22 ต.ค. 68 - 07:46:08 น.
 น้ำหนัก 0.5212 ๐ 7`;
   check("oz-as-๐N on its own line", parseActivityText(onOwnLine).rows[0]?.qtyStr === "0.5212", JSON.stringify(parseActivityText(onOwnLine).rows));
+}
+
+{
+  // A stray dot on the WRONG side of a share count ("0.1.480446" → the FIRST dot is
+  // the decimal): qtyFix must try both keep-first and keep-last dot and pick the
+  // variant with the layout's 7 decimals.
+  const t = `ซื้อ HPQ 99.88 บาท
+ราคาที่ได้จริง 21.48 12 ม.ค. 69 - 14:59:24 น.
+จำนวนหุ้น 0.1.480446`;
+  const m = mergeParses(parseActivityText(t), parseActivityText(t));
+  check("dot-variant qty: first-dot decimal recovered", m.rows[0]?.qtyStr === "0.1480446", m.rows[0]?.csv);
+}
+
+{
+  // The ๐-digit oz variant must NEVER convert a known stock block into gold — junk
+  // "๐" on a Thai stock line once invented a spurious XAUUSD row. Even a 4-decimal
+  // number doesn't qualify when the block already has a non-gold ticker.
+  const t = `ซื้อ EOSE 99.82 บาท
+ราคาที่ได้จริง 12.9380 4 ก.พ. 69 - 22:02:21 น.
+1.9380 ๐ 8
+จำนวนหุ้น 0.2419230`;
+  const m = mergeParses(parseActivityText(t), parseActivityText(t));
+  check("๐-oz guard: stock block stays a stock", m.rows.length === 1 && m.rows[0]?.symbol === "EOSE" && m.rows[0]?.qtyStr === "0.2419230", JSON.stringify(m.rows.map(r => r.csv)));
+}
+
+{
+  // Month-anchor inference: a row whose month is unreadable ("A.A.") is filled from
+  // its neighbours ONLY when the nearest readable month before and after agree — the
+  // broker's strict chronological order makes a same-month bracket safe. Filled → flagged.
+  const bracketed = `ซื้อ MTS-GOLD 100.00 บาท
+ราคาที่ได้จริง 4000.00 30 ต.ค. 68 - 10:00:00 น.
+น้ำหนัก 0.0100 oz
+ขาย MTS-GOLD 24.45 USD
+ราคาที่ได้จริง 4076.61 27 A.A. 68 - 08:00:49 น.
+น้ำหนัก 0.0060 oz
+ซื้อ MTS-GOLD 100.00 บาท
+ราคาที่ได้จริง 4081.98 22 ต.ค. 68 - 07:46:08 น.
+น้ำหนัก 0.0050 oz`;
+  const m = mergeParses(parseActivityText(bracketed), parseActivityText(bracketed), { a: bracketed, b: bracketed });
+  const r = m.rows.find(x => x.csv.includes("08:00"));
+  check("month-anchor: same-month bracket fills the month", r?.csv === "27/10/2025 08:00,S,XAUUSD,0.0060,4076.61", r?.csv);
+  check("month-anchor: inferred month is flagged", r?.flags.some(f => f.includes("เดาเป็นเดือน")), JSON.stringify(r?.flags));
+  check("month-anchor: flag records what OCR read", r?.flags.some(f => f.includes('อ่านเดือนได้ "A.A."')), JSON.stringify(r?.flags));
+  check("month-anchor: all 3 rows present", m.rows.length === 3 && m.incomplete === 0, `rows=${m.rows.length} inc=${m.incomplete}`);
+
+  // A month boundary between the neighbours (Oct above, Nov below) is NOT safe → drop.
+  const boundary = bracketed.replace("22 ต.ค. 68", "22 พ.ย. 68");
+  const mb = mergeParses(parseActivityText(boundary), parseActivityText(boundary));
+  check("month-anchor: boundary bracket stays unread", !mb.rows.some(x => x.csv.includes("08:00")) && mb.incomplete === 1, `rows=${mb.rows.length} inc=${mb.incomplete}`);
+
+  // No anchor on one side (row is the very first date, nothing before it) → drop.
+  const oneSide = `ขาย MTS-GOLD 24.45 USD
+ราคาที่ได้จริง 4076.61 27 A.A. 68 - 08:00:49 น.
+น้ำหนัก 0.0060 oz
+ซื้อ MTS-GOLD 100.00 บาท
+ราคาที่ได้จริง 4081.98 22 ต.ค. 68 - 07:46:08 น.
+น้ำหนัก 0.0050 oz`;
+  const mo = mergeParses(parseActivityText(oneSide), parseActivityText(oneSide));
+  check("month-anchor: single-sided bracket stays unread", !mo.rows.some(x => x.csv.includes("08:00")) && mo.incomplete === 1, `rows=${mo.rows.length} inc=${mo.incomplete}`);
+
+  // A cut-off headerless date line still contributes its month as an anchor.
+  const headerless = `ราคาที่ได้จริง 3934.68 30 ต.ค. 68 - 10:42:12 น.
+น้ำหนัก 0.0623 oz
+ขาย MTS-GOLD 24.45 USD
+ราคาที่ได้จริง 4076.61 27 A.A. 68 - 08:00:49 น.
+น้ำหนัก 0.0060 oz
+ซื้อ MTS-GOLD 100.00 บาท
+ราคาที่ได้จริง 4081.98 22 ต.ค. 68 - 07:46:08 น.
+น้ำหนัก 0.0050 oz`;
+  const mh = mergeParses(parseActivityText(headerless), parseActivityText(headerless), { a: headerless, b: headerless });
+  check("month-anchor: headerless date line anchors too", mh.rows.some(x => x.csv === "27/10/2025 08:00,S,XAUUSD,0.0060,4076.61"), JSON.stringify(mh.rows.map(x => x.csv)));
+}
+
+{
+  // tha-only month rescue: eng+tha rendered the month as Latin ("A.A."), but a tha-only
+  // pass read it (keyed by day+time). The month is FILLED as a real read → clean, no flag.
+  const main = `ขาย MTS-GOLD 24.45 USD
+ราคาที่ได้จริง 4076.61 27 A.A. 68 - 08:00:49 น.
+น้ำหนัก 0.0060 oz`;
+  const monthHints = extractMonthHints("ราคาที่ได้จริง 4076.61 27 ต.ค. 68 - 08:00:49 น.");
+  check("month-hints: extracts day+time → month", monthHints["27|08:00"]?.mon === "10", JSON.stringify(monthHints));
+  const m = mergeParses(parseActivityText(main, undefined, undefined, monthHints), parseActivityText(main, undefined, undefined, monthHints), { a: main, b: main });
+  check("tha-month: filled from tha-only read", m.rows[0]?.csv === "27/10/2025 08:00,S,XAUUSD,0.0060,4076.61", m.rows[0]?.csv);
+  check("tha-month: clean, NOT flagged", m.rows[0]?.flags.length === 0, JSON.stringify(m.rows[0]?.flags));
+  // No hint for that day+time → still deferred to neighbour inference (unchanged path).
+  const m2 = mergeParses(parseActivityText(main, undefined, undefined, {}), parseActivityText(main, undefined, undefined, {}));
+  check("tha-month: no hint → not filled (drops without anchors)", m2.rows.length === 0 && m2.incomplete === 1, `rows=${m2.rows.length} inc=${m2.incomplete}`);
+}
+
+{
+  // Section header ("ตุลาคม 2568") supplies a month anchor for rows under it.
+  const withHeader = `ตุลาคม 2568
+ขาย MTS-GOLD 24.45 USD
+ราคาที่ได้จริง 4076.61 27 A.A. 68 - 08:00:49 น.
+น้ำหนัก 0.0060 oz
+ซื้อ MTS-GOLD 100.00 บาท
+ราคาที่ได้จริง 4081.98 22 ต.ค. 68 - 07:46:08 น.
+น้ำหนัก 0.0050 oz`;
+  const m = mergeParses(parseActivityText(withHeader), parseActivityText(withHeader), { a: withHeader, b: withHeader });
+  check("month-anchor: section header anchors the month", m.rows.some(x => x.csv === "27/10/2025 08:00,S,XAUUSD,0.0060,4076.61"), JSON.stringify(m.rows.map(x => x.csv)));
 }
 
 {
@@ -438,6 +571,14 @@ const TRUTH_GOLD_THAI_3 = [
   "09/06/2025 16:37,B,XAUUSD,0.0022,3321.33", "17/06/2025 22:22,B,XAUUSD,0.0022,3386.27",
   "09/07/2025 18:36,B,XAUUSD,0.0069,3286.86", "14/07/2025 22:35,B,XAUUSD,0.0022,3349.08",
 ];
+// Thai gold, mixed buy + sells — one บาท-total BUY at top, five USD-total SELLS
+// (ขาย + "<total> USD" header, weight on its own line). มี.ค. 69 → March 2026.
+// Exercises confident-sell detection from a readable ขาย word on USD-total gold rows.
+const TRUTH_GOLD_THAI_4 = [
+  "11/03/2026 07:03,S,XAUUSD,0.0060,5190.78", "11/03/2026 16:55,S,XAUUSD,0.0060,5189.88",
+  "11/03/2026 17:51,S,XAUUSD,0.0090,5188.52", "13/03/2026 07:05,S,XAUUSD,0.0060,5101.84",
+  "13/03/2026 21:14,S,XAUUSD,0.0120,5093.40", "16/03/2026 21:59,B,XAUUSD,0.0616,4994.89",
+];
 // Thai STOCK screenshots (ซื้อ/ขาย + US tickers, จำนวนหุ้น). Thai OCR of symbols/side is
 // noisy, so the guarantee is SILENT-wrong===0 (mangled rows drop or flag). CA (รับ/หัก)
 // rows are skipped. exact baselines are the measured minimums.
@@ -477,12 +618,22 @@ const engWorker = await createWorker("eng", 1, {
   langPath: path.join(ROOT, "public", "tesseract"),
   gzip: true, cacheMethod: "none",
 });
+const thaWorker = await createWorker("tha", 1, {
+  langPath: path.join(ROOT, "public", "tesseract"),
+  gzip: true, cacheMethod: "none",
+});
 async function ocrText(w, imgs, scale) {
   let text = "";
   for (const p of imgs) {
+    // jimp only decodes/encodes; the actual preprocessing is the SAME shared code
+    // (lib/preprocess) the browser runs, so app and CI feed tesseract identical pixels.
     const img = await Jimp.read(p);
-    img.greyscale().invert().scale(scale); // mirrors OcrImport.tsx canvas preprocessing
-    const { data } = await w.recognize(await img.getBufferAsync(Jimp.MIME_PNG));
+    const { data: raw, width, height } = img.bitmap;
+    const view = new Uint8ClampedArray(raw.buffer, raw.byteOffset, raw.length);
+    grayscaleInvert(view);
+    const r = resizeBilinear(view, width, height, scale);
+    const out = new Jimp({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height });
+    const { data } = await w.recognize(await out.getBufferAsync(Jimp.MIME_PNG));
     text += data.text + "\n";
   }
   return text;
@@ -495,8 +646,12 @@ const CASES = [
   { name: "gold DCA (MTS-GOLD)", imgs: [FIX("gold-mts.jpg")], truth: TRUTH_GOLD, minExact: 5 },
   { name: "gold DCA Thai (MTS-GOLD)", imgs: [FIX("gold-mts-thai.jpg")], truth: TRUTH_GOLD_THAI, minExact: 4 },
   { name: "gold DCA Thai light theme", imgs: [FIX("gold-mts-thai-light.jpg")], truth: TRUTH_GOLD_THAI_LIGHT, minExact: 6 },
-  { name: "gold DCA Thai (refund-line, 2 images)", imgs: [FIX("gold-mts-thai-2a.jpg"), FIX("gold-mts-thai-2b.jpg")], truth: TRUTH_GOLD_THAI_2, minExact: 9 },
+  // The 27/10 row's ต.ค. month OCRs as "A.A." in BOTH passes (ambiguous on its own),
+  // but it's bracketed by readable ต.ค. anchors above and below in the chronological
+  // list, so month-anchor inference recovers it (flagged). All 10 rows now parse.
+  { name: "gold DCA Thai (refund-line, 2 images)", imgs: [FIX("gold-mts-thai-2a.jpg"), FIX("gold-mts-thai-2b.jpg")], truth: TRUTH_GOLD_THAI_2, minExact: 10 },
   { name: "gold DCA Thai (cross-pass month recovery)", imgs: [FIX("gold-mts-thai-3.jpg")], truth: TRUTH_GOLD_THAI_3, minExact: 6 },
+  { name: "gold DCA Thai (USD-total sells)", imgs: [FIX("gold-mts-thai-4.jpg")], truth: TRUTH_GOLD_THAI_4, minExact: 6 },
   { name: "Thai stock sells", imgs: [FIX("th-stock-sells.jpg")], truth: TRUTH_TH_SELLS, minExact: 6 },
   { name: "Thai stock buys + CA-skip", imgs: [FIX("th-stock-ca.jpg")], truth: TRUTH_TH_CA, minExact: 3 },
   ...Object.entries(TH_STOCK_MORE).map(([f, truth]) => ({ name: f, imgs: [FIX(f)], truth, minExact: TH_MIN_EXACT[f] })),
@@ -508,13 +663,22 @@ const CASES = [
 let exactTotal = 0, truthTotal = 0, cleanTotal = 0, flagOkTotal = 0, flagWrongTotal = 0, missTotal = 0, incTotal = 0;
 console.log("\n— OCR exact-match recall (reported, not a pass/fail) —");
 for (const c of CASES) {
-  const hints = extractTickerHints(await ocrText(engWorker, c.imgs, 2));
   // The app passes the portfolio's symbols in; screenshots ARE of the user's own
   // portfolio, so the truth symbols are exactly what the app would supply.
   const known = [...new Set(c.truth.map(t => t.split(",")[2]))];
   const textA = await ocrText(worker, c.imgs, 2), textB = await ocrText(worker, c.imgs, 3);
-  const m = mergeParses(parseActivityText(textA, hints, known),
-                        parseActivityText(textB, hints, known), { a: textA, b: textB });
+  // MIRROR OcrImport's lazy orchestration exactly: parse the two main passes first, and
+  // run the eng/tha specialist passes only when there's something for them to fix.
+  const parseMain = (h, mh, extra) =>
+    mergeParses(parseActivityText(textA, h, known, mh), parseActivityText(textB, h, known, mh), { a: textA, b: textB, extra });
+  let m = parseMain();
+  if (m.incomplete > 0 || m.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน") || f.includes("เห็นในรอบ OCR เดียว")))) {
+    const engText = await ocrText(engWorker, c.imgs, 2);
+    const thaText = await ocrText(thaWorker, c.imgs, 2);
+    const hints = extractTickerHints(engText);
+    const monthHints = extractMonthHints(thaText);
+    m = parseMain(hints, monthHints, [engText, thaText]);
+  }
   const exact = c.truth.filter(t => m.rows.some(r => r.csv === t)).length;
   const silent = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length === 0);
   // Honest per-case breakdown: clean pass / flagged (right vs off) / missing
@@ -526,6 +690,27 @@ for (const c of CASES) {
   cleanTotal += clean; flagOkTotal += flagOk; flagWrongTotal += flagWrong; missTotal += miss; incTotal += m.incomplete;
   const fl = flagOk + flagWrong;
   console.log(`   ${c.name}: ผ่านสะอาด ${clean}/${c.truth.length} · ติดธง ${fl}${fl ? ` (ค่าถูก ${flagOk}${flagWrong ? `, ค่าคลาดเคลื่อน ${flagWrong}` : ""})` : ""} · หายไป ${miss} · อ่านไม่ครบ ${m.incomplete}`);
+  // Per-row detail for anything not clean, so the CI comment shows exactly which row of
+  // which fixture is flagged/missing, what OCR read, and (when wrong) what it SHOULD be
+  // — no need to re-run to inspect. Value-wrong rows print the expected value inline.
+  const nearestTruth = (csv) =>
+    c.truth.find(t => t.slice(0, 16) === csv.slice(0, 16)) ||      // same date+time
+    c.truth.find(t => t.split(",")[2] === csv.split(",")[2]);      // else same symbol
+  for (const r of m.rows) {
+    if (!r.flags.length) continue;
+    if (c.truth.includes(r.csv)) {
+      console.log(`      ⚠ [${c.name}] อ่านได้: ${r.csv} (ตรง expect) — ${r.flags.join(" ; ")}`);
+    } else {
+      const exp = nearestTruth(r.csv);
+      console.log(`      ⚠ [${c.name}] อ่านได้: ${r.csv} (ไม่ตรง${exp ? ` — ที่ถูก: ${exp}` : ""}) — ${r.flags.join(" ; ")}`);
+    }
+  }
+  for (const t of c.truth) {
+    if (m.rows.some(r => r.csv === t)) continue;
+    const near = m.rows.find(r => r.csv.slice(0, 16) === t.slice(0, 16) || r.csv.split(",")[2] === t.split(",")[2]);
+    console.log(`      ✗ [${c.name}] ที่ถูก: ${t}${near ? `  (OCR อ่านได้: ${near.csv})` : "  (ไม่มีแถวออกมาเลย)"}`);
+  }
+  if (m.incomplete > 0) console.log(`      ⊘ [${c.name}] อ่านไม่ครบ ${m.incomplete} รายการ (ตรวจไม่ออกว่าแถวไหน — เทียบกับรูป)`);
   // ── hard guarantees (these decide pass/fail) ──
   check(`${c.name}: no row is silently wrong (matches expect or is flagged)`, silent.length === 0, silent.map(r => r.csv).join(" | "));
   check(`${c.name}: no spurious rows invented (<= ${c.truth.length})`, m.rows.length <= c.truth.length, `got ${m.rows.length}`);
@@ -536,6 +721,7 @@ for (const c of CASES) {
 }
 await worker.terminate();
 await engWorker.terminate();
+await thaWorker.terminate();
 
 // Aggregate regression floor (so a code change that tanks recall is caught), reported honestly
 const pct = Math.round(exactTotal / truthTotal * 100);

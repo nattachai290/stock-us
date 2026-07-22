@@ -30,9 +30,24 @@ const tail = (log, n = 60) => {
   return (lines.length > n ? lines.slice(-n) : lines).join("\n");
 };
 
+// Pull the per-row detail lines out of the OCR log and sort them into the categories a
+// reviewer scans by — flagged (value-correct vs value-off), missing, unread — so they
+// can be shown OUTSIDE the collapsed log block. Empty categories are dropped entirely.
+const ocrReview = (log) => {
+  const L = log.split("\n").map(l => l.trim());
+  const flagOk = L.filter(l => l.startsWith("⚠ [") && l.includes("(ตรง expect)"));
+  const flagBad = L.filter(l => l.startsWith("⚠ [") && l.includes("(ไม่ตรง"));
+  const missing = L.filter(l => l.startsWith("✗ ["));
+  const incomplete = L.filter(l => l.startsWith("⊘ ["));
+  const total = flagOk.length + flagBad.length + missing.length + incomplete.length;
+  return { flagOk, flagBad, missing, incomplete, total };
+};
+const codeBlock = (lines) => ["```", ...lines, "```"];
+
 let anyFail = false, anyMissing = false;
 const rows = [];
 const details = [];
+let review = [];
 
 for (const c of CHECKS) {
   const code = codeOf(c.key);
@@ -43,9 +58,29 @@ for (const c of CHECKS) {
   else { icon = "❌"; status = `failed (exit ${code})`; anyFail = true; }
   const extra = summarize(log);
   rows.push(`| ${icon} ${c.label} | \`${c.cmd}\` | ${status}${extra ? ` — ${extra}` : ""} |`);
+  if (c.key === "ocr") review = ocrReview(log);
   if (log.trim()) {
-    details.push(`<details><summary>${icon} ${c.label} — output</summary>\n\n\`\`\`\n${tail(log)}\n\`\`\`\n\n</details>`);
+    // The OCR log is long (unit tests + per-fixture detail); keep more of its tail so
+    // the per-row lines aren't cut off.
+    details.push(`<details><summary>${icon} ${c.label} — output</summary>\n\n\`\`\`\n${tail(log, c.key === "ocr" ? 200 : 60)}\n\`\`\`\n\n</details>`);
   }
+}
+
+// Always-visible "rows to review" section, grouped by category. Each header (and the
+// flagged sub-headers) appears ONLY when it has rows; a fully clean run shows one note.
+const reviewBlock = [];
+if (!review || review.total === 0) {
+  reviewBlock.push("_🔍 OCR: ทุกแถวผ่านสะอาด — ไม่มีแถวต้องตรวจ_");
+} else {
+  reviewBlock.push(`#### 🔍 OCR — รายการที่ต้องดู (${review.total})`, "");
+  const flagged = review.flagOk.length + review.flagBad.length;
+  if (flagged) {
+    reviewBlock.push(`**⚠ ติดธง (${flagged})**`, "");
+    if (review.flagOk.length) reviewBlock.push(`ค่าถูก (${review.flagOk.length})`, ...codeBlock(review.flagOk));
+    if (review.flagBad.length) reviewBlock.push(`ค่าคลาดเคลื่อน (${review.flagBad.length})`, ...codeBlock(review.flagBad));
+  }
+  if (review.missing.length) reviewBlock.push(`**✗ หายไป (${review.missing.length})**`, ...codeBlock(review.missing));
+  if (review.incomplete.length) reviewBlock.push(`**⊘ อ่านไม่ครบ (${review.incomplete.length})**`, ...codeBlock(review.incomplete));
 }
 
 const header = anyFail ? "### ❌ Tests: some checks failed"
@@ -59,6 +94,8 @@ const body = [
   "| Check | Command | Result |",
   "| --- | --- | --- |",
   ...rows,
+  "",
+  ...reviewBlock,
   "",
   ...details,
   "",

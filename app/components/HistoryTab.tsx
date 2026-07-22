@@ -1,9 +1,64 @@
 "use client";
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { IconClock, IconArrowDown, IconArrowUp, IconSplit } from "./icons";
 import { btn, btnGhost } from "../lib/ui";
 import ToolsMenu from "./ToolsMenu";
 import OcrImport from "./OcrImport";
+
+// Import editor with per-FIELD highlighting: a plain <textarea> can't colour parts of a
+// line, so a non-interactive backdrop <div> renders the same lines behind a fully
+// transparent textarea and tints ONLY the CSV columns OCR flagged (symbol / amount /
+// price / … — keyed per line by `flagged`), in the SAME warn colour the OCR preview used.
+// Metrics (font, padding, border, wrapping) are shared verbatim so the backdrop and the
+// editable text line up exactly; scroll is mirrored.
+const FIELD_TINT = "color-mix(in srgb, var(--warn) 32%, transparent)";
+function ImportEditor({ value, onChange, flagged, placeholder }: {
+  value: string; onChange: (v: string) => void; flagged: Map<string, number[]>; placeholder: string;
+}) {
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const backRef = useRef<HTMLDivElement>(null);
+  const shared: React.CSSProperties = {
+    margin: 0, width: "100%", minHeight: 140, padding: 10, fontSize: 12, lineHeight: 1.5,
+    fontFamily: "monospace", letterSpacing: "normal", tabSize: 4, borderRadius: 6,
+    borderWidth: 1, borderStyle: "solid", boxSizing: "border-box",
+    whiteSpace: "pre-wrap", overflowWrap: "break-word", wordBreak: "break-word",
+  };
+  const lines = value.split("\n");
+  const syncScroll = () => {
+    if (backRef.current && taRef.current) {
+      backRef.current.scrollTop = taRef.current.scrollTop;
+      backRef.current.scrollLeft = taRef.current.scrollLeft;
+    }
+  };
+  // Render one backdrop line: split on commas and wrap only the flagged columns in a tinted
+  // span (commas stay untinted so adjacent fields read as separate). The characters are
+  // identical to the textarea's, so the tint sits exactly under the right field.
+  const renderLine = (ln: string) => {
+    const cols = ln.trim() ? flagged.get(ln.trim()) : undefined;
+    if (ln === "") return "​";
+    if (!cols || !cols.length) return ln;
+    const parts = ln.split(",");
+    return parts.map((p, idx) => (
+      <span key={idx}>
+        {idx > 0 ? "," : ""}
+        {cols.includes(idx) ? <span style={{ background: FIELD_TINT, borderRadius: 2 }}>{p}</span> : p}
+      </span>
+    ));
+  };
+  return (
+    <div style={{ position: "relative" }}>
+      <div ref={backRef} aria-hidden style={{
+        ...shared, position: "absolute", inset: 0, overflow: "hidden", pointerEvents: "none",
+        color: "transparent", background: "var(--bg)", borderColor: "var(--line)",
+      }}>
+        {lines.map((ln, i) => <div key={i}>{renderLine(ln)}</div>)}
+      </div>
+      <textarea ref={taRef} value={value} onChange={e => onChange(e.target.value)} onScroll={syncScroll}
+        placeholder={placeholder} spellCheck={false}
+        style={{ ...shared, position: "relative", background: "transparent", color: "var(--ink)", borderColor: "transparent", resize: "vertical" }} />
+    </div>
+  );
+}
 
 type UnifiedTx = { symbol: string; date: string; kind: "buy"|"sell"|"split"; qty?: number; price?: number; avgCostAtSale?: number; gain?: number; gainPct?: number; ratio?: string; sector: string; fees?: number; grossGain?: number; proceeds?: number; idx: number };
 
@@ -36,6 +91,9 @@ export default function HistoryTab({
   deleteTx: (symbol: string, kind: string, idx: number) => void;
 }) {
   const [txKindFilter, setTxKindFilter] = useState<"all"|"buy"|"sell"|"split">("all");
+  // Per-line map of CSV columns OCR flagged for review (trimmed csv → column indices),
+  // highlighted field-by-field in the import editor (see ImportEditor).
+  const [flaggedLines, setFlaggedLines] = useState<Map<string, number[]>>(new Map());
 
   const allTx: UnifiedTx[] = [];
   holdings.forEach((h: any) => {
@@ -142,15 +200,21 @@ export default function HistoryTab({
       {showTxImport&&(
         <div style={{background:"var(--card)",borderRadius:8,padding:16,marginBottom:12,border:"1px solid var(--line)"}}>
           <div style={{fontSize:13,fontWeight:600,color:"var(--brass)",marginBottom:6}}>Import ประวัติ ซื้อ/ขาย</div>
-          <div style={{fontSize:12,color:"var(--mut)",marginBottom:8}}>Format: <code style={{color:"var(--brass)"}}>DD/MM/YYYY HH:MM,Side(B/S),Symbol,จำนวน,ราคา</code> — เวลาใส่หรือไม่ใส่ก็ได้, <code style={{color:"var(--brass)"}}>BRK.B → BRK-B</code> อัตโนมัติ</div>
-          <textarea value={txImportText} onChange={e=>setTxImportText(e.target.value)}
-            placeholder={"01/11/2025 21:21,B,ACLS,0.1499694,81.95\n18/06/2026 07:20,S,ACLS,0.0445361,184.12\n02/07/2026 15:03,SPLIT,CRWD,4\n02/07/2026 15:03,+,CRWD,0.5311213,0\n02/07/2026 15:03,-,CRWD,0.1327803"}
-            style={{width:"100%",minHeight:140,background:"var(--bg)",color:"var(--ink)",border:"1px solid var(--line)",borderRadius:6,padding:10,fontSize:12,resize:"vertical",fontFamily:"monospace",boxSizing:"border-box"}}/>
+          <div style={{fontSize:12,color:"var(--mut)",marginBottom:8}}>Format: <code style={{color:"var(--brass)"}}>DD/MM/YYYY HH:MM,Side(B/S),Symbol,จำนวน,ราคา</code> — เวลาใส่หรือไม่ใส่ก็ได้</div>
+          <ImportEditor value={txImportText} onChange={setTxImportText} flagged={flaggedLines}
+            placeholder={"01/11/2025 21:21,B,ACLS,0.1499694,81.95\n18/06/2026 07:20,S,ACLS,0.0445361,184.12\n02/07/2026 15:03,SPLIT,CRWD,4\n02/07/2026 15:03,+,CRWD,0.5311213,0\n02/07/2026 15:03,-,CRWD,0.1327803"}/>
           <div style={{display:"flex",gap:8,marginTop:8}}>
             <button onClick={importTxCSV} disabled={!txImportText.trim()} style={btn("var(--brass)","var(--on-brass)",{opacity:!txImportText.trim()?0.5:1})}>นำเข้า</button>
-            <button onClick={()=>{setShowTxImport(false);setTxImportText("");}} style={btn("var(--line)","var(--mut)")}>ยกเลิก</button>
+            <button onClick={()=>{setShowTxImport(false);setTxImportText("");setFlaggedLines(new Map());}} style={btn("var(--line)","var(--mut)")}>ยกเลิก</button>
           </div>
-          <OcrImport knownSymbols={holdings.map((h:any)=>h.symbol)} onAppend={(csv)=>setTxImportText((txImportText ? txImportText.trimEnd()+"\n" : "")+csv)}/>
+          <OcrImport knownSymbols={holdings.map((h:any)=>h.symbol)} onAppend={(csv,flaggedFields)=>{
+            setTxImportText((txImportText ? txImportText.trimEnd()+"\n" : "")+csv);
+            if (flaggedFields?.length) setFlaggedLines(prev => {
+              const next = new Map(prev);
+              for (const f of flaggedFields) next.set(f.csv.trim(), f.cols);
+              return next;
+            });
+          }}/>
         </div>
       )}
 
@@ -204,19 +268,20 @@ export default function HistoryTab({
                 {g.items.map((t,i)=>{
                   const Icon = KindIcon(t.kind);
                   return (
-                    <div key={i} style={{background:"var(--card)",borderRadius:8,padding:"10px 14px",border:"1px solid var(--line)",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div key={i} style={{position:"relative",background:"var(--card)",borderRadius:8,padding:"10px 44px 10px 14px",border:"1px solid var(--line)"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                      <div style={{display:"flex",alignItems:"center",gap:10,flex:"1 1 auto",minWidth:0}}>
                         <span style={{width:26,height:26,borderRadius:8,background:"var(--card2)",display:"flex",alignItems:"center",justifyContent:"center",color:kindColor(t.kind),flexShrink:0}}>
                           <Icon size={14}/>
                         </span>
-                        <div>
+                        <div style={{minWidth:0}}>
                           <div style={{display:"flex",alignItems:"center",gap:6}}>
                             <span style={{fontWeight:700,color:"var(--ink)",fontSize:13}}>{kindLabel(t.kind)} {t.symbol}</span>
                           </div>
                           <div style={{fontSize:11,color:"var(--faint)"}}>{new Date(t.date).toLocaleDateString("en-GB",{year:"numeric",month:"short",day:"numeric"})} {new Date(t.date).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",hour12:false})}</div>
                         </div>
                       </div>
-                      <div style={{textAlign:"right"}}>
+                      <div style={{textAlign:"right",flexShrink:0}}>
                         {t.kind==="split" ? (() => {
                           const info = splitInfo.get(t.symbol)?.[t.idx];
                           const badge = info ? splitBadge(info.before, info.after) : null;
@@ -241,7 +306,8 @@ export default function HistoryTab({
                           </>
                         )}
                       </div>
-                      <div style={{display:"flex",gap:4}}>
+                      </div>
+                      <div style={{position:"absolute",top:0,bottom:0,right:6,display:"flex",alignItems:"center",gap:2}}>
                         <button onClick={()=>openEditTx(t.symbol,t.kind,t.idx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"var(--faint)",padding:"4px 6px"}} title="แก้ไข">✎</button>
                         <button onClick={()=>deleteTx(t.symbol,t.kind,t.idx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"var(--loss)",padding:"4px 6px"}} title="ลบ">✕</button>
                       </div>
