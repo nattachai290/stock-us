@@ -549,7 +549,7 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
     if (best.symbolHintMismatch) flags.push(`รอบภาษาอังกฤษอ่านชื่อหุ้นเป็น ${best.symbolHintMismatch} — ตรวจกับรูป`);
     if (best.symbolCorrected) flags.push(`OCR อ่านได้ "${best.symbolCorrected}" — แก้เป็น ${best.symbol} ตามหุ้นในพอร์ต ตรวจกับรูป`);
     if (!best.isGold && decimals(best.qtyStr) !== SHARE_DECIMALS) flags.push(`ทศนิยมจำนวนหุ้นได้ ${decimals(best.qtyStr)} หลัก (ปกติ 7) — อาจอ่านตกหลัก`);
-    if (best.check === "mismatch") flags.push("ราคา×จำนวน ไม่ตรงกับยอดรวมในรูป");
+    if (best.check === "mismatch") flags.push(`ราคา×จำนวน = ${(best.price * best.qty).toFixed(2)} ไม่ตรงกับยอดรวมในรูป ${best.total?.toFixed(2)} — ตรวจกับรูป`);
     const parts = best.csv.split(","); parts[1] = side; // csv was built with best.side; apply the resolved one
     rows.push({ ...best, side, csv: parts.join(","), flags });
   };
