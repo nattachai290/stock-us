@@ -1055,7 +1055,7 @@ export default function App() {
               </div>
               <div style={{display:"flex",gap:16,marginTop:14,paddingTop:12,borderTop:"1px solid var(--line)",flexWrap:"wrap"}}>
                 <div>
-                  <div style={{fontSize:10,color:"var(--faint)"}}>กำไร/ขาดทุนรวม</div>
+                  <div style={{fontSize:10,color:"var(--faint)"}}>{(pnl+totalRealizedAll)>=0?"กำไรรวม":"ขาดทุนรวม"}</div>
                   <div style={{fontSize:13,fontWeight:700,color:pc(pnl+totalRealizedAll)}}>{(pnl+totalRealizedAll)>=0?"+":""}${(pnl+totalRealizedAll).toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
                 </div>
                 <div>
