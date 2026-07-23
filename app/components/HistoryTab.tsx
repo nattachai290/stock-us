@@ -268,8 +268,7 @@ export default function HistoryTab({
                 {g.items.map((t,i)=>{
                   const Icon = KindIcon(t.kind);
                   return (
-                    <div key={i} style={{position:"relative",background:"var(--card)",borderRadius:8,padding:"10px 44px 10px 14px",border:"1px solid var(--line)"}}>
-                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                    <div key={i} style={{background:"var(--card)",borderRadius:8,padding:"10px 14px",border:"1px solid var(--line)",display:"flex",alignItems:"center",gap:8}}>
                       <div style={{display:"flex",alignItems:"center",gap:10,flex:"1 1 auto",minWidth:0}}>
                         <span style={{width:26,height:26,borderRadius:8,background:"var(--card2)",display:"flex",alignItems:"center",justifyContent:"center",color:kindColor(t.kind),flexShrink:0}}>
                           <Icon size={14}/>
@@ -306,8 +305,7 @@ export default function HistoryTab({
                           </>
                         )}
                       </div>
-                      </div>
-                      <div style={{position:"absolute",top:0,bottom:0,right:6,display:"flex",alignItems:"center",gap:2}}>
+                      <div style={{display:"flex",alignItems:"center",gap:2,flexShrink:0}}>
                         <button onClick={()=>openEditTx(t.symbol,t.kind,t.idx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"var(--faint)",padding:"4px 6px"}} title="แก้ไข">✎</button>
                         <button onClick={()=>deleteTx(t.symbol,t.kind,t.idx)} style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"var(--loss)",padding:"4px 6px"}} title="ลบ">✕</button>
                       </div>
