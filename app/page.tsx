@@ -74,6 +74,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date|null>(null);
   const [priceErrors, setPriceErrors] = useState<string[]>([]);
+  const [usdThb, setUsdThb] = useState<number|null>(null); // USD→THB, display only
   const tokenRef = useRef<string|null>(null);
   const [sellModalId, setSellModalId] = useState<number|null>(null);
   const [sellQty, setSellQty] = useState("");
@@ -173,6 +174,11 @@ export default function App() {
     const id = setInterval(() => { trySilentRefresh(); }, 45 * 60 * 1000);
     return () => clearInterval(id);
   }, [token, trySilentRefresh]);
+
+  // USD→THB rate for the baht-alongside display (fetched once on mount; rates barely move)
+  useEffect(() => {
+    fetch("/api/fx").then(r => r.json()).then(d => { if (typeof d?.rate === "number") setUsdThb(d.rate); }).catch(() => {});
+  }, []);
 
   // Load saved token on mount
   useEffect(() => {
@@ -895,6 +901,8 @@ export default function App() {
   const tc=effectiveHoldings.reduce((s:number,h:any)=>s+h.shares*h.avgCost,0);
   const pnl=tv-tc; const pnlPct=tc>0?pnl/tc*100:0;
   const pc=(v:number)=>v>=0?"var(--gain)":"var(--loss)";
+  // Baht alongside a USD figure (display only) — null until the FX rate loads.
+  const thb=(usd:number)=>usdThb!=null?`≈ ฿${(usd*usdThb).toLocaleString("th-TH",{maximumFractionDigits:0})}`:null;
   const moversCount=activeHoldings.filter((h:any)=>h.changePct!=null&&Math.abs(h.changePct)>=3).length;
 
   // Realized P&L across all holdings (persists even after fully sold/removed... well, only while holding exists)
@@ -1045,6 +1053,7 @@ export default function App() {
             <div style={{background:"var(--card)",border:"1px solid var(--line)",borderRadius:"var(--r-lg)",padding:18,boxShadow:"var(--shadow)",marginBottom:12}}>
               <div style={{fontSize:10.5,color:"var(--faint)",textTransform:"uppercase",letterSpacing:"0.14em"}}>มูลค่าพอร์ต</div>
               <div style={{fontSize:27,fontWeight:800,color:"var(--ink)",marginTop:4}}>${tv.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+              {thb(tv)&&<div style={{fontSize:12,color:"var(--faint)",marginTop:2}}>{thb(tv)}</div>}
               <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
                 <span style={{fontSize:12,fontWeight:700,color:todayPct>=0?"var(--gain)":"var(--loss)",background:"var(--card2)",borderRadius:999,padding:"3px 10px"}}>
                   {todayPct>=0?"▲":"▼"} วันนี้ {todayPct>=0?"+":""}{todayPct.toFixed(2)}%
@@ -1057,10 +1066,12 @@ export default function App() {
                 <div>
                   <div style={{fontSize:10,color:"var(--faint)"}}>{(pnl+totalRealizedAll)>=0?"กำไรรวม":"ขาดทุนรวม"}</div>
                   <div style={{fontSize:13,fontWeight:700,color:pc(pnl+totalRealizedAll)}}>{(pnl+totalRealizedAll)>=0?"+":""}${(pnl+totalRealizedAll).toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                  {thb(pnl+totalRealizedAll)&&<div style={{fontSize:10,color:"var(--faint)",marginTop:1}}>{thb(pnl+totalRealizedAll)}</div>}
                 </div>
                 <div>
                   <div style={{fontSize:10,color:"var(--faint)"}}>ต้นทุนรวม (ถืออยู่)</div>
                   <div style={{fontSize:13,fontWeight:700,color:"var(--ink)"}}>${tc.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                  {thb(tc)&&<div style={{fontSize:10,color:"var(--faint)",marginTop:1}}>{thb(tc)}</div>}
                 </div>
                 <div>
                   <div style={{fontSize:10,color:"var(--faint)"}}>Unrealized</div>
