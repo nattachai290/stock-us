@@ -1,4 +1,9 @@
 :root{
+  /* The palette below IS the dark theme. Declaring it stops mobile browsers
+     (Samsung Internet / Chrome "auto dark") from applying their own colour
+     transform on top, which repainted thin elements — e.g. the target bar
+     rendered red instead of its real colour. */
+  color-scheme: dark;
   /* surfaces */
   --bg:#0C1014;        /* พื้นหลังแอป */
   --card:#151C23;      /* การ์ด/แผง */
