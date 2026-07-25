@@ -1188,7 +1188,7 @@ export default function App() {
                       // $ to buy so this position reaches target weight (buying also grows total value)
                       const underNeed=(target>0&&target<100&&w<target)?((target/100*tv-val)/(1-target/100)):0;
                       const barPct=target>0?Math.min(w/target*100,150):0;
-                      const barColor=over>0?"var(--loss)":w>0?"var(--brass)":"var(--line)";
+                      const barColor=over>0?"var(--loss)":w>0?"var(--gain)":"var(--line)";
                       const isAlert=h.changePct!=null&&Math.abs(h.changePct)>=3;
                       const stickyBg=isAlert?"var(--card2)":"var(--bg)"; // opaque bg so frozen column doesn't show rows behind
                       const isStale=h.priceTime && (Date.now()-h.priceTime > 24*3600*1000); // price older than 24h

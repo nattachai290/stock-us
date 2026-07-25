@@ -19,10 +19,10 @@ export default function HoldingsList({ holdings, tv, pc, onSelect }: {
         const isAlert = h.changePct != null && Math.abs(h.changePct) >= 3;
         const isStale = h.priceTime && (Date.now() - h.priceTime > 24 * 3600 * 1000);
         const barPct = target > 0 ? Math.min(w / target * 100, 100) : 0;
-        // Over target → red, otherwise brass. Same rule as DetailSheet and the desktop
+        // Over target → red, otherwise green. Same rule as DetailSheet and the desktop
         // table, so a position reads the same wherever it's shown. The bar caps at 100%,
-        // so "full + red" = over target and "full + brass" = exactly at target.
-        const barColor = target > 0 && w > target ? "var(--loss)" : "var(--brass)";
+        // so "full + red" = over target and "full + green" = exactly at target.
+        const barColor = target > 0 && w > target ? "var(--loss)" : "var(--gain)";
 
         return (
           <div key={h.id} onClick={() => onSelect(h.id)}

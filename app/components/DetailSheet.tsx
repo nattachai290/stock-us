@@ -92,7 +92,7 @@ export default function DetailSheet({
 
           <div style={{ marginTop: 14 }}>
             <div style={{ fontSize: 12, color: "var(--faint)", marginBottom: 4 }}>น้ำหนัก {w.toFixed(1)}%{target > 0 ? ` / เป้า ${target}%` : ""}</div>
-            {target > 0 && <div style={{ background: "var(--line)", borderRadius: 3, height: 4, overflow: "hidden" }}><div style={{ width: `${Math.min(w / target * 100, 100)}%`, height: "100%", background: w > target ? "var(--loss)" : "var(--brass)", borderRadius: 3 }} /></div>}
+            {target > 0 && <div style={{ background: "var(--line)", borderRadius: 3, height: 4, overflow: "hidden" }}><div style={{ width: `${Math.min(w / target * 100, 100)}%`, height: "100%", background: w > target ? "var(--loss)" : "var(--gain)", borderRadius: 3 }} /></div>}
             {underNeed > 0 && <div style={{ fontSize: 12, color: "var(--gain)", marginTop: 4 }}>ซื้อเพิ่ม ~${underNeed.toLocaleString("en", { maximumFractionDigits: 2 })} ถึงเป้า</div>}
             {overAmt > 0 && <div style={{ fontSize: 12, color: "var(--loss)", marginTop: 4 }}>เกิน +${overAmt.toFixed(2)}</div>}
           </div>
