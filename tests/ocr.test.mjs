@@ -616,8 +616,13 @@ const TH_STOCK_MORE = {
   "th-stock-9.jpg": ["01/07/2026 15:07,S,VIG,0.0140287,236.09","26/06/2026 14:16,B,ASTS,0.0458687,64.75","25/06/2026 14:20,B,PRCT,0.1446601,20.60","25/06/2026 14:20,B,CVX,0.0175479,169.82","24/06/2026 18:56,B,ELV,0.0074888,396.59"],
   "th-stock-10.jpg": ["14/07/2026 21:07,B,GRBK,0.0415577,71.9480","14/07/2026 21:07,B,DHI,0.0199570,149.8220","14/07/2026 21:06,B,AMPH,0.1589411,18.8120","09/07/2026 22:34,B,SNPS,0.0068129,438.8680"],
   "th-stock-11.jpg": ["17/06/2026 21:20,B,CRM,0.0190059,160.4760","17/06/2026 21:20,B,ADBE,0.0149609,203.8640","17/06/2026 21:19,B,NOW,0.0298329,102.2360","12/06/2026 20:16,B,META,0.0052834,573.49","12/06/2026 20:15,B,AMZN,0.0124522,243.33"],
+  // Continuation of th-stock-10 scrolled further down (its SNPS row is the cut-off one at
+  // the top here, excluded). Exercises: a sell header printed as "<qty> หุ้น" (not a money
+  // total), two buys at the SAME minute with different symbols (ORCL/ARM 18:02), and CA
+  // "หัก/รับ CRWD" rows interleaved between real transactions that must be skipped.
+  "th-stock-12.jpg": ["07/07/2026 13:14,B,EOSE,0.5772200,5.18","03/07/2026 18:02,B,ORCL,0.0207157,145.30","03/07/2026 18:02,B,ARM,0.0092615,325.00","01/07/2026 20:21,S,HPQ,0.5745693,21.89"],
 };
-const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4 };
+const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2 };
 
 // eng+tha main passes + an eng-only rescue pass, using the exact self-hosted data
 // the browser ships (public/tesseract) — mirrors OcrImport.tsx
