@@ -1,6 +1,6 @@
 "use client";
 import { useRef, useState } from "react";
-import { parseActivityText, mergeParses, extractTickerHints, extractMonthHints, type MergeResult } from "../lib/ocr";
+import { parseActivityText, mergeParses, extractTickerHints, extractMonthHints, rowAppearsIn, type MergeResult } from "../lib/ocr";
 import { grayscaleInvert, resizeBilinear } from "../lib/preprocess";
 import { btnGhost, btnPrimary } from "../lib/ui";
 
@@ -36,6 +36,11 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
   const [progress, setProgress] = useState("");     // "รูปที่ x/y" label (no round numbers shown)
   const [pct, setPct] = useState<number | null>(null); // 0..100 for the progress bar; null = no bar
   const [result, setResult] = useState<MergeResult | null>(null);
+  // csv line → the screenshot it was read from, so a row that needs checking can be
+  // traced back to one file when several were uploaded at once.
+  const [source, setSource] = useState<Record<string, string>>({});
+  // per-image count of blocks that never came out as rows, so "อ่านไม่ครบ" points at a file
+  const [missingBy, setMissingBy] = useState<{ name: string; n: number }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Grayscale+invert at native size (white-on-dark → black-on-white), then a
@@ -59,7 +64,7 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
 
   const run = async (files: FileList) => {
     if (!files.length) return;
-    setBusy(true); setResult(null); setPct(0); setProgress("กำลังโหลดตัวอ่าน OCR (ครั้งแรกอาจใช้เวลาสักครู่)...");
+    setBusy(true); setResult(null); setSource({}); setMissingBy([]); setPct(0); setProgress("กำลังโหลดตัวอ่าน OCR (ครั้งแรกอาจใช้เวลาสักครู่)...");
     try {
       const { createWorker } = await import("tesseract.js");
       const mkWorker = (lang: string) => createWorker(lang, 1, {
@@ -75,12 +80,14 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       // year); Thai data doesn't hurt English screenshots and numbers/oz/USD stay Latin.
       const [w2, w3] = await Promise.all([mkWorker("eng+tha"), mkWorker("eng+tha")]);
       const texts: Record<number, string> = { 2: "", 3: "" };
+      const perImage: { name: string; t2: string; t3: string; text: string }[] = [];
       for (let i = 0; i < N; i++) {
         setProgress(`กำลังอ่านรูปที่ ${i + 1}/${N}`); setPct(Math.round((i / N) * 100));
         const [b2, b3] = await Promise.all([preprocess(list[i], 2), preprocess(list[i], 3)]);
         const [r2, r3] = await Promise.all([w2.recognize(b2), w3.recognize(b3)]);
         texts[2] += r2.data.text + "\n";
         texts[3] += r3.data.text + "\n";
+        perImage.push({ name: list[i].name, t2: r2.data.text, t3: r3.data.text, text: r2.data.text + "\n" + r3.data.text });
         setPct(Math.round(((i + 1) / N) * 100));
       }
       await Promise.all([w2.terminate(), w3.terminate()]);
@@ -94,6 +101,7 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
         mergeParses(parseActivityText(texts[2], h, knownSymbols, mh),
                     parseActivityText(texts[3], h, knownSymbols, mh), { a: texts[2], b: texts[3], extra });
       let merged = parseMain();
+      let hints: Record<string, string> | undefined, monthHints: Record<string, { mon: string; year: string }> | undefined;
       // Run the specialist passes when there's something they can fix: an unfinished block
       // (incomplete), an inferred month, OR a row only one main pass saw — the specialists'
       // raw text is a third/fourth reader that can corroborate a single-round row and clear
@@ -124,10 +132,30 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
           return text;
         };
         const [engText, thaText] = await Promise.all([runLang("eng", 0), runLang("tha", 1)]);
-        const hints = extractTickerHints(engText);
-        const monthHints = extractMonthHints(thaText);
+        hints = extractTickerHints(engText);
+        monthHints = extractMonthHints(thaText);
         merged = parseMain(hints, monthHints, [engText, thaText]);
       }
+      // Attribute each row to a screenshot: the passes are parsed as one concatenated
+      // text, so ask which image's own text carries this row's time/price/share count.
+      const src: Record<string, string> = {};
+      for (const r of merged.rows) {
+        const hit = perImage.find(p => rowAppearsIn(r, p.text));
+        if (hit) src[r.csv] = hit.name;
+      }
+      // Unread rows are only a count, not rows — but "how many did this image lose" is
+      // the same subtraction applied to one image, so re-parse each one on its own (no
+      // extra OCR, just string work) and report which files don't come out whole.
+      const missing: { name: string; n: number }[] = [];
+      if (merged.incomplete > 0 && perImage.length) {
+        for (const p of perImage) {
+          const m = mergeParses(parseActivityText(p.t2, hints, knownSymbols, monthHints),
+                                parseActivityText(p.t3, hints, knownSymbols, monthHints), { a: p.t2, b: p.t3 });
+          if (m.incomplete > 0) missing.push({ name: p.name, n: m.incomplete });
+        }
+      }
+      setMissingBy(missing);
+      setSource(src);
       setResult(merged);
       setPct(null);
       setProgress(merged.rows.length ? "" : "อ่านไม่พบรายการในรูป — ใช้ภาพแคปหน้า Activity ที่เห็นบรรทัดเต็มๆ");
@@ -162,6 +190,15 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
           <div style={{ fontSize: 12, color: "var(--mut)", marginBottom: 6 }}>
             อ่านได้ {result.rows.length} รายการ{flagged.length ? ` · ต้องตรวจ ${flagged.length} รายการ` : " · ผ่านการเช็คทุกแถว"}
             {result.incomplete > 0 ? ` · อ่านไม่ครบ ${result.incomplete} รายการ (ไม่ถูกนำมา)` : ""}
+            {missingBy.length > 0 && (
+              <div style={{ fontSize: 11, color: "var(--warn)", marginTop: 2 }}>
+                อ่านไม่ครบอยู่ในรูป: {missingBy.map(m => `${m.name}${m.n > 1 ? ` (${m.n})` : ""}`).join(", ")}
+              </div>
+            )}
+            {flagged.length > 0 && (() => {
+              const files = [...new Set(flagged.map(r => source[r.csv]).filter(Boolean))];
+              return files.length ? <div style={{ fontSize: 11, color: "var(--warn)", marginTop: 2 }}>แถวที่ต้องตรวจอยู่ในรูป: {files.join(", ")}</div> : null;
+            })()}
           </div>
           <div style={{ maxHeight: 180, overflowY: "auto", background: "var(--bg)", border: "1px solid var(--line)", borderRadius: 6, padding: 8, fontFamily: "monospace", fontSize: 11.5 }}>
             {result.rows.map((r, i) => {
@@ -182,13 +219,14 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
                         </span>
                       ))
                     : r.csv}
+                  {source[r.csv] && <span style={{ fontSize: 10, color: "var(--faint)", marginLeft: 6 }}>· {source[r.csv]}</span>}
                   {r.flags.map((f, j) => <div key={j} style={{ fontSize: 10.5, color: "var(--warn)", paddingLeft: 16 }}>{f}</div>)}
                 </div>
               );
             })}
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <button onClick={() => { onAppend(result.rows.map(r => r.csv).join("\n"), result.rows.filter(r => r.flags.length).map(r => ({ csv: r.csv, cols: flagColumns(r.flags) }))); setResult(null); }}
+            <button onClick={() => { onAppend(result.rows.map(r => r.csv).join("\n"), result.rows.filter(r => r.flags.length).map(r => ({ csv: r.csv, cols: flagColumns(r.flags) }))); setResult(null); setSource({}); setMissingBy([]); }}
               style={{ ...btnPrimary({ fontSize: 12, padding: "8px 14px" }) }}>
               วางลงช่อง Import ({result.rows.length} แถว)
             </button>
