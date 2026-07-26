@@ -311,8 +311,13 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     // exactly ONE symbol they do hold, is almost certainly that symbol (OCR merged or
     // swapped a glyph). Ambiguity (2+ candidates) leaves the reading alone; the fix is
     // always flagged for review in mergeParses — never silent.
+    // A held symbol is the read one plus a class suffix ("BRK" → "BRK-B"): the eng rescue
+    // pass reads the base letters but loses the ".B", and one pass reading BRK while the
+    // other reads BRK-B splits ONE transaction into two rows. Treated like the edit-1 fix.
+    const classOf = (read: string, held: string) =>
+      held.startsWith(read + "-") && /^[A-Z]{1,2}$/.test(held.slice(read.length + 1));
     if (!cur.isGold && cur.symbol && knownSet.size && !knownSet.has(cur.symbol)) {
-      const cands = [...knownSet].filter(k => editDist1(cur!.symbol!, k));
+      const cands = [...knownSet].filter(k => editDist1(cur!.symbol!, k) || classOf(cur!.symbol!, k));
       if (cands.length === 1) { cur.symbolCorrected = cur.symbol; cur.symbol = cands[0]; }
     }
     // A ticker that OCR mangled must not be emitted with a wrong symbol
