@@ -558,6 +558,13 @@ export type MergeResult = { rows: MergedRow[]; incomplete: number };
 // (the executed-price line — a misassociated price would sit next to a different
 // time), with the share count on a nearby line, then all three numbers existed in
 // the other pass's view too and its parse merely tripped on layout noise.
+// Also used by the UI to attribute a merged row back to the screenshot it came from:
+// the passes are OCR'd into one concatenated text, so "which image" is answered by
+// asking which image's own text contains this row's time+price+share count.
+export function rowAppearsIn(r: OcrTxRow, text?: string): boolean {
+  return confirmedInText(r, text);
+}
+
 function confirmedInText(r: OcrTxRow, text?: string): boolean {
   if (!text) return false;
   const hhmm = r.csv.slice(11, 16);
