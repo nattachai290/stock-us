@@ -22,6 +22,7 @@ export type OcrTxRow = {
   sideFromTotal?: boolean; // side B inferred from a Thai total-style header (internal)
   monthInferred?: boolean; // month was filled from same-month neighbours, not read — flag
   monthReadAs?: string;    // what OCR actually rendered the month token as ("A.A.")
+  monthBracketed?: boolean;// inferred month proven by the anchors immediately either side
 };
 
 export type OcrParseResult = { rows: OcrTxRow[]; incomplete: number };
@@ -164,6 +165,22 @@ const editDist1 = (a: string, b: string): boolean => {
 // Extract (share-count → ticker) pairs from the eng-only text: the broker prints
 // share counts with 7 decimals, so the count uniquely identifies its row and lets
 // the main parse adopt the eng reading for blocks whose ticker it couldn't read.
+// Merge ticker hints read at different upscales. Neither scale dominates — 2x reads names
+// 3x loses and vice versa ("IPR" at 2x vs the correct "IIPR" at 3x) — so a fixed precedence
+// picks wrong half the time. Arbitrate on the portfolio instead: a name the user actually
+// holds beats one they don't, and only when neither (or both) are held does 2x win.
+export function mergeTickerHints(
+  primary: Record<string, string>, secondary: Record<string, string>, known?: string[],
+): Record<string, string> {
+  const held = new Set((known ?? []).map(k => k.toUpperCase()));
+  const out = { ...secondary, ...primary };
+  for (const k of Object.keys(out)) {
+    const p = primary[k], s = secondary[k];
+    if (p && s && p !== s && held.size && !held.has(p) && held.has(s)) out[k] = s;
+  }
+  return out;
+}
+
 export function extractTickerHints(text: string, known?: string[]): Record<string, string> {
   // One-letter tickers (O, V) are normally excluded: mangled Thai sheds stray capitals,
   // and a single letter is indistinguishable from that noise. They are accepted only when
@@ -277,7 +294,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       total: c.total, currency: c.currency, check, isGold: c.isGold,
       sideUncertain: c.sideUncertain, symbolFromHint: c.symbolFromHint,
       symbolHintMismatch: c.symbolHintMismatch, symbolCorrected: c.symbolCorrected,
-      monthInferred: c.monthInferred, monthReadAs: c.monthReadAs,
+      monthInferred: c.monthInferred, monthReadAs: c.monthReadAs, monthBracketed: c.monthBracketed,
     });
   };
 
@@ -555,6 +572,12 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     if (before && after && before.mon === after.mon && before.year === after.year) {
       p.iso = `${before.year}-${before.mon}-${p.pendDay!.padStart(2, "0")}T${p.pendHH!.padStart(2, "0")}:${p.pendMM}:00`;
       p.monthInferred = true;
+      // A block is ~3 lines, so anchors this close are the readable dates of the rows
+      // directly above and below. In a strictly chronological list, being between two
+      // dates of the same month LEAVES NO OTHER OPTION — that is a proof, not a guess, so
+      // it carries no review flag. A distant bracket stays flagged: rows in between could
+      // have crossed a month boundary unseen.
+      p.monthBracketed = (p.ord! - before.ord) <= 8 && (after.ord - p.ord!) <= 8;
       emitRow(p);
     } else {
       incomplete++;
@@ -665,7 +688,7 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
   const rows: MergedRow[] = [];
 
   const finalize = (best: OcrTxRow, side: OcrTxRow["side"], flags: string[], valuesOk = false) => {
-    if (best.monthInferred) flags.push(`OCR อ่านเดือนได้ "${best.monthReadAs}" — เดาเป็นเดือน ${best.csv.slice(3, 5)} จากรายการข้างเคียง ตรวจกับรูป`);
+    if (best.monthInferred && !best.monthBracketed) flags.push(`OCR อ่านเดือนได้ "${best.monthReadAs}" — เดาเป็นเดือน ${best.csv.slice(3, 5)} จากรายการข้างเคียง ตรวจกับรูป`);
     if (best.symbolFromHint) flags.push("ชื่อหุ้นอ่านจากรอบภาษาอังกฤษ — ตรวจกับรูป");
     if (best.symbolHintMismatch) flags.push(`รอบภาษาอังกฤษอ่านชื่อหุ้นเป็น ${best.symbolHintMismatch} — ตรวจกับรูป`);
     if (best.symbolCorrected) flags.push(`OCR อ่านได้ "${best.symbolCorrected}" — แก้เป็น ${best.symbol} ตามหุ้นในพอร์ต ตรวจกับรูป`);
@@ -812,8 +835,23 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
     for (const g of byTx.values()) {
       if (g.length === 1) { rows.push(g[0]); continue; }
       g.sort((x, y) => new Date(x.iso).getTime() - new Date(y.iso).getTime());
-      const days = g.map(r => r.csv.slice(0, 10));
-      rows.push({ ...g[0], flags: [...g[0].flags, `วันที่สองรอบไม่ตรงกัน (${days.join(" / ")}) — ตรวจกับรูป`] });
+      // One screenshot shows a contiguous slice of history, so a row printed among the
+      // others has to fall inside the window they span. ELF read as 11/05 sat outside a
+      // page running 26/04-01/05 while its other reading, 01/05, sat inside — decisive.
+      // If the disputed row is the newest or oldest on the page both readings can be
+      // outside, and then the flag stays rather than a coin flip.
+      const others = rows.filter(r => !g.includes(r)).map(r => new Date(r.iso).getTime());
+      let pick: MergedRow | null = null;
+      if (others.length >= 2) {
+        const lo = Math.min(...others), hi = Math.max(...others);
+        const inside = g.filter(r => { const t = new Date(r.iso).getTime(); return t >= lo && t <= hi; });
+        if (inside.length === 1) pick = inside[0];
+      }
+      if (pick) rows.push(pick);
+      else {
+        const days = g.map(r => r.csv.slice(0, 10));
+        rows.push({ ...g[0], flags: [...g[0].flags, `วันที่สองรอบไม่ตรงกัน (${days.join(" / ")}) — ตรวจกับรูป`] });
+      }
     }
   }
 

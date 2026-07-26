@@ -23,7 +23,7 @@ const FIX = (f) => path.join(ROOT, "tests", "fixtures", f);
 
 // compile the TS modules on the fly so the test always runs the current source
 const src = execSync("npx esbuild app/lib/ocr.ts --format=esm", { cwd: ROOT }).toString();
-const { parseActivityText, mergeParses, extractTickerHints, extractMonthHints } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
+const { parseActivityText, mergeParses, extractTickerHints, mergeTickerHints, extractMonthHints } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 const preSrc = execSync("npx esbuild app/lib/preprocess.ts --format=esm", { cwd: ROOT }).toString();
 const { grayscaleNormalize, resizeBilinear } = await import("data:text/javascript;base64," + Buffer.from(preSrc).toString("base64"));
 // --bundle inlines jpeg-js so this is byte-for-byte the decoder the browser bundle runs
@@ -772,7 +772,7 @@ for (const c of CASES) {
     const eng2 = await ocrText(engWorker, c.imgs, 2);
     const eng3 = await ocrText(engWorker, c.imgs, 3);
     const thaText = await ocrText(thaWorker, c.imgs, 2);
-    const hints = { ...extractTickerHints(eng3, known), ...extractTickerHints(eng2, known) };
+    const hints = mergeTickerHints(extractTickerHints(eng2, known), extractTickerHints(eng3, known), known);
     const monthHints = extractMonthHints(thaText);
     m = parseMain(hints, monthHints, [eng2 + eng3, thaText]);
   }

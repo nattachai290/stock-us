@@ -1,6 +1,6 @@
 "use client";
 import { useRef, useState } from "react";
-import { parseActivityText, mergeParses, extractTickerHints, extractMonthHints, rowAppearsIn, type MergeResult } from "../lib/ocr";
+import { parseActivityText, mergeParses, extractTickerHints, mergeTickerHints, extractMonthHints, rowAppearsIn, type MergeResult } from "../lib/ocr";
 import { grayscaleNormalize, resizeBilinear } from "../lib/preprocess";
 import { decodeImage } from "../lib/decode";
 import { btnGhost, btnPrimary } from "../lib/ui";
@@ -152,7 +152,7 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
         // fills gaps, so adding it can never cost a hint the old single-scale pass had.
         const [engOut, thaOut] = await Promise.all([runLang("eng", 0, [2, 3]), runLang("tha", 1, [2])]);
         const engText = engOut[2] + engOut[3], thaText = thaOut[2];
-        hints = { ...extractTickerHints(engOut[3], knownSymbols), ...extractTickerHints(engOut[2], knownSymbols) };
+        hints = mergeTickerHints(extractTickerHints(engOut[2], knownSymbols), extractTickerHints(engOut[3], knownSymbols), knownSymbols);
         monthHints = extractMonthHints(thaText);
         merged = parseMain(hints, monthHints, [engText, thaText]);
       }
