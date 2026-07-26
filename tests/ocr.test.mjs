@@ -790,9 +790,13 @@ for (const c of CASES) {
   // Per-row detail for anything not clean, so the CI comment shows exactly which row of
   // which fixture is flagged/missing, what OCR read, and (when wrong) what it SHOULD be
   // — no need to re-run to inspect. Value-wrong rows print the expected value inline.
+  // Pair a wrong row with the truth row it corresponds to. SYMBOL first: several
+  // transactions can share a minute (ASTS and MRK both at 21:13), and matching on
+  // date+time first paired MRK's misread price against ASTS's row, reporting a correct
+  // row as the expected value for a different one.
   const nearestTruth = (csv) =>
-    c.truth.find(t => t.slice(0, 16) === csv.slice(0, 16)) ||      // same date+time
-    c.truth.find(t => t.split(",")[2] === csv.split(",")[2]);      // else same symbol
+    c.truth.find(t => t.split(",")[2] === csv.split(",")[2]) ||    // same symbol
+    c.truth.find(t => t.slice(0, 16) === csv.slice(0, 16));        // else same date+time
   for (const r of m.rows) {
     if (!r.flags.length) continue;
     if (c.truth.includes(r.csv)) {
@@ -804,7 +808,11 @@ for (const c of CASES) {
   }
   for (const t of c.truth) {
     if (m.rows.some(r => r.csv === t)) continue;
-    const near = m.rows.find(r => r.csv.slice(0, 16) === t.slice(0, 16) || r.csv.split(",")[2] === t.split(",")[2]);
+    const near = m.rows.find(r => r.csv.split(",")[2] === t.split(",")[2])
+              || m.rows.find(r => r.csv.slice(0, 16) === t.slice(0, 16) && !c.truth.includes(r.csv));
+    // A row that came out wrong is already printed above as ⚠ with its expected value;
+    // repeating it here as "missing" describes the same defect twice.
+    if (near && !c.truth.includes(near.csv) && near.flags.length) continue;
     console.log(`      ✗ [${c.name}] ที่ถูก: ${t}${near ? `  (OCR อ่านได้: ${near.csv})` : "  (ไม่มีแถวออกมาเลย)"}`);
   }
   if (m.incomplete > 0) console.log(`      ⊘ [${c.name}] อ่านไม่ครบ ${m.incomplete} รายการ (ตรวจไม่ออกว่าแถวไหน — เทียบกับรูป)`);

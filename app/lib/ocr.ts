@@ -637,6 +637,19 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
   // reads) — an independent OCR of the same pixels finding the same three numbers is
   // strong evidence the value is right, so the flag is dropped. This never changes a
   // value; it only clears a review flag when a second reader agrees.
+  // Every row on one screenshot was funded at the same USD/THB rate, so a baht total and
+  // a share count imply that rate. When the two passes disagree on a price and the row has
+  // no USD total to settle it arithmetically (baht rows never do — the rate isn't printed),
+  // the reading whose implied rate matches the rest of the batch is the real one:
+  // MRK at 11.03 implies 327 THB/USD, at 111.03 it implies 32.55, and its neighbours sit
+  // at 32.55-32.73.
+  const impliedFx = (r: OcrTxRow) =>
+    r.currency === "THB" && r.total && r.qty > 0 && r.price > 0 ? r.total / (r.price * r.qty) : null;
+  const fxSamples = [...a.rows, ...b.rows].map(impliedFx)
+    .filter((x): x is number => x !== null && x > 5 && x < 200).sort((x, y) => x - y);
+  // median over at least a few rows, so one misread price can't define the reference
+  const medianFx = fxSamples.length >= 3 ? fxSamples[fxSamples.length >> 1] : null;
+
   const extra = texts?.extra || [];
   const confirmedBy = (r: OcrTxRow, primary?: string) =>
     r.isSplit || confirmedInText(r, primary) || extra.some(t => confirmedInText(r, t));
@@ -729,7 +742,22 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
             if (okA && !okB) picked = ra;
             else if (okB && !okA) picked = rb;
           }
+          // Baht fallback: no USD total, but the batch's implied FX rate settles it. Only
+          // when one reading is close to the batch rate AND the other is far from it; the
+          // row stays flagged either way, since this arbitrates rather than confirms.
+          let fxPick: OcrTxRow | null = null;
+          const baht = [ra, rb].find(r => r.currency === "THB" && r.total)?.total;
+          if (!picked && medianFx && baht && best.qty > 0) {
+            const off = (p: number) => p > 0 ? Math.abs(baht / (p * best.qty) - medianFx) / medianFx : Infinity;
+            const oa = off(ra.price), ob = off(rb.price);
+            if (oa <= 0.15 && ob > 0.5) fxPick = ra;
+            else if (ob <= 0.15 && oa > 0.5) fxPick = rb;
+          }
           if (picked) best = picked;
+          else if (fxPick) {
+            best = fxPick;
+            flags.push(`ราคาสองรอบไม่ตรงกัน (${ra.priceStr} / ${rb.priceStr}) — เลือก ${fxPick.priceStr} เพราะให้อัตราแลกเปลี่ยนตรงกับแถวอื่นในรูป ตรวจกับรูป`);
+          }
           else flags.push(`ราคาสองรอบไม่ตรงกัน (${ra.priceStr} / ${rb.priceStr})`);
         }
       }
