@@ -40,10 +40,10 @@ const check = (name, cond, detail = "") => {
 
 {
   // Shared preprocessing must be deterministic and match the documented math.
-  // half white, half black → mean 128, treated as light, so values pass through
-  const px = new Uint8ClampedArray([255, 255, 255, 255, 0, 0, 0, 255]);
+  // a mostly-white page keeps its polarity; a mostly-black one is flipped to match
+  const px = new Uint8ClampedArray([255,255,255,255, 255,255,255,255, 255,255,255,255, 0,0,0,255]);
   grayscaleNormalize(px);
-  check("preprocess: grayscale keeps white/black on a light page", px[0] === 255 && px[4] === 0, `${px[0]},${px[4]}`);
+  check("preprocess: light page keeps white/black as-is", px[0] === 255 && px[12] === 0, `${px[0]},${px[12]}`);
   // Which way to normalise is decided from the image, not fixed: a light page must be
   // left alone (inverting it costs reads), a dark one flipped to dark-on-light.
   const page = (v) => { const a = new Uint8ClampedArray(16); for (let i = 0; i < 16; i += 4) { a[i] = a[i+1] = a[i+2] = v; a[i+3] = 255; } return a; };
@@ -695,10 +695,9 @@ const TH_STOCK_MORE = {
   "th-stock-16.jpg": ["26/04/2026 21:12,B,HCA,0.0070009,438.51","26/04/2026 21:12,B,BRK-B,0.0065374,469.60","23/04/2026 21:08,B,LMT,0.0057109,535.8160","22/04/2026 19:42,B,WM,0.0137715,223.65","15/04/2026 21:51,B,OXY,0.0552328,56.1260"],
   "th-stock-17.jpg": ["19/03/2026 22:00,B,ABBV,0.0145783,207.1560","18/03/2026 21:28,B,V,0.0099667,304.0120","18/03/2026 21:27,B,TMDX,0.0255622,118.5340","18/03/2026 21:27,B,NUE,0.0186491,162.4740","17/03/2026 21:05,B,IONQ,0.0920374,33.3560"],
 };
-// Rows whose ticker no pass can read are dropped and reported unread — the right outcome,
-// so it is asserted rather than papered over. th-stock-16's OXY comes out as "(0).4'" and
-// th-stock-17's V as "Gov"/"ง": nothing ticker-shaped survives, so neither is guessed.
-const TH_EXP_INC = { "th-stock-16.jpg": 1, "th-stock-17.jpg": 1 };
+// Set only where a fixture genuinely can't be read whole. OXY and V used to land here;
+// both read fine once the invert direction stopped being assumed, so the map is empty.
+const TH_EXP_INC = {};
 const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2, "th-stock-13.jpg":2, "th-stock-14.jpg":2, "th-stock-15.jpg":2, "th-stock-16.jpg":2, "th-stock-17.jpg":2 };
 
 // eng+tha main passes + an eng-only rescue pass, using the exact self-hosted data

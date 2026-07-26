@@ -733,6 +733,27 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
     finalize(rb, rb.side, flags, conf);
   }
 
+  // Same symbol, share count, price AND minute on two different DAYS is one transaction
+  // whose day a pass misread ("1 พ.ค." → "11"), not two — a broker never prints the same
+  // 7-decimal share count for a symbol twice in the same minute. Both rows survived
+  // unflagged because confirmedInText corroborates on time+price+qty and never looks at
+  // the date, so each was "confirmed" by the other pass's text. Collapse the group and
+  // flag it: which day is right is exactly what a human has to check.
+  const byTx = new Map<string, MergedRow[]>();
+  for (const r of rows) {
+    const k = `${r.symbol}|${r.qtyStr}|${r.priceStr}|${r.csv.slice(11, 16)}`;
+    const g = byTx.get(k); if (g) g.push(r); else byTx.set(k, [r]);
+  }
+  if (byTx.size !== rows.length) {
+    rows.length = 0;
+    for (const g of byTx.values()) {
+      if (g.length === 1) { rows.push(g[0]); continue; }
+      g.sort((x, y) => new Date(x.iso).getTime() - new Date(y.iso).getTime());
+      const days = g.map(r => r.csv.slice(0, 10));
+      rows.push({ ...g[0], flags: [...g[0].flags, `วันที่สองรอบไม่ตรงกัน (${days.join(" / ")}) — ตรวจกับรูป`] });
+    }
+  }
+
   rows.sort((x, y) => new Date(x.iso).getTime() - new Date(y.iso).getTime());
   // "incomplete" must count transactions MISSING FROM THE FINAL output, not per-pass
   // parse failures: a block one pass couldn't finish is often recovered by the other,
