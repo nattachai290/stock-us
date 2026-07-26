@@ -742,9 +742,10 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
             if (okA && !okB) picked = ra;
             else if (okB && !okA) picked = rb;
           }
-          // Baht fallback: no USD total, but the batch's implied FX rate settles it. Only
-          // when one reading is close to the batch rate AND the other is far from it; the
-          // row stays flagged either way, since this arbitrates rather than confirms.
+          // Baht fallback: no USD total, but the batch's implied FX rate settles it. The
+          // thresholds are deliberately far apart — one reading within 15% of the batch
+          // rate AND the other off by more than 50% — so this only fires on an unmistakable
+          // misread (MRK implied 327 vs 32.55), never on two plausible readings.
           let fxPick: OcrTxRow | null = null;
           const baht = [ra, rb].find(r => r.currency === "THB" && r.total)?.total;
           if (!picked && medianFx && baht && best.qty > 0) {
@@ -753,11 +754,13 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
             if (oa <= 0.15 && ob > 0.5) fxPick = ra;
             else if (ob <= 0.15 && oa > 0.5) fxPick = rb;
           }
+          // The total itself is never imported, so it is never worth a review flag — it is
+          // only evidence about the price, which IS imported. When that evidence is
+          // decisive (one reading matches the batch rate, the other is off by more than
+          // half) the answer is settled and there is nothing for a human to adjudicate, so
+          // the row goes through clean, exactly like the USD arithmetic tiebreak above.
           if (picked) best = picked;
-          else if (fxPick) {
-            best = fxPick;
-            flags.push(`ราคาสองรอบไม่ตรงกัน (${ra.priceStr} / ${rb.priceStr}) — เลือก ${fxPick.priceStr} เพราะให้อัตราแลกเปลี่ยนตรงกับแถวอื่นในรูป ตรวจกับรูป`);
-          }
+          else if (fxPick) best = fxPick;
           else flags.push(`ราคาสองรอบไม่ตรงกัน (${ra.priceStr} / ${rb.priceStr})`);
         }
       }
