@@ -231,7 +231,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
   // month must share it. We collect every readable (day,month,year) as a positional
   // "anchor" (including section headers), and defer blocks whose month didn't resolve
   // until after the pass, then fill them only when the bracketing anchors agree.
-  type Draft = Partial<OcrTxRow> & { pendDay?: string; pendHH?: string; pendMM?: string; pendYear?: string; ord?: number; monthReadAs?: string; isCA?: boolean; caOutStr?: string };
+  type Draft = Partial<OcrTxRow> & { pendDay?: string; pendHH?: string; pendMM?: string; pendYear?: string; ord?: number; monthReadAs?: string; isCA?: boolean; caOutStr?: string; zeroTicker?: boolean };
   let cur: Draft | null = null;
   const anchors: { ord: number; mon: string; year: number }[] = [];
   const pending: Draft[] = [];
@@ -290,6 +290,14 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
         cur.symbolFromHint = !knownSet.has(hint);
       }
       else if (hint && valid && hint !== cur.symbol) cur.symbolHintMismatch = hint;
+    }
+    // Last resort for the one-letter ticker "O": it has no letter shape to survive Thai
+    // OCR (both passes render it as a zero glyph), so nothing above can have read it.
+    // Only adopt it when no pass produced a ticker AND the portfolio holds O — a name any
+    // pass actually read always wins, and the row is flagged as a whitelist fix.
+    if (!cur.isGold && cur.zeroTicker && knownSet.has("O")) {
+      const valid = cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol);
+      if (!valid) { cur.symbol = "O"; cur.symbolCorrected = "๐"; }
     }
     // Portfolio-whitelist fix: a read ticker the user doesn't hold, one edit away from
     // exactly ONE symbol they do hold, is almost certainly that symbol (OCR merged or
@@ -361,6 +369,11 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       for (const tm of line.matchAll(/\b([A-Z]{1,6})\b/g)) {
         if (!NOT_TICKERS.has(tm[1])) { ticker = tm[1]; break; }
       }
+      // The one-letter ticker "O" has no letter shape to survive Thai OCR — both passes
+      // render it as a zero glyph (Thai ๐ / Latin 0), leaving the header with no ticker at
+      // all. Adopt it only when the portfolio actually holds O, and record what was read so
+      // the row is flagged like every other whitelist fix.
+      const zeroTicker = !ticker && /(?:^|\s)[๐0](?=\s)/.test(line);
       const sellWord = compact.includes("ขาย") || compact.includes("ยาย") || compact.includes("บาย");
       const buyWord = compact.includes("ซื้อ") || compact.includes("ือ");
       // Share-count + หุ้น unit with an unreadable ticker ("ยาย เง 0.0045730 หุ้น") —
@@ -395,6 +408,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
         // pinned to the share count, unlike `ticker` which is just the line's first
         // uppercase run and can pick up a Thai word OCR'd into caps ("รับ" → "SU NFLX …").
         cur = { side, symbol: gold ? "MTS-GOLD" : (sellM?.[1] ?? ticker)?.toUpperCase(), isGold: gold, sideUncertain: uncertain, sideFromTotal: fromTotal };
+        if (zeroTicker && !sellM) cur.zeroTicker = true;
         const qtyTok = sellM ? sellM[2] : qtyUnit?.[1];
         if (qtyTok && !bahtTotal) {
           const f = qtyFix(qtyTok, 7); const v = parseFloat(f);

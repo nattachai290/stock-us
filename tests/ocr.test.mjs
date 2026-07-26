@@ -12,6 +12,7 @@
 // version pinned in package-lock — if an upgrade drops them, investigate.
 
 import Jimp from "jimp";
+import fs from "fs";
 import { createWorker } from "tesseract.js";
 import { execSync } from "child_process";
 import { fileURLToPath } from "url";
@@ -25,6 +26,9 @@ const src = execSync("npx esbuild app/lib/ocr.ts --format=esm", { cwd: ROOT }).t
 const { parseActivityText, mergeParses, extractTickerHints, extractMonthHints } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 const preSrc = execSync("npx esbuild app/lib/preprocess.ts --format=esm", { cwd: ROOT }).toString();
 const { grayscaleInvert, resizeBilinear } = await import("data:text/javascript;base64," + Buffer.from(preSrc).toString("base64"));
+// --bundle inlines jpeg-js so this is byte-for-byte the decoder the browser bundle runs
+const decSrc = execSync("npx esbuild app/lib/decode.ts --format=esm --bundle", { cwd: ROOT }).toString();
+const { decodeJpeg } = await import("data:text/javascript;base64," + Buffer.from(decSrc).toString("base64"));
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = "") => {
@@ -607,6 +611,24 @@ const TRUTH_TH_SELLS = [
 // Buys plus a corporate action. The NFLX 1:10 split prints its two legs at DIFFERENT
 // minutes (หัก 15:41, รับ 15:47) and in reverse order on screen — they must still pair,
 // and the "-" leg must be emitted before the "+" leg for importTxCSV to record a split.
+{
+  // The one-letter ticker "O" has no letter shape to survive Thai OCR — both passes render
+  // it as a zero glyph. It may be adopted only from the portfolio whitelist, and flagged.
+  const t = ["ซื ้ อ ๐ 99.99 บ า ท",
+             "ร า ค า ท ี ่ ได ้ จ ร ิ ง 61.26 30 ม ี . ค . 69 - 20:23:17 u.",
+             "จ ํ า น ว น ห ุ ้ น 0.0494613"].join("\n");
+  const m = mergeParses(parseActivityText(t, undefined, ["O", "HIMS"]), parseActivityText(t, undefined, ["O", "HIMS"]), { a: t, b: t });
+  check("zero-glyph ticker: recovered as O from the portfolio", m.rows[0]?.csv === "30/03/2026 20:23,B,O,0.0494613,61.26", m.rows[0]?.csv);
+  check("zero-glyph ticker: flagged, never silent", !!m.rows[0]?.flags.length, JSON.stringify(m.rows[0]?.flags));
+  // A ticker some pass actually READ beats the glyph-shape guess — seen on a real Thai
+  // screenshot where a CRWD row was claimed as "O" until this precedence was fixed.
+  const mh = mergeParses(parseActivityText(t, { "0.0494613": "CRWD" }, ["O", "CRWD"]), parseActivityText(t, { "0.0494613": "CRWD" }, ["O", "CRWD"]), { a: t, b: t });
+  check("zero-glyph ticker: an eng-pass reading wins over the guess", mh.rows[0]?.symbol === "CRWD", mh.rows[0]?.csv);
+  // Not in the portfolio → stays unread rather than guessing a symbol
+  const m2 = mergeParses(parseActivityText(t, undefined, ["HIMS"]), parseActivityText(t, undefined, ["HIMS"]));
+  check("zero-glyph ticker: not adopted when O isn't held", m2.rows.length === 0 && m2.incomplete === 1, `rows=${m2.rows.length} inc=${m2.incomplete}`);
+}
+
 const TRUTH_TH_CA = [
   "23/11/2025 14:40,B,ENPH,0.1143497,26.76", "19/11/2025 11:49,B,ALAB,0.0219307,139.53",
   "19/11/2025 11:48,B,MELI,0.0014788,2069.22", "17/11/2025 08:26,B,TEM,0.0450000,68.00",
@@ -631,8 +653,16 @@ const TH_STOCK_MORE = {
   // "หัก/รับ CRWD" rows (a 1:4 split) interleaved between real transactions — both legs
   // land on the same minute here, so the "-"-before-"+" ordering rule is what separates them.
   "th-stock-12.jpg": ["07/07/2026 13:14,B,EOSE,0.5772200,5.18","03/07/2026 18:02,B,ORCL,0.0207157,145.30","03/07/2026 18:02,B,ARM,0.0092615,325.00","02/07/2026 15:05,-,CRWD,0.0217616","02/07/2026 15:05,+,CRWD,0.0870467,0","01/07/2026 20:21,S,HPQ,0.5745693,21.89"],
+  // Three ETF/stock DCA pages — the exact files the user uploads to the app, so these
+  // double as the app-vs-CI parity check. Between them: several buys sharing one minute
+  // (VIG/UPS/SPYD all 21:48; NU/ELF both 14:52), the single-letter ticker "O" that OCR
+  // renders as a zero glyph, and month-section headers splitting a page across months.
+  // The clipped rows at the top of 13 and 15 have no header on screen and are excluded.
+  "th-stock-13.jpg": ["16/03/2026 21:49,B,VYM,0.0205697,149.2480","16/03/2026 21:49,B,VOO,0.0049951,614.5940","16/03/2026 21:48,B,VIG,0.0140287,218.8360","16/03/2026 21:48,B,UPS,0.0314536,97.6040","16/03/2026 21:48,B,SPYD,0.0668001,45.9580"],
+  "th-stock-14.jpg": ["02/04/2026 13:16,B,ALAB,0.0297993,101.68","01/04/2026 15:18,B,RXRX,0.9776357,3.13","30/03/2026 20:23,B,O,0.0494613,61.26","30/03/2026 20:22,B,HIMS,0.1565891,19.35","27/03/2026 20:16,B,CRWD,0.0081351,370.00"],
+  "th-stock-15.jpg": ["01/05/2026 14:53,B,NFLX,0.0322819,94.48","01/05/2026 14:52,B,NU,0.2087611,14.61","01/05/2026 14:52,B,ELF,0.0484944,63.10","26/04/2026 21:13,B,ASTS,0.0400365,76.68","26/04/2026 21:13,B,MRK,0.0276501,111.03"],
 };
-const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2 };
+const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2, "th-stock-13.jpg":2, "th-stock-14.jpg":2, "th-stock-15.jpg":2 };
 
 // eng+tha main passes + an eng-only rescue pass, using the exact self-hosted data
 // the browser ships (public/tesseract) — mirrors OcrImport.tsx
@@ -651,11 +681,10 @@ const thaWorker = await createWorker("tha", 1, {
 async function ocrText(w, imgs, scale) {
   let text = "";
   for (const p of imgs) {
-    // jimp only decodes/encodes; the actual preprocessing is the SAME shared code
-    // (lib/preprocess) the browser runs, so app and CI feed tesseract identical pixels.
-    const img = await Jimp.read(p);
-    const { data: raw, width, height } = img.bitmap;
-    const view = new Uint8ClampedArray(raw.buffer, raw.byteOffset, raw.length);
+    // DECODE and preprocessing are both the shared browser code now (lib/decode +
+    // lib/preprocess), so app and CI hand tesseract identical pixels for the same file.
+    // jimp is left only to encode the result as PNG, which is lossless.
+    const { data: view, width, height } = decodeJpeg(new Uint8Array(fs.readFileSync(p)));
     grayscaleInvert(view);
     const r = resizeBilinear(view, width, height, scale);
     const out = new Jimp({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height });
