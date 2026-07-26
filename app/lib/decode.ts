@@ -1,6 +1,6 @@
 // Deterministic image decode, shared by the app and the test harness.
 //
-// The rest of the pipeline (grayscaleInvert + resizeBilinear in lib/preprocess) was
+// The rest of the pipeline (grayscaleNormalize + resizeBilinear in lib/preprocess) was
 // already shared so both sides feed tesseract identical pixels — but DECODING was not.
 // A browser's JPEG decoder and Jimp's disagree on ~6% of bytes for the same file (max
 // delta 56), which is enough to flip marginal glyphs and make the app and CI report

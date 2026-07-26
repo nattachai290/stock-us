@@ -25,7 +25,7 @@ const FIX = (f) => path.join(ROOT, "tests", "fixtures", f);
 const src = execSync("npx esbuild app/lib/ocr.ts --format=esm", { cwd: ROOT }).toString();
 const { parseActivityText, mergeParses, extractTickerHints, extractMonthHints } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 const preSrc = execSync("npx esbuild app/lib/preprocess.ts --format=esm", { cwd: ROOT }).toString();
-const { grayscaleInvert, resizeBilinear } = await import("data:text/javascript;base64," + Buffer.from(preSrc).toString("base64"));
+const { grayscaleNormalize, resizeBilinear } = await import("data:text/javascript;base64," + Buffer.from(preSrc).toString("base64"));
 // --bundle inlines jpeg-js so this is byte-for-byte the decoder the browser bundle runs
 const decSrc = execSync("npx esbuild app/lib/decode.ts --format=esm --bundle", { cwd: ROOT }).toString();
 const { decodeImage } = await import("data:text/javascript;base64," + Buffer.from(decSrc).toString("base64"));
@@ -40,9 +40,16 @@ const check = (name, cond, detail = "") => {
 
 {
   // Shared preprocessing must be deterministic and match the documented math.
-  const px = new Uint8ClampedArray([255, 255, 255, 255, 0, 0, 0, 255]); // white, black
-  grayscaleInvert(px);
-  check("preprocess: white → 0, black → 255", px[0] === 0 && px[4] === 255, `${px[0]},${px[4]}`);
+  // half white, half black → mean 128, treated as light, so values pass through
+  const px = new Uint8ClampedArray([255, 255, 255, 255, 0, 0, 0, 255]);
+  grayscaleNormalize(px);
+  check("preprocess: grayscale keeps white/black on a light page", px[0] === 255 && px[4] === 0, `${px[0]},${px[4]}`);
+  // Which way to normalise is decided from the image, not fixed: a light page must be
+  // left alone (inverting it costs reads), a dark one flipped to dark-on-light.
+  const page = (v) => { const a = new Uint8ClampedArray(16); for (let i = 0; i < 16; i += 4) { a[i] = a[i+1] = a[i+2] = v; a[i+3] = 255; } return a; };
+  const lit = page(240), drk = page(20);
+  check("preprocess: light page is not inverted", grayscaleNormalize(lit) === false && lit[0] === 240, String(lit[0]));
+  check("preprocess: dark page is inverted", grayscaleNormalize(drk) === true && drk[0] > 200, String(drk[0]));
   const r = resizeBilinear(new Uint8ClampedArray([100, 100, 100, 255]), 1, 1, 2);
   check("preprocess: 1x1 → 2x2, value preserved", r.width === 2 && r.height === 2 && [0, 4, 8, 12].every(i => r.data[i] === 100), JSON.stringify([...r.data]));
   // two-pixel gradient upscaled 2x: center-aligned sampling gives 0,0,100,100 → interpolated midpoints
@@ -715,7 +722,7 @@ async function ocrText(w, imgs, scale) {
     // lib/preprocess), so app and CI hand tesseract identical pixels for the same file.
     // jimp is left only to encode the result as PNG, which is lossless.
     const { data: view, width, height } = decodeImage(new Uint8Array(fs.readFileSync(p)));
-    grayscaleInvert(view);
+    grayscaleNormalize(view);
     const r = resizeBilinear(view, width, height, scale);
     const out = new Jimp({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height });
     const { data } = await w.recognize(await out.getBufferAsync(Jimp.MIME_PNG));

@@ -25,7 +25,7 @@ const pngPath = '.ci/parity-sample.png';
 const esm = execSync('npx esbuild app/lib/decode.ts --format=esm --bundle').toString();
 const { decodeImage, decodePng } = await import('data:text/javascript;base64,' + Buffer.from(esm).toString('base64'));
 const pre = execSync('npx esbuild app/lib/preprocess.ts --format=esm').toString();
-const { grayscaleInvert, resizeBilinear } = await import('data:text/javascript;base64,' + Buffer.from(pre).toString('base64'));
+const { grayscaleNormalize, resizeBilinear } = await import('data:text/javascript;base64,' + Buffer.from(pre).toString('base64'));
 
 // build the PNG sample (a real PNG encoder, so this is not our own bytes round-tripping)
 fs.mkdirSync('.ci', { recursive: true });
@@ -59,7 +59,7 @@ for (const file of [jpgPath, pngPath]) {
 
   // ---- CI path (what tests/ocr.test.mjs does) ----
   const dec = decodeImage(new Uint8Array(bytes));
-  grayscaleInvert(dec.data);
+  grayscaleNormalize(dec.data);
   const r = resizeBilinear(dec.data, dec.width, dec.height, SCALE);
   const ciBefore = fnv(r.data);
   const png = await new Jimp({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height })
@@ -73,7 +73,7 @@ for (const file of [jpgPath, pngPath]) {
     const bin = atob(b64); const u8 = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     const src = DEC.decodeImage(u8);
-    PRE.grayscaleInvert(src.data);
+    PRE.grayscaleNormalize(src.data);
     const rr = PRE.resizeBilinear(src.data, src.width, src.height, scale);
     const before = H(rr.data);
     const c = document.createElement('canvas');

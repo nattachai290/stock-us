@@ -1,7 +1,7 @@
 "use client";
 import { useRef, useState } from "react";
 import { parseActivityText, mergeParses, extractTickerHints, extractMonthHints, rowAppearsIn, type MergeResult } from "../lib/ocr";
-import { grayscaleInvert, resizeBilinear } from "../lib/preprocess";
+import { grayscaleNormalize, resizeBilinear } from "../lib/preprocess";
 import { decodeImage } from "../lib/decode";
 import { btnGhost, btnPrimary } from "../lib/ui";
 
@@ -62,7 +62,7 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       const id = c1.getContext("2d")!.getImageData(0, 0, c1.width, c1.height);
       src = { data: id.data, width: c1.width, height: c1.height };
     }
-    grayscaleInvert(src.data);
+    grayscaleNormalize(src.data);
     const r = resizeBilinear(src.data, src.width, src.height, scale);
     const c2 = document.createElement("canvas");
     c2.width = r.width; c2.height = r.height;
