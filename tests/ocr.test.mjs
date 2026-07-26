@@ -689,8 +689,9 @@ const TH_STOCK_MORE = {
   "th-stock-17.jpg": ["19/03/2026 22:00,B,ABBV,0.0145783,207.1560","18/03/2026 21:28,B,V,0.0099667,304.0120","18/03/2026 21:27,B,TMDX,0.0255622,118.5340","18/03/2026 21:27,B,NUE,0.0186491,162.4740","17/03/2026 21:05,B,IONQ,0.0920374,33.3560"],
 };
 // Rows whose ticker no pass can read are dropped and reported unread — the right outcome,
-// so it is asserted rather than papered over. th-stock-17's V renders as "Gov"/"ง".
-const TH_EXP_INC = { "th-stock-17.jpg": 1 };
+// so it is asserted rather than papered over. th-stock-16's OXY comes out as "(0).4'" and
+// th-stock-17's V as "Gov"/"ง": nothing ticker-shaped survives, so neither is guessed.
+const TH_EXP_INC = { "th-stock-16.jpg": 1, "th-stock-17.jpg": 1 };
 const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2, "th-stock-13.jpg":2, "th-stock-14.jpg":2, "th-stock-15.jpg":2, "th-stock-16.jpg":2, "th-stock-17.jpg":2 };
 
 // eng+tha main passes + an eng-only rescue pass, using the exact self-hosted data
