@@ -653,8 +653,16 @@ const TH_STOCK_MORE = {
   // "หัก/รับ CRWD" rows (a 1:4 split) interleaved between real transactions — both legs
   // land on the same minute here, so the "-"-before-"+" ordering rule is what separates them.
   "th-stock-12.jpg": ["07/07/2026 13:14,B,EOSE,0.5772200,5.18","03/07/2026 18:02,B,ORCL,0.0207157,145.30","03/07/2026 18:02,B,ARM,0.0092615,325.00","02/07/2026 15:05,-,CRWD,0.0217616","02/07/2026 15:05,+,CRWD,0.0870467,0","01/07/2026 20:21,S,HPQ,0.5745693,21.89"],
+  // Three ETF/stock DCA pages — the exact files the user uploads to the app, so these
+  // double as the app-vs-CI parity check. Between them: several buys sharing one minute
+  // (VIG/UPS/SPYD all 21:48; NU/ELF both 14:52), the single-letter ticker "O" that OCR
+  // renders as a zero glyph, and month-section headers splitting a page across months.
+  // The clipped rows at the top of 13 and 15 have no header on screen and are excluded.
+  "th-stock-13.jpg": ["16/03/2026 21:49,B,VYM,0.0205697,149.2480","16/03/2026 21:49,B,VOO,0.0049951,614.5940","16/03/2026 21:48,B,VIG,0.0140287,218.8360","16/03/2026 21:48,B,UPS,0.0314536,97.6040","16/03/2026 21:48,B,SPYD,0.0668001,45.9580"],
+  "th-stock-14.jpg": ["02/04/2026 13:16,B,ALAB,0.0297993,101.68","01/04/2026 15:18,B,RXRX,0.9776357,3.13","30/03/2026 20:23,B,O,0.0494613,61.26","30/03/2026 20:22,B,HIMS,0.1565891,19.35","27/03/2026 20:16,B,CRWD,0.0081351,370.00"],
+  "th-stock-15.jpg": ["01/05/2026 14:53,B,NFLX,0.0322819,94.48","01/05/2026 14:52,B,NU,0.2087611,14.61","01/05/2026 14:52,B,ELF,0.0484944,63.10","26/04/2026 21:13,B,ASTS,0.0400365,76.68","26/04/2026 21:13,B,MRK,0.0276501,111.03"],
 };
-const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2 };
+const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2, "th-stock-13.jpg":2, "th-stock-14.jpg":2, "th-stock-15.jpg":2 };
 
 // eng+tha main passes + an eng-only rescue pass, using the exact self-hosted data
 // the browser ships (public/tesseract) — mirrors OcrImport.tsx
