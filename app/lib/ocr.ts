@@ -831,28 +831,34 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
     const g = byTx.get(k); if (g) g.push(r); else byTx.set(k, [r]);
   }
   if (byTx.size !== rows.length) {
-    rows.length = 0;
-    for (const g of byTx.values()) {
-      if (g.length === 1) { rows.push(g[0]); continue; }
+    // Snapshot the groups first: the window a disputed row is checked against has to be
+    // every OTHER row on the page, so it cannot be read out of a list still being rebuilt.
+    const groups = [...byTx.values()];
+    const collapsed: MergedRow[] = [];
+    for (let gi = 0; gi < groups.length; gi++) {
+      const g = groups[gi];
+      if (g.length === 1) { collapsed.push(g[0]); continue; }
       g.sort((x, y) => new Date(x.iso).getTime() - new Date(y.iso).getTime());
       // One screenshot shows a contiguous slice of history, so a row printed among the
       // others has to fall inside the window they span. ELF read as 11/05 sat outside a
       // page running 26/04-01/05 while its other reading, 01/05, sat inside — decisive.
       // If the disputed row is the newest or oldest on the page both readings can be
       // outside, and then the flag stays rather than a coin flip.
-      const others = rows.filter(r => !g.includes(r)).map(r => new Date(r.iso).getTime());
+      const others = groups.filter((_, i) => i !== gi).flatMap(x => x.map(r => new Date(r.iso).getTime()));
       let pick: MergedRow | null = null;
       if (others.length >= 2) {
         const lo = Math.min(...others), hi = Math.max(...others);
         const inside = g.filter(r => { const t = new Date(r.iso).getTime(); return t >= lo && t <= hi; });
         if (inside.length === 1) pick = inside[0];
       }
-      if (pick) rows.push(pick);
+      if (pick) collapsed.push(pick);
       else {
         const days = g.map(r => r.csv.slice(0, 10));
-        rows.push({ ...g[0], flags: [...g[0].flags, `วันที่สองรอบไม่ตรงกัน (${days.join(" / ")}) — ตรวจกับรูป`] });
+        collapsed.push({ ...g[0], flags: [...g[0].flags, `วันที่สองรอบไม่ตรงกัน (${days.join(" / ")}) — ตรวจกับรูป`] });
       }
     }
+    rows.length = 0;
+    rows.push(...collapsed);
   }
 
   rows.sort((x, y) => new Date(x.iso).getTime() - new Date(y.iso).getTime());
