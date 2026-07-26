@@ -612,6 +612,26 @@ const TRUTH_TH_SELLS = [
 // minutes (หัก 15:41, รับ 15:47) and in reverse order on screen — they must still pair,
 // and the "-" leg must be emitted before the "+" leg for importTxCSV to record a split.
 {
+  // Class shares print with a dot ("BRK.B") but the portfolio and importer use a dash.
+  // Matching only [A-Z]{1,6} truncated it to "BRK" — a valid-LOOKING ticker, so the row
+  // came out with the WRONG symbol and no flag at all. Both spellings must normalise.
+  const hdr = (sym) => ["ซื ้ อ " + sym + " 99.92 บ า ท",
+                        "ร า ค า ท ี ่ ได ้ จ ร ิ ง 469.60 26 เ ม . ย . 69 - 21:12:23 u.",
+                        "จ ํ า น ว น ห ุ ้ น 0.0065374"].join("\n");
+  for (const sym of ["BRK.B", "BRK-B"]) {
+    const t = hdr(sym);
+    const m = mergeParses(parseActivityText(t, undefined, ["BRK-B"]), parseActivityText(t, undefined, ["BRK-B"]), { a: t, b: t });
+    check(`class-share ticker: ${sym} → BRK-B`, m.rows[0]?.symbol === "BRK-B", m.rows[0]?.csv);
+  }
+  // plain and single-letter tickers must be untouched by the widened pattern
+  for (const sym of ["NVDA", "V"]) {
+    const t = hdr(sym);
+    const m = mergeParses(parseActivityText(t, undefined, [sym]), parseActivityText(t, undefined, [sym]), { a: t, b: t });
+    check(`plain ticker unaffected: ${sym}`, m.rows[0]?.symbol === sym, m.rows[0]?.csv);
+  }
+}
+
+{
   // The one-letter ticker "O" has no letter shape to survive Thai OCR — both passes render
   // it as a zero glyph. It may be adopted only from the portfolio whitelist, and flagged.
   const t = ["ซื ้ อ ๐ 99.99 บ า ท",
@@ -661,8 +681,14 @@ const TH_STOCK_MORE = {
   "th-stock-13.jpg": ["16/03/2026 21:49,B,VYM,0.0205697,149.2480","16/03/2026 21:49,B,VOO,0.0049951,614.5940","16/03/2026 21:48,B,VIG,0.0140287,218.8360","16/03/2026 21:48,B,UPS,0.0314536,97.6040","16/03/2026 21:48,B,SPYD,0.0668001,45.9580"],
   "th-stock-14.jpg": ["02/04/2026 13:16,B,ALAB,0.0297993,101.68","01/04/2026 15:18,B,RXRX,0.9776357,3.13","30/03/2026 20:23,B,O,0.0494613,61.26","30/03/2026 20:22,B,HIMS,0.1565891,19.35","27/03/2026 20:16,B,CRWD,0.0081351,370.00"],
   "th-stock-15.jpg": ["01/05/2026 14:53,B,NFLX,0.0322819,94.48","01/05/2026 14:52,B,NU,0.2087611,14.61","01/05/2026 14:52,B,ELF,0.0484944,63.10","26/04/2026 21:13,B,ASTS,0.0400365,76.68","26/04/2026 21:13,B,MRK,0.0276501,111.03"],
+  // Two more pages of the same account. 16 carries a DOTTED ticker (BRK.B, which the
+  // portfolio stores as BRK-B) and 17 the single-letter ticker V — both shapes the
+  // "first uppercase run" ticker match handles badly. 17's last row (IONQ 17 มี.ค.) is the
+  // clipped one at the top of th-stock-13, so the two pages join up.
+  "th-stock-16.jpg": ["26/04/2026 21:12,B,HCA,0.0070009,438.51","26/04/2026 21:12,B,BRK-B,0.0065374,469.60","23/04/2026 21:08,B,LMT,0.0057109,535.8160","22/04/2026 19:42,B,WM,0.0137715,223.65","15/04/2026 21:51,B,OXY,0.0552328,56.1260"],
+  "th-stock-17.jpg": ["19/03/2026 22:00,B,ABBV,0.0145783,207.1560","18/03/2026 21:28,B,V,0.0099667,304.0120","18/03/2026 21:27,B,TMDX,0.0255622,118.5340","18/03/2026 21:27,B,NUE,0.0186491,162.4740","17/03/2026 21:05,B,IONQ,0.0920374,33.3560"],
 };
-const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2, "th-stock-13.jpg":2, "th-stock-14.jpg":2, "th-stock-15.jpg":2 };
+const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2, "th-stock-13.jpg":2, "th-stock-14.jpg":2, "th-stock-15.jpg":2, "th-stock-16.jpg":2, "th-stock-17.jpg":2 };
 
 // eng+tha main passes + an eng-only rescue pass, using the exact self-hosted data
 // the browser ships (public/tesseract) — mirrors OcrImport.tsx
@@ -773,7 +799,7 @@ for (const c of CASES) {
   // ── hard guarantees (these decide pass/fail) ──
   check(`${c.name}: no row is silently wrong (matches expect or is flagged)`, silent.length === 0, silent.map(r => r.csv).join(" | "));
   check(`${c.name}: no spurious rows invented (<= ${c.truth.length})`, m.rows.length <= c.truth.length, `got ${m.rows.length}`);
-  check(`${c.name}: every emitted symbol is a valid ticker`, m.rows.every(r => /^([A-Z]{1,6}|XAUUSD)$/.test(r.symbol)), m.rows.map(r => r.symbol).join(","));
+  check(`${c.name}: every emitted symbol is a valid ticker`, m.rows.every(r => /^([A-Z]{1,6}(-[A-Z]{1,2})?|XAUUSD)$/.test(r.symbol)), m.rows.map(r => r.symbol).join(","));
   // The "อ่านไม่ครบ" count the user sees must match the rows genuinely missing from the
   // merged output — never inflated by per-pass failures that the other pass recovered.
   check(`${c.name}: incomplete count matches missing rows (expect ${c.expIncomplete ?? 0})`, m.incomplete === (c.expIncomplete ?? 0), `got ${m.incomplete}`);

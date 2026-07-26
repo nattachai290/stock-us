@@ -126,6 +126,14 @@ const qtyFix = (s: string, dp: number) => {
   for (const v of variants) if ((v.split(".")[1] || "").length === dp) return v;
   return variants[0];
 };
+// Ticker shapes: a plain symbol (NVDA) or a class share, which the broker prints with a
+// dot (BRK.B) while the portfolio and importer store it with a dash (BRK-B). Matching only
+// [A-Z]{1,6} truncated "BRK.B" to "BRK" — a valid-LOOKING symbol, so it was emitted with no
+// flag at all. SCAN_TICKER finds one in a line; TICKER_OK validates an already-picked one.
+const SCAN_TICKER = /\b([A-Z]{1,6}(?:[.\-][A-Z]{1,2})?)\b/g;
+const TICKER_OK = /^[A-Z]{1,6}(-[A-Z]{1,2})?$/;
+const normTicker = (t: string) => t.toUpperCase().replace(/\./g, "-");
+
 // Currency/marker words that match the ticker shape but are never tickers
 const NOT_TICKERS = new Set(["USD", "THB", "DCA", "CA", "GOLD", "OZ", "AM", "PM"]);
 
@@ -267,7 +275,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     if (cur.isCA) {
       const q = cur.caOutStr ?? cur.qtyStr;
       const sym = cur.symbol;
-      if (q && sym && /^[A-Z]{1,6}$/.test(sym) && !NOT_TICKERS.has(sym) && cur.iso)
+      if (q && sym && TICKER_OK.test(sym) && !NOT_TICKERS.has(sym) && cur.iso)
         caLegs.push({ symbol: sym, iso: cur.iso, qtyStr: q, dir: cur.caOutStr ? "out" : "in" });
       cur = null; return;
     }
@@ -281,7 +289,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     // shed uppercase junk — but a disagreement is surfaced as a review flag.
     if (!cur.isGold && cur.qtyStr && hints) {
       const hint = hints[cur.qtyStr];
-      const valid = cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol);
+      const valid = cur.symbol && TICKER_OK.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol);
       if (hint && !valid) {
         cur.symbol = hint;
         // A rescued name the user actually holds has two independent confirmations
@@ -296,7 +304,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     // Only adopt it when no pass produced a ticker AND the portfolio holds O — a name any
     // pass actually read always wins, and the row is flagged as a whitelist fix.
     if (!cur.isGold && cur.zeroTicker && knownSet.has("O")) {
-      const valid = cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol);
+      const valid = cur.symbol && TICKER_OK.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol);
       if (!valid) { cur.symbol = "O"; cur.symbolCorrected = "๐"; }
     }
     // Portfolio-whitelist fix: a read ticker the user doesn't hold, one edit away from
@@ -308,7 +316,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       if (cands.length === 1) { cur.symbolCorrected = cur.symbol; cur.symbol = cands[0]; }
     }
     // A ticker that OCR mangled must not be emitted with a wrong symbol
-    const cleanSym = cur.isGold || (cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol));
+    const cleanSym = cur.isGold || (cur.symbol && TICKER_OK.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol));
     const complete = cur.side && cleanSym && cur.qty && cur.price;
     if (complete && cur.iso) {
       emitRow(cur);
@@ -361,12 +369,12 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       const goldHdr = line.match(/\b([A-Z]{2,}-?GOLD)\b/i);
       const anyTotal  = /[\d,OolI|]+\.\d{2}\s*(?:บ|USD|THB)/i.test(line); // a spent/received total → header
       const bahtTotal = /[\d,OolI|]+\.\d{2}\s*(?:บ|THB)/i.test(line);     // baht spent = a BUY, unambiguously
-      let sellM = line.match(/\b([A-Z]{1,6})\b\s+(-?[\d.OolI|\]]{6,})\s*(?:ห|Ku|Au|Kn)/); // "ticker qty หุ้น" (sell)
+      let sellM = line.match(/\b([A-Z]{1,6}(?:[.\-][A-Z]{1,2})?)\b\s+(-?[\d.OolI|\]]{6,})\s*(?:ห|Ku|Au|Kn)/); // "ticker qty หุ้น" (sell)
       if (sellM && NOT_TICKERS.has(sellM[1])) sellM = null;
       // uppercase-only — a Thai-mangled ticker won't match; skip currency/marker words
       // so "ซื้อ <mangled> 1.60 USD" can't emit USD as the symbol
       let ticker: string | null = null;
-      for (const tm of line.matchAll(/\b([A-Z]{1,6})\b/g)) {
+      for (const tm of line.matchAll(SCAN_TICKER)) {
         if (!NOT_TICKERS.has(tm[1])) { ticker = tm[1]; break; }
       }
       // The one-letter ticker "O" has no letter shape to survive Thai OCR — both passes
@@ -407,7 +415,8 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
         // When the "<ticker> <qty> หุ้น" shape matched, its capture is the ticker: it is
         // pinned to the share count, unlike `ticker` which is just the line's first
         // uppercase run and can pick up a Thai word OCR'd into caps ("รับ" → "SU NFLX …").
-        cur = { side, symbol: gold ? "MTS-GOLD" : (sellM?.[1] ?? ticker)?.toUpperCase(), isGold: gold, sideUncertain: uncertain, sideFromTotal: fromTotal };
+        const picked = sellM?.[1] ?? ticker;
+        cur = { side, symbol: gold ? "MTS-GOLD" : (picked ? normTicker(picked) : undefined), isGold: gold, sideUncertain: uncertain, sideFromTotal: fromTotal };
         if (zeroTicker && !sellM) cur.zeroTicker = true;
         const qtyTok = sellM ? sellM[2] : qtyUnit?.[1];
         if (qtyTok && !bahtTotal) {
