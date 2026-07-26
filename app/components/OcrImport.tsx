@@ -2,6 +2,7 @@
 import { useRef, useState } from "react";
 import { parseActivityText, mergeParses, extractTickerHints, extractMonthHints, rowAppearsIn, type MergeResult } from "../lib/ocr";
 import { grayscaleInvert, resizeBilinear } from "../lib/preprocess";
+import { decodeJpeg, isJpeg } from "../lib/decode";
 import { btnGhost, btnPrimary } from "../lib/ui";
 
 // Upload broker-app Activity screenshots → OCR (tesseract.js, fully client-side,
@@ -43,19 +44,28 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
   const [missingBy, setMissingBy] = useState<{ name: string; n: number }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // Grayscale+invert at native size (white-on-dark → black-on-white), then a
-  // DETERMINISTIC bilinear upscale from lib/preprocess — shared verbatim with the
-  // test harness, so the app and CI feed tesseract identical pixels on the same
-  // image regardless of browser engine. Canvas is used only to decode/encode.
+  // Decode → grayscale+invert at native size (white-on-dark → black-on-white) → a
+  // DETERMINISTIC bilinear upscale. Every step is the shared code the test harness runs
+  // (lib/decode + lib/preprocess), so the same file yields the same pixels here, in CI,
+  // and across browser engines. JPEG goes through jpeg-js rather than the browser's own
+  // decoder, which disagrees with Jimp's on ~6% of bytes — enough to change which rows
+  // OCR reads. Other formats fall back to the browser decoder (results may then vary by
+  // engine); broker screenshots are JPEG. Canvas is used only to encode the PNG.
   const preprocess = async (file: File, scale: number): Promise<Blob> => {
-    const bmp = await createImageBitmap(file);
-    const c1 = document.createElement("canvas");
-    c1.width = bmp.width; c1.height = bmp.height;
-    const x1 = c1.getContext("2d")!;
-    x1.drawImage(bmp, 0, 0);
-    const id = x1.getImageData(0, 0, c1.width, c1.height);
-    grayscaleInvert(id.data);
-    const r = resizeBilinear(id.data, c1.width, c1.height, scale);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let src: { data: Uint8ClampedArray; width: number; height: number };
+    if (isJpeg(bytes)) {
+      src = decodeJpeg(bytes);
+    } else {
+      const bmp = await createImageBitmap(new Blob([bytes]));
+      const c1 = document.createElement("canvas");
+      c1.width = bmp.width; c1.height = bmp.height;
+      c1.getContext("2d")!.drawImage(bmp, 0, 0);
+      const id = c1.getContext("2d")!.getImageData(0, 0, c1.width, c1.height);
+      src = { data: id.data, width: c1.width, height: c1.height };
+    }
+    grayscaleInvert(src.data);
+    const r = resizeBilinear(src.data, src.width, src.height, scale);
     const c2 = document.createElement("canvas");
     c2.width = r.width; c2.height = r.height;
     c2.getContext("2d")!.putImageData(new ImageData(r.data, r.width, r.height), 0, 0);

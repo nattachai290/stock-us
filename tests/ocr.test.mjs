@@ -12,6 +12,7 @@
 // version pinned in package-lock — if an upgrade drops them, investigate.
 
 import Jimp from "jimp";
+import fs from "fs";
 import { createWorker } from "tesseract.js";
 import { execSync } from "child_process";
 import { fileURLToPath } from "url";
@@ -25,6 +26,9 @@ const src = execSync("npx esbuild app/lib/ocr.ts --format=esm", { cwd: ROOT }).t
 const { parseActivityText, mergeParses, extractTickerHints, extractMonthHints } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 const preSrc = execSync("npx esbuild app/lib/preprocess.ts --format=esm", { cwd: ROOT }).toString();
 const { grayscaleInvert, resizeBilinear } = await import("data:text/javascript;base64," + Buffer.from(preSrc).toString("base64"));
+// --bundle inlines jpeg-js so this is byte-for-byte the decoder the browser bundle runs
+const decSrc = execSync("npx esbuild app/lib/decode.ts --format=esm --bundle", { cwd: ROOT }).toString();
+const { decodeJpeg } = await import("data:text/javascript;base64," + Buffer.from(decSrc).toString("base64"));
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = "") => {
@@ -676,11 +680,10 @@ const thaWorker = await createWorker("tha", 1, {
 async function ocrText(w, imgs, scale) {
   let text = "";
   for (const p of imgs) {
-    // jimp only decodes/encodes; the actual preprocessing is the SAME shared code
-    // (lib/preprocess) the browser runs, so app and CI feed tesseract identical pixels.
-    const img = await Jimp.read(p);
-    const { data: raw, width, height } = img.bitmap;
-    const view = new Uint8ClampedArray(raw.buffer, raw.byteOffset, raw.length);
+    // DECODE and preprocessing are both the shared browser code now (lib/decode +
+    // lib/preprocess), so app and CI hand tesseract identical pixels for the same file.
+    // jimp is left only to encode the result as PNG, which is lossless.
+    const { data: view, width, height } = decodeJpeg(new Uint8Array(fs.readFileSync(p)));
     grayscaleInvert(view);
     const r = resizeBilinear(view, width, height, scale);
     const out = new Jimp({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height });
