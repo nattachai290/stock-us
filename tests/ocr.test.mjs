@@ -616,6 +616,10 @@ const TRUTH_TH_SELLS = [
   const m = mergeParses(parseActivityText(t, undefined, ["O", "HIMS"]), parseActivityText(t, undefined, ["O", "HIMS"]), { a: t, b: t });
   check("zero-glyph ticker: recovered as O from the portfolio", m.rows[0]?.csv === "30/03/2026 20:23,B,O,0.0494613,61.26", m.rows[0]?.csv);
   check("zero-glyph ticker: flagged, never silent", !!m.rows[0]?.flags.length, JSON.stringify(m.rows[0]?.flags));
+  // A ticker some pass actually READ beats the glyph-shape guess — the real CRWD row in
+  // th-stock-14 was claimed as "O" until this precedence was fixed.
+  const mh = mergeParses(parseActivityText(t, { "0.0494613": "CRWD" }, ["O", "CRWD"]), parseActivityText(t, { "0.0494613": "CRWD" }, ["O", "CRWD"]), { a: t, b: t });
+  check("zero-glyph ticker: an eng-pass reading wins over the guess", mh.rows[0]?.symbol === "CRWD", mh.rows[0]?.csv);
   // Not in the portfolio → stays unread rather than guessing a symbol
   const m2 = mergeParses(parseActivityText(t, undefined, ["HIMS"]), parseActivityText(t, undefined, ["HIMS"]));
   check("zero-glyph ticker: not adopted when O isn't held", m2.rows.length === 0 && m2.incomplete === 1, `rows=${m2.rows.length} inc=${m2.incomplete}`);
