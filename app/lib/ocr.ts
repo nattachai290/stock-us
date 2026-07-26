@@ -4,7 +4,7 @@
 export type OcrTxRow = {
   csv: string;            // "DD/MM/YYYY HH:mm,B,SYMBOL,qty,price" — same format importTxCSV accepts
   iso: string;            // for sorting oldest→first (FIFO import needs chronological order)
-  side: "B" | "S";
+  side: "B" | "S" | "+" | "-";  // "+"/"-" are the paired legs of a corporate-action split
   symbol: string;
   qty: number;
   qtyStr: string;         // raw OCR token — needed to count decimals (Number drops trailing zeros)
@@ -15,7 +15,7 @@ export type OcrTxRow = {
   check: "ok" | "mismatch" | "unverified";
   isGold?: boolean;       // gold DCA rows use "Weight x oz" (4 decimals) & map to XAUUSD
   sideUncertain?: boolean;// Thai ซื้อ/ขาย was too garbled to read confidently — needs a look
-  skip?: boolean;         // corporate-action block (split) — not a plain buy/sell, dropped
+  isSplit?: boolean;      // corporate-action leg — no price; qty is a share adjustment
   symbolFromHint?: boolean;// ticker came from the eng-only rescue pass — flag for review
   symbolHintMismatch?: string;// eng pass read a DIFFERENT ticker for this row — flag for review
   symbolCorrected?: string;// what OCR actually read, before the portfolio-whitelist fix
@@ -204,6 +204,21 @@ export function extractMonthHints(thaText: string): Record<string, { mon: string
   return hints;
 }
 
+const decimalsOf = (s: string) => (s.split(".")[1] || "").length;
+const SHARE_DP = 7; // the broker always prints share counts with 7 decimals
+
+// Build one leg of a corporate-action split. The "-" leg has no price column and the
+// "+" leg has an explicit 0 — exactly the shape importTxCSV pairs into splitHistory.
+const splitRow = (symbol: string, iso: string, qtyStr: string, side: "+" | "-"): OcrTxRow => {
+  const d = new Date(iso);
+  const csvDate = `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()} ${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+  return {
+    csv: side === "-" ? `${csvDate},-,${symbol},${qtyStr}` : `${csvDate},+,${symbol},${qtyStr},0`,
+    iso, side, symbol, qty: parseFloat(qtyStr), qtyStr,
+    price: 0, priceStr: "", check: "unverified", isSplit: true,
+  };
+};
+
 export function parseActivityText(text: string, hints?: Record<string, string>, known?: string[], monthHints?: Record<string, { mon: string; year: string }>): OcrParseResult {
   const knownSet = new Set((known ?? []).map(s => s.toUpperCase()));
   const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
@@ -216,10 +231,12 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
   // month must share it. We collect every readable (day,month,year) as a positional
   // "anchor" (including section headers), and defer blocks whose month didn't resolve
   // until after the pass, then fill them only when the bracketing anchors agree.
-  type Draft = Partial<OcrTxRow> & { pendDay?: string; pendHH?: string; pendMM?: string; pendYear?: string; ord?: number; monthReadAs?: string };
+  type Draft = Partial<OcrTxRow> & { pendDay?: string; pendHH?: string; pendMM?: string; pendYear?: string; ord?: number; monthReadAs?: string; isCA?: boolean; caOutStr?: string };
   let cur: Draft | null = null;
   const anchors: { ord: number; mon: string; year: number }[] = [];
   const pending: Draft[] = [];
+  // Corporate-action legs seen this pass, paired into split rows after the loop.
+  const caLegs: { symbol: string; iso: string; qtyStr: string; dir: "in" | "out" }[] = [];
 
   // Emit a completed draft (iso already set) as a CSV row.
   const emitRow = (c: Draft) => {
@@ -245,7 +262,15 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
 
   const flush = () => {
     if (!cur) return;
-    if (cur.skip) { cur = null; return; } // corporate action — dropped on purpose
+    // Corporate action ("CA - แตกหรือรวมหุ้น"): not a buy/sell — it has no price, only a
+    // +/- share adjustment. Park the leg; the two legs are paired after the pass.
+    if (cur.isCA) {
+      const q = cur.caOutStr ?? cur.qtyStr;
+      const sym = cur.symbol;
+      if (q && sym && /^[A-Z]{1,6}$/.test(sym) && !NOT_TICKERS.has(sym) && cur.iso)
+        caLegs.push({ symbol: sym, iso: cur.iso, qtyStr: q, dir: cur.caOutStr ? "out" : "in" });
+      cur = null; return;
+    }
     // The "Thai total-header = buy" inference only holds for stocks; if the block
     // turned out to be gold (an oz weight line appeared, even with the product name
     // mangled), a USD total could be sale proceeds — downgrade to uncertain.
@@ -310,7 +335,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     // and reliable. These map to +/- share adjustments that the FIFO importer treats
     // specially; rather than risk a bad row, mark the current block to be skipped so the
     // user imports the (rare) split by hand.
-    if (/\bCA\b/.test(line) && (compact.includes("แตก") || compact.includes("รวม"))) { if (cur) cur.skip = true; }
+    if (/\bCA\b/.test(line) && (compact.includes("แตก") || compact.includes("รวม"))) { if (cur) cur.isCA = true; }
 
     // New record starts at a Buy/Sell line: "Buy ARM", "Sell ARM" (symbol may touch: "BuyARM")
     const m = line.match(/\b(Buy|Sell)\s*([A-Z][A-Z0-9.\-]{0,9})\b/);
@@ -366,9 +391,18 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
           side = "B"; fromTotal = true;
         }
         else { side = sellM ? "S" : "B"; uncertain = true; }
-        cur = { side, symbol: gold ? "MTS-GOLD" : (ticker ?? sellM?.[1])?.toUpperCase(), isGold: gold, sideUncertain: uncertain, sideFromTotal: fromTotal };
+        // When the "<ticker> <qty> หุ้น" shape matched, its capture is the ticker: it is
+        // pinned to the share count, unlike `ticker` which is just the line's first
+        // uppercase run and can pick up a Thai word OCR'd into caps ("รับ" → "SU NFLX …").
+        cur = { side, symbol: gold ? "MTS-GOLD" : (sellM?.[1] ?? ticker)?.toUpperCase(), isGold: gold, sideUncertain: uncertain, sideFromTotal: fromTotal };
         const qtyTok = sellM ? sellM[2] : qtyUnit?.[1];
-        if (qtyTok && !bahtTotal) { const f = qtyFix(qtyTok, 7); const v = parseFloat(f); if (v > 0) { cur.qty = v; cur.qtyStr = f; } }
+        if (qtyTok && !bahtTotal) {
+          const f = qtyFix(qtyTok, 7); const v = parseFloat(f);
+          if (v > 0) { cur.qty = v; cur.qtyStr = f; }
+          // A negative share count is never a buy/sell — it is the "หัก" (deduct) leg of
+          // a corporate action. Keep the magnitude so flush() can pair it with the "รับ".
+          else if (v < 0) cur.caOutStr = f.replace(/^-/, "");
+        }
       } else if (cur && cur.price != null && (compact.includes("จริง") || /Executed\s*Price/i.test(line))) {
         // A second executed-price line while the open block already has its price means
         // the next block's header was too mangled to detect — flush so the open block
@@ -483,7 +517,31 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     }
   }
 
-  rows.sort((a, b) => new Date(a.iso).getTime() - new Date(b.iso).getTime());
+  // Pair the corporate-action legs into split rows. A split shows as two entries —
+  // "หัก <sym> -q" (whole position out) and "รับ <sym> q'" (new total in) — on the SAME
+  // DAY but not necessarily the same minute (a real fixture has 15:41 vs 15:47). Emit
+  // only a complete, self-consistent pair: same symbol, same day, both 7-decimal, and a
+  // plausible ratio. Anything else is left out rather than guessed — a wrong split
+  // rewrites the whole position, unlike a wrong single buy.
+  const dayOf = (iso: string) => iso.slice(0, 10);
+  for (const out of caLegs.filter(l => l.dir === "out")) {
+    const inLeg = caLegs.find(l => l.dir === "in" && l.symbol === out.symbol && dayOf(l.iso) === dayOf(out.iso));
+    if (!inLeg) continue;
+    const qOut = parseFloat(out.qtyStr), qIn = parseFloat(inLeg.qtyStr);
+    if (!(qOut > 0) || !(qIn > 0)) continue;
+    if (decimalsOf(out.qtyStr) !== SHARE_DP || decimalsOf(inLeg.qtyStr) !== SHARE_DP) continue;
+    const ratio = qIn / qOut;
+    if (!(ratio >= 0.02 && ratio <= 200)) continue; // sanity bound on split factors
+    // "-" carries no price column; "+" carries an explicit 0 — that exact shape is what
+    // importTxCSV pairs into splitHistory without touching buyHistory (cost stays intact).
+    rows.push(splitRow(out.symbol, out.iso, out.qtyStr, "-"));
+    rows.push(splitRow(inLeg.symbol, inLeg.iso, inLeg.qtyStr, "+"));
+  }
+
+  // Oldest first; a split's "-" leg must land before its "+" leg (the importer buffers
+  // the deduct, then pairs it), which matters when both legs share a timestamp.
+  rows.sort((a, b) => (new Date(a.iso).getTime() - new Date(b.iso).getTime())
+    || (a.side === "-" ? -1 : b.side === "-" ? 1 : 0));
   return { rows, incomplete };
 }
 
@@ -523,8 +581,6 @@ function confirmedInText(r: OcrTxRow, text?: string): boolean {
   return false;
 }
 
-const decimals = (s: string) => (s.split(".")[1] || "").length;
-const SHARE_DECIMALS = 7;
 
 export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: string; b?: string; extra?: string[] }): MergeResult {
   // A row seen in only ONE main pass is flagged unless its time+price+qty can be
@@ -534,21 +590,22 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
   // strong evidence the value is right, so the flag is dropped. This never changes a
   // value; it only clears a review flag when a second reader agrees.
   const extra = texts?.extra || [];
-  const confirmedBy = (r: OcrTxRow, primary?: string) => confirmedInText(r, primary) || extra.some(t => confirmedInText(r, t));
+  const confirmedBy = (r: OcrTxRow, primary?: string) =>
+    r.isSplit || confirmedInText(r, primary) || extra.some(t => confirmedInText(r, t));
   // Key on date+symbol (NOT side): the Thai side word is noisy, so two passes can
   // disagree on Buy/Sell for the same transaction — we reconcile side here rather than
   // emit two rows. A single symbol won't have two transactions at the same minute.
-  const key = (r: OcrTxRow) => `${r.iso}|${r.symbol}`;
+  const key = (r: OcrTxRow) => r.isSplit ? `${r.iso}|${r.symbol}|${r.side}` : `${r.iso}|${r.symbol}`;
   const bMap = new Map(b.rows.map(r => [key(r), r]));
   const seen = new Set<string>();
   const rows: MergedRow[] = [];
 
-  const finalize = (best: OcrTxRow, side: "B" | "S", flags: string[], valuesOk = false) => {
+  const finalize = (best: OcrTxRow, side: OcrTxRow["side"], flags: string[], valuesOk = false) => {
     if (best.monthInferred) flags.push(`OCR อ่านเดือนได้ "${best.monthReadAs}" — เดาเป็นเดือน ${best.csv.slice(3, 5)} จากรายการข้างเคียง ตรวจกับรูป`);
     if (best.symbolFromHint) flags.push("ชื่อหุ้นอ่านจากรอบภาษาอังกฤษ — ตรวจกับรูป");
     if (best.symbolHintMismatch) flags.push(`รอบภาษาอังกฤษอ่านชื่อหุ้นเป็น ${best.symbolHintMismatch} — ตรวจกับรูป`);
     if (best.symbolCorrected) flags.push(`OCR อ่านได้ "${best.symbolCorrected}" — แก้เป็น ${best.symbol} ตามหุ้นในพอร์ต ตรวจกับรูป`);
-    if (!best.isGold && decimals(best.qtyStr) !== SHARE_DECIMALS) flags.push(`ทศนิยมจำนวนหุ้นได้ ${decimals(best.qtyStr)} หลัก (ปกติ 7) — อาจอ่านตกหลัก`);
+    if (!best.isGold && decimalsOf(best.qtyStr) !== SHARE_DP) flags.push(`ทศนิยมจำนวนหุ้นได้ ${decimalsOf(best.qtyStr)} หลัก (ปกติ 7) — อาจอ่านตกหลัก`);
     // A price×qty≠total mismatch only matters if it means the IMPORTED qty or price is
     // wrong — the total itself is never imported (CSV is date,side,symbol,qty,price). When
     // qty and price are corroborated (both passes agree, or confirmed in another read) the
@@ -602,8 +659,8 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
         best = aUsd ? ra : rb;
       } else {
         if (ra.qtyStr !== rb.qtyStr) {
-          const aOk = decimals(ra.qtyStr) === SHARE_DECIMALS;
-          const bOk = decimals(rb.qtyStr) === SHARE_DECIMALS;
+          const aOk = decimalsOf(ra.qtyStr) === SHARE_DP;
+          const bOk = decimalsOf(rb.qtyStr) === SHARE_DP;
           if (aOk && !bOk) best = ra;
           else if (bOk && !aOk) best = rb;
           else { best = aOk ? ra : rb; if (!ra.isGold && !rb.isGold) flags.push(`จำนวนหุ้นสองรอบไม่ตรงกัน (${ra.qtyStr} / ${rb.qtyStr})`); }

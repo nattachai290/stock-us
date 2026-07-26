@@ -116,9 +116,14 @@ Shares 0.1740529`;
     check(`total-misread (${a === bad ? "A" : "B"} bad): check ok, no flag`,
       m.rows[0]?.check === "ok" && !m.rows[0]?.flags.some(f => f.includes("ยอดรวม")), JSON.stringify(m.rows[0]?.flags));
   }
-  // but when BOTH passes read the bad total, the mismatch flag must stay
-  const mb = mergeParses(parseActivityText(bad), parseActivityText(bad));
-  check("total-misread (both bad): mismatch stays flagged", mb.rows[0]?.flags.some(f => f.includes("ยอดรวม")), JSON.stringify(mb.rows[0]?.flags));
+  // When BOTH passes read the bad total but agree on qty AND price, the imported values
+  // are corroborated and the odd one out is the total — which is never imported, so no flag.
+  const mb = mergeParses(parseActivityText(bad), parseActivityText(bad), { a: bad, b: bad });
+  check("total-misread (both bad, values agree): no flag", !mb.rows[0]?.flags.some(f => f.includes("ยอดรวม")), JSON.stringify(mb.rows[0]?.flags));
+  // With nothing to corroborate the values (only one pass saw the row), the flag stays.
+  const other = "ไม่มีอะไรเกี่ยวข้องเลย";
+  const mo = mergeParses(parseActivityText(bad), parseActivityText(other), { a: bad, b: other });
+  check("total-misread (uncorroborated): mismatch stays flagged", mo.rows[0]?.flags.some(f => f.includes("ยอดรวม")), JSON.stringify(mo.rows[0]?.flags));
 }
 
 {
@@ -599,9 +604,13 @@ const TRUTH_TH_SELLS = [
   "01/07/2026 15:08,S,SPHD,0.0612187,50.96", "01/07/2026 15:08,S,SPY,0.0045788,745.00",
   "01/07/2026 15:08,S,SPYD,0.0668001,47.68",
 ];
+// Buys plus a corporate action. The NFLX 1:10 split prints its two legs at DIFFERENT
+// minutes (หัก 15:41, รับ 15:47) and in reverse order on screen — they must still pair,
+// and the "-" leg must be emitted before the "+" leg for importTxCSV to record a split.
 const TRUTH_TH_CA = [
   "23/11/2025 14:40,B,ENPH,0.1143497,26.76", "19/11/2025 11:49,B,ALAB,0.0219307,139.53",
   "19/11/2025 11:48,B,MELI,0.0014788,2069.22", "17/11/2025 08:26,B,TEM,0.0450000,68.00",
+  "17/11/2025 15:41,-,NFLX,0.0027002", "17/11/2025 15:47,+,NFLX,0.0270022,0",
 ];
 // The remaining 9 Thai stock screenshots. Ground truth is every fully-visible row
 // (partial/cut-off rows at a screen edge are expected to drop). minExact is the measured
@@ -616,8 +625,14 @@ const TH_STOCK_MORE = {
   "th-stock-9.jpg": ["01/07/2026 15:07,S,VIG,0.0140287,236.09","26/06/2026 14:16,B,ASTS,0.0458687,64.75","25/06/2026 14:20,B,PRCT,0.1446601,20.60","25/06/2026 14:20,B,CVX,0.0175479,169.82","24/06/2026 18:56,B,ELV,0.0074888,396.59"],
   "th-stock-10.jpg": ["14/07/2026 21:07,B,GRBK,0.0415577,71.9480","14/07/2026 21:07,B,DHI,0.0199570,149.8220","14/07/2026 21:06,B,AMPH,0.1589411,18.8120","09/07/2026 22:34,B,SNPS,0.0068129,438.8680"],
   "th-stock-11.jpg": ["17/06/2026 21:20,B,CRM,0.0190059,160.4760","17/06/2026 21:20,B,ADBE,0.0149609,203.8640","17/06/2026 21:19,B,NOW,0.0298329,102.2360","12/06/2026 20:16,B,META,0.0052834,573.49","12/06/2026 20:15,B,AMZN,0.0124522,243.33"],
+  // Continuation of th-stock-10 scrolled further down (its SNPS row is the cut-off one at
+  // the top here, excluded). Exercises: a sell header printed as "<qty> หุ้น" (not a money
+  // total), two buys at the SAME minute with different symbols (ORCL/ARM 18:02), and CA
+  // "หัก/รับ CRWD" rows (a 1:4 split) interleaved between real transactions — both legs
+  // land on the same minute here, so the "-"-before-"+" ordering rule is what separates them.
+  "th-stock-12.jpg": ["07/07/2026 13:14,B,EOSE,0.5772200,5.18","03/07/2026 18:02,B,ORCL,0.0207157,145.30","03/07/2026 18:02,B,ARM,0.0092615,325.00","02/07/2026 15:05,-,CRWD,0.0217616","02/07/2026 15:05,+,CRWD,0.0870467,0","01/07/2026 20:21,S,HPQ,0.5745693,21.89"],
 };
-const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4 };
+const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2 };
 
 // eng+tha main passes + an eng-only rescue pass, using the exact self-hosted data
 // the browser ships (public/tesseract) — mirrors OcrImport.tsx
@@ -654,9 +669,10 @@ const CASES = [
   { name: "3-image set", imgs: ["activity-1.jpg", "activity-2.jpg", "activity-3.jpg"].map(FIX), truth: TRUTH_ALL, minExact: 10 },
   { name: "single image", imgs: [FIX("activity-4-single.jpg")], truth: TRUTH_SINGLE, minExact: 2 },
   { name: "US DCA (activity-5)", imgs: [FIX("activity-5-dca.jpg")], truth: TRUTH_DCA, minExact: 4 },
-  // Bottom IONQ row is cut off by the nav bar (header visible, Executed Price/Shares not),
-  // so it reads as a Buy with no numbers → one genuine incomplete, never a wrong row.
-  { name: "US DCA (activity-6)", imgs: [FIX("activity-6-dca.jpg")], truth: TRUTH_DCA2, minExact: 4, expIncomplete: 1 },
+  // Bottom IONQ row is cut off by the nav bar — only its header is on screen, with no
+  // price/share line, so no record is ever opened: it drops silently rather than counting
+  // as unread. What matters is that it never becomes a row.
+  { name: "US DCA (activity-6)", imgs: [FIX("activity-6-dca.jpg")], truth: TRUTH_DCA2, minExact: 4 },
   { name: "gold DCA (MTS-GOLD)", imgs: [FIX("gold-mts.jpg")], truth: TRUTH_GOLD, minExact: 5 },
   { name: "gold DCA Thai (MTS-GOLD)", imgs: [FIX("gold-mts-thai.jpg")], truth: TRUTH_GOLD_THAI, minExact: 4 },
   { name: "gold DCA Thai light theme", imgs: [FIX("gold-mts-thai-light.jpg")], truth: TRUTH_GOLD_THAI_LIGHT, minExact: 6 },
@@ -667,7 +683,7 @@ const CASES = [
   { name: "gold DCA Thai (cross-pass month recovery)", imgs: [FIX("gold-mts-thai-3.jpg")], truth: TRUTH_GOLD_THAI_3, minExact: 6 },
   { name: "gold DCA Thai (USD-total sells)", imgs: [FIX("gold-mts-thai-4.jpg")], truth: TRUTH_GOLD_THAI_4, minExact: 6 },
   { name: "Thai stock sells", imgs: [FIX("th-stock-sells.jpg")], truth: TRUTH_TH_SELLS, minExact: 6 },
-  { name: "Thai stock buys + CA-skip", imgs: [FIX("th-stock-ca.jpg")], truth: TRUTH_TH_CA, minExact: 3 },
+  { name: "Thai stock buys + CA split", imgs: [FIX("th-stock-ca.jpg")], truth: TRUTH_TH_CA, minExact: 3 },
   ...Object.entries(TH_STOCK_MORE).map(([f, truth]) => ({ name: f, imgs: [FIX(f)], truth, minExact: TH_MIN_EXACT[f] })),
 ];
 // Pass/fail is decided ONLY by the safety guarantees below — never by the exact-match
@@ -740,7 +756,7 @@ await thaWorker.terminate();
 // Aggregate regression floor (so a code change that tanks recall is caught), reported honestly
 const pct = Math.round(exactTotal / truthTotal * 100);
 console.log(`\nOCR exact recall overall: ${exactTotal}/${truthTotal} rows (${pct}%) — ผ่านสะอาด ${cleanTotal} · ติดธงให้ตรวจ ${flagOkTotal + flagWrongTotal} (ค่าถูก ${flagOkTotal}, ค่าคลาดเคลื่อน ${flagWrongTotal}) · หายไป ${missTotal} · อ่านไม่ครบ ${incTotal}`);
-check(`recall did not regress (>= 95/${truthTotal})`, exactTotal >= 95, `got ${exactTotal}`);
+check(`recall did not regress (>= 118/${truthTotal})`, exactTotal >= 118, `got ${exactTotal}`);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

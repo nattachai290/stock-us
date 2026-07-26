@@ -202,7 +202,7 @@ export default function HistoryTab({
           <div style={{fontSize:13,fontWeight:600,color:"var(--brass)",marginBottom:6}}>Import ประวัติ ซื้อ/ขาย</div>
           <div style={{fontSize:12,color:"var(--mut)",marginBottom:8}}>Format: <code style={{color:"var(--brass)"}}>DD/MM/YYYY HH:MM,Side(B/S),Symbol,จำนวน,ราคา</code> — เวลาใส่หรือไม่ใส่ก็ได้</div>
           <ImportEditor value={txImportText} onChange={setTxImportText} flagged={flaggedLines}
-            placeholder={"01/11/2025 21:21,B,ACLS,0.1499694,81.95\n18/06/2026 07:20,S,ACLS,0.0445361,184.12\n02/07/2026 15:03,SPLIT,CRWD,4\n02/07/2026 15:03,+,CRWD,0.5311213,0\n02/07/2026 15:03,-,CRWD,0.1327803"}/>
+            placeholder={"01/11/2025 21:21,B,ACLS,0.1499694,81.95\n18/06/2026 07:20,S,ACLS,0.0445361,184.12\n02/07/2026 15:03,SPLIT,CRWD,4\n02/07/2026 15:03,-,CRWD,0.1327803\n02/07/2026 15:03,+,CRWD,0.5311213,0"}/>
           <div style={{display:"flex",gap:8,marginTop:8}}>
             <button onClick={importTxCSV} disabled={!txImportText.trim()} style={btn("var(--brass)","var(--on-brass)",{opacity:!txImportText.trim()?0.5:1})}>นำเข้า</button>
             <button onClick={()=>{setShowTxImport(false);setTxImportText("");setFlaggedLines(new Map());}} style={btn("var(--line)","var(--mut)")}>ยกเลิก</button>
