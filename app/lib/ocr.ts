@@ -361,6 +361,12 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       for (const tm of line.matchAll(/\b([A-Z]{1,6})\b/g)) {
         if (!NOT_TICKERS.has(tm[1])) { ticker = tm[1]; break; }
       }
+      // The one-letter ticker "O" has no letter shape to survive Thai OCR — both passes
+      // render it as a zero glyph (Thai ๐ / Latin 0), leaving the header with no ticker at
+      // all. Adopt it only when the portfolio actually holds O, and record what was read so
+      // the row is flagged like every other whitelist fix.
+      let zeroTicker = false;
+      if (!ticker && knownSet.has("O") && /(?:^|\s)[๐0](?=\s)/.test(line)) { ticker = "O"; zeroTicker = true; }
       const sellWord = compact.includes("ขาย") || compact.includes("ยาย") || compact.includes("บาย");
       const buyWord = compact.includes("ซื้อ") || compact.includes("ือ");
       // Share-count + หุ้น unit with an unreadable ticker ("ยาย เง 0.0045730 หุ้น") —
@@ -395,6 +401,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
         // pinned to the share count, unlike `ticker` which is just the line's first
         // uppercase run and can pick up a Thai word OCR'd into caps ("รับ" → "SU NFLX …").
         cur = { side, symbol: gold ? "MTS-GOLD" : (sellM?.[1] ?? ticker)?.toUpperCase(), isGold: gold, sideUncertain: uncertain, sideFromTotal: fromTotal };
+        if (zeroTicker && !sellM) cur.symbolCorrected = "๐";
         const qtyTok = sellM ? sellM[2] : qtyUnit?.[1];
         if (qtyTok && !bahtTotal) {
           const f = qtyFix(qtyTok, 7); const v = parseFloat(f);
