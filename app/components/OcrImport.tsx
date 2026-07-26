@@ -129,18 +129,25 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
           setProgress(`กำลังอ่านรูปที่ ${Math.min(slow + 1, N)}/${N}`);
           setPct(Math.round(((done[0] + done[1]) / (2 * N)) * 100));
         };
-        const runLang = async (lang: string, k: number) => {
+        const runLang = async (lang: string, k: number, scales: number[]) => {
           const w = await mkWorker(lang);
-          let text = "";
+          const out: Record<number, string> = {};
           for (let i = 0; i < N; i++) {
-            const { data } = await w.recognize(await preprocess(list[i], 2));
-            text += data.text + "\n"; bump(k);
+            for (const sc of scales) {
+              const { data } = await w.recognize(await preprocess(list[i], sc));
+              out[sc] = (out[sc] ?? "") + data.text + "\n";
+            }
+            bump(k);
           }
           await w.terminate();
-          return text;
+          return out;
         };
-        const [engText, thaText] = await Promise.all([runLang("eng", 0), runLang("tha", 1)]);
-        hints = extractTickerHints(engText);
+        // eng at BOTH scales: some tickers only survive at one of them — "O" is read at 3x
+        // and lost at 2x, while 2x catches names 3x misses. 2x takes precedence and 3x only
+        // fills gaps, so adding it can never cost a hint the old single-scale pass had.
+        const [engOut, thaOut] = await Promise.all([runLang("eng", 0, [2, 3]), runLang("tha", 1, [2])]);
+        const engText = engOut[2] + engOut[3], thaText = thaOut[2];
+        hints = { ...extractTickerHints(engOut[3], knownSymbols), ...extractTickerHints(engOut[2], knownSymbols) };
         monthHints = extractMonthHints(thaText);
         merged = parseMain(hints, monthHints, [engText, thaText]);
       }

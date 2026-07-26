@@ -768,11 +768,13 @@ for (const c of CASES) {
     mergeParses(parseActivityText(textA, h, known, mh), parseActivityText(textB, h, known, mh), { a: textA, b: textB, extra });
   let m = parseMain();
   if (m.incomplete > 0 || m.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน") || f.includes("เห็นในรอบ OCR เดียว")))) {
-    const engText = await ocrText(engWorker, c.imgs, 2);
+    // MIRROR the app: eng at both scales, 2x taking precedence and 3x filling gaps only.
+    const eng2 = await ocrText(engWorker, c.imgs, 2);
+    const eng3 = await ocrText(engWorker, c.imgs, 3);
     const thaText = await ocrText(thaWorker, c.imgs, 2);
-    const hints = extractTickerHints(engText);
+    const hints = { ...extractTickerHints(eng3, known), ...extractTickerHints(eng2, known) };
     const monthHints = extractMonthHints(thaText);
-    m = parseMain(hints, monthHints, [engText, thaText]);
+    m = parseMain(hints, monthHints, [eng2 + eng3, thaText]);
   }
   const exact = c.truth.filter(t => m.rows.some(r => r.csv === t)).length;
   const silent = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length === 0);

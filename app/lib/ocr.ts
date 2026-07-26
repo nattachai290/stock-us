@@ -164,7 +164,13 @@ const editDist1 = (a: string, b: string): boolean => {
 // Extract (share-count → ticker) pairs from the eng-only text: the broker prints
 // share counts with 7 decimals, so the count uniquely identifies its row and lets
 // the main parse adopt the eng reading for blocks whose ticker it couldn't read.
-export function extractTickerHints(text: string): Record<string, string> {
+export function extractTickerHints(text: string, known?: string[]): Record<string, string> {
+  // One-letter tickers (O, V) are normally excluded: mangled Thai sheds stray capitals,
+  // and a single letter is indistinguishable from that noise. They are accepted only when
+  // the portfolio actually holds that symbol, which is the same whitelist gate the rest of
+  // the ticker recovery uses. Without this, "O" — which ONLY the eng pass reads, and only
+  // at 3x, since eng+tha renders it as the Thai zero ๐ — can never come through.
+  const single = new Set((known ?? []).filter(k => k.length === 1).map(k => k.toUpperCase()));
   const hints: Record<string, string> = {};
   const clash = new Set<string>();
   const add = (q: string, t: string) => {
@@ -182,7 +188,14 @@ export function extractTickerHints(text: string): Record<string, string> {
     // the mangled Thai label can shed uppercase junk that must not be taken as a ticker.
     const dateLine = /[-–—]\s*\d{1,2}[:.]\d{2}/.test(line);
     let ticker: string | null = null;
-    if (!dateLine) for (const m of line.matchAll(/\b([A-Z]{2,6})\b/g)) if (!NOT_TICKERS.has(m[1])) { ticker = m[1]; break; }
+    if (!dateLine) {
+      const pat = single.size ? /\b([A-Z]{1,6}(?:[.\-][A-Z]{1,2})?)\b/g : /\b([A-Z]{2,6}(?:[.\-][A-Z]{1,2})?)\b/g;
+      for (const m of line.matchAll(pat)) {
+        if (NOT_TICKERS.has(m[1])) continue;
+        if (m[1].length === 1 && !single.has(m[1])) continue;   // stray capital, not a held ticker
+        ticker = m[1]; break;
+      }
+    }
     const q = qty7(line);
     if (ticker && q) { add(q[1], ticker); pending = null; continue; }        // sell header: ticker + count
     if (ticker && /\d+\.\d{2}(?!\d)/.test(line)) { pending = ticker; ttl = 3; continue; } // buy header: ticker + total
