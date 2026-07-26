@@ -28,7 +28,7 @@ const preSrc = execSync("npx esbuild app/lib/preprocess.ts --format=esm", { cwd:
 const { grayscaleInvert, resizeBilinear } = await import("data:text/javascript;base64," + Buffer.from(preSrc).toString("base64"));
 // --bundle inlines jpeg-js so this is byte-for-byte the decoder the browser bundle runs
 const decSrc = execSync("npx esbuild app/lib/decode.ts --format=esm --bundle", { cwd: ROOT }).toString();
-const { decodeJpeg } = await import("data:text/javascript;base64," + Buffer.from(decSrc).toString("base64"));
+const { decodeImage } = await import("data:text/javascript;base64," + Buffer.from(decSrc).toString("base64"));
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = "") => {
@@ -684,7 +684,7 @@ async function ocrText(w, imgs, scale) {
     // DECODE and preprocessing are both the shared browser code now (lib/decode +
     // lib/preprocess), so app and CI hand tesseract identical pixels for the same file.
     // jimp is left only to encode the result as PNG, which is lossless.
-    const { data: view, width, height } = decodeJpeg(new Uint8Array(fs.readFileSync(p)));
+    const { data: view, width, height } = decodeImage(new Uint8Array(fs.readFileSync(p)));
     grayscaleInvert(view);
     const r = resizeBilinear(view, width, height, scale);
     const out = new Jimp({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height });

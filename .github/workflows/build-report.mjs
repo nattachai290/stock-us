@@ -9,6 +9,7 @@ const CHECKS = [
   { key: "gold", label: "Gold-price tests", cmd: "npm run test:gold" },
   { key: "invest", label: "Invested-series tests", cmd: "npm run test:invested" },
   { key: "ocr", label: "OCR pipeline tests", cmd: "npm run test:ocr" },
+  { key: "parity", label: "Browser/CI pixel parity", cmd: "npm run test:parity" },
 ];
 
 const read = (f) => { try { return fs.readFileSync(f, "utf8"); } catch { return ""; } };

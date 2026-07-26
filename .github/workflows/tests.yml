@@ -33,6 +33,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The parity check drives a real browser to prove it hands tesseract the same
+      # pixels CI does — without it, the OCR suite can pass on files the app misreads.
+      - name: Install Chromium (for the parity check)
+        run: npx playwright-core install --with-deps chromium
+
       # Each check runs regardless of earlier failures so the comment reports
       # the full picture in one pass. Output is teed to a log file; the exit
       # code is remembered per check and the job fails at the end if any failed.
@@ -58,6 +63,7 @@ jobs:
           run gold    "Gold-price tests (test:gold)"   npm run test:gold
           run invest  "Invested-series tests (test:invested)" npm run test:invested
           run ocr     "OCR pipeline tests (test:ocr)"  npm run test:ocr
+          run parity  "Browser/CI pixel parity (test:parity)" npm run test:parity
 
           echo "overall=$overall" >> "$GITHUB_OUTPUT"
           exit 0

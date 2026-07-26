@@ -2,7 +2,7 @@
 import { useRef, useState } from "react";
 import { parseActivityText, mergeParses, extractTickerHints, extractMonthHints, rowAppearsIn, type MergeResult } from "../lib/ocr";
 import { grayscaleInvert, resizeBilinear } from "../lib/preprocess";
-import { decodeJpeg, isJpeg } from "../lib/decode";
+import { decodeImage } from "../lib/decode";
 import { btnGhost, btnPrimary } from "../lib/ui";
 
 // Upload broker-app Activity screenshots → OCR (tesseract.js, fully client-side,
@@ -47,16 +47,14 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
   // Decode → grayscale+invert at native size (white-on-dark → black-on-white) → a
   // DETERMINISTIC bilinear upscale. Every step is the shared code the test harness runs
   // (lib/decode + lib/preprocess), so the same file yields the same pixels here, in CI,
-  // and across browser engines. JPEG goes through jpeg-js rather than the browser's own
-  // decoder, which disagrees with Jimp's on ~6% of bytes — enough to change which rows
-  // OCR reads. Other formats fall back to the browser decoder (results may then vary by
-  // engine); broker screenshots are JPEG. Canvas is used only to encode the PNG.
+  // and across browser engines — the platform's own JPEG decoder disagrees with Jimp's on
+  // ~6% of bytes, enough to change which rows OCR reads. JPEG and PNG (the two formats the
+  // picker accepts) both decode through the shared path; anything else, or a PNG variant
+  // the decoder refuses, falls back to the browser decoder. Canvas only encodes the PNG.
   const preprocess = async (file: File, scale: number): Promise<Blob> => {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    let src: { data: Uint8ClampedArray; width: number; height: number };
-    if (isJpeg(bytes)) {
-      src = decodeJpeg(bytes);
-    } else {
+    let src = decodeImage(bytes) as { data: Uint8ClampedArray; width: number; height: number } | null;
+    if (!src) {
       const bmp = await createImageBitmap(new Blob([bytes]));
       const c1 = document.createElement("canvas");
       c1.width = bmp.width; c1.height = bmp.height;
@@ -181,7 +179,7 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
 
   return (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
-      <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }}
+      <input ref={fileRef} type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png" multiple style={{ display: "none" }}
         onChange={e => e.target.files && run(e.target.files)} />
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <button onClick={() => fileRef.current?.click()} disabled={busy} style={{ ...btnGhost({ fontSize: 12, opacity: busy ? 0.6 : 1 }) }}>
