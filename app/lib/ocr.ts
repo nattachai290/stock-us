@@ -310,7 +310,10 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
         // A rescued name NOT in the portfolio keeps the review flag.
         cur.symbolFromHint = !knownSet.has(hint);
       }
-      else if (hint && valid && hint !== cur.symbol) cur.symbolHintMismatch = hint;
+      // Compare NAMES, not spellings: the broker prints class shares with a dot and we
+      // store them with a dash, so an eng pass reading "BRK.B" against a stored "BRK-B"
+      // was reported as a disagreement about a symbol both passes had read correctly.
+      else if (hint && valid && normTicker(hint) !== cur.symbol) cur.symbolHintMismatch = hint;
     }
     // Last resort for the one-letter ticker "O": it has no letter shape to survive Thai
     // OCR (both passes render it as a zero glyph), so nothing above can have read it.
@@ -724,7 +727,23 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
           const bOk = decimalsOf(rb.qtyStr) === SHARE_DP;
           if (aOk && !bOk) best = ra;
           else if (bOk && !aOk) best = rb;
-          else { best = aOk ? ra : rb; if (!ra.isGold && !rb.isGold) flags.push(`จำนวนหุ้นสองรอบไม่ตรงกัน (${ra.qtyStr} / ${rb.qtyStr})`); }
+          else {
+            // Both readings have the expected decimals, so decimal count can't choose. The
+            // batch FX rate can: a share count is only right if total/(price×qty) lands on
+            // the rate the rest of the screenshot implies (HPQ 0.1480446 → 31.4, the
+            // 0.4480446 misread → 10.4). Same evidence and same strict thresholds as the
+            // price tiebreak, so it only fires when one reading is plainly impossible.
+            const bahtQ = [ra, rb].find(r => r.currency === "THB" && r.total)?.total;
+            let qtyPick: OcrTxRow | null = null;
+            if (medianFx && bahtQ && ra.price > 0) {
+              const off = (q: number) => q > 0 ? Math.abs(bahtQ / (ra.price * q) - medianFx) / medianFx : Infinity;
+              const oa = off(ra.qty), ob = off(rb.qty);
+              if (oa <= 0.15 && ob > 0.5) qtyPick = ra;
+              else if (ob <= 0.15 && oa > 0.5) qtyPick = rb;
+            }
+            if (qtyPick) best = qtyPick;
+            else { best = aOk ? ra : rb; if (!ra.isGold && !rb.isGold) flags.push(`จำนวนหุ้นสองรอบไม่ตรงกัน (${ra.qtyStr} / ${rb.qtyStr})`); }
+          }
         }
         if (ra.priceStr !== rb.priceStr) {
           // Arithmetic cross-tiebreak: a USD total from EITHER pass settles which price
