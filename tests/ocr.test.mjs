@@ -767,7 +767,7 @@ for (const c of CASES) {
   const parseMain = (h, mh, extra) =>
     mergeParses(parseActivityText(textA, h, known, mh), parseActivityText(textB, h, known, mh), { a: textA, b: textB, extra });
   let m = parseMain();
-  if (m.incomplete > 0 || m.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน") || f.includes("เห็นในรอบ OCR เดียว")))) {
+  if (m.incomplete > 0 || m.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน") || f.includes("เห็นในรอบ OCR เดียว") || f.includes("ตามหุ้นในพอร์ต")))) {
     // MIRROR the app: eng at both scales, 2x taking precedence and 3x filling gaps only.
     const eng2 = await ocrText(engWorker, c.imgs, 2);
     const eng3 = await ocrText(engWorker, c.imgs, 3);

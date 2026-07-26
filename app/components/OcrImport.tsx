@@ -114,8 +114,13 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       // (incomplete), an inferred month, OR a row only one main pass saw — the specialists'
       // raw text is a third/fourth reader that can corroborate a single-round row and clear
       // its "เห็นในรอบ OCR เดียว" flag.
+      // a symbol recovered from the portfolio whitelist ("ตามหุ้นในพอร์ต") is a GUESS from
+      // glyph shape — the eng pass often reads that same header properly, so it must trigger
+      // the specialists too. Without it the ๐→O fallback masked its own fix: it produced a
+      // complete-looking flagged row, so nothing was unread and no trigger flag was present,
+      // and the eng pass that reads "CRWD" on that line never ran.
       const needsSpecialists = merged.incomplete > 0
-        || merged.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน") || f.includes("เห็นในรอบ OCR เดียว")));
+        || merged.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน") || f.includes("เห็นในรอบ OCR เดียว") || f.includes("ตามหุ้นในพอร์ต")));
       if (needsSpecialists) {
         // eng-only reads Latin tickers the Thai model mangles (keyed by share count);
         // tha-only reads Thai month abbreviations eng+tha renders as Latin (keyed by day+time).
