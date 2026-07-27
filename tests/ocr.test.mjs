@@ -324,7 +324,9 @@ Weight 0.0029 oz
 {
   // Month-anchor inference: a row whose month is unreadable ("A.A.") is filled from
   // its neighbours ONLY when the nearest readable month before and after agree — the
-  // broker's strict chronological order makes a same-month bracket safe. Filled → flagged.
+  // broker's strict chronological order makes a same-month bracket safe. A bracket this
+  // tight (the rows directly above and below) leaves no other month possible, so the row
+  // is filled WITHOUT a flag — see the distant-anchor case below, which still flags.
   const bracketed = `ซื้อ MTS-GOLD 100.00 บาท
 ราคาที่ได้จริง 4000.00 30 ต.ค. 68 - 10:00:00 น.
 น้ำหนัก 0.0100 oz
@@ -337,8 +339,17 @@ Weight 0.0029 oz
   const m = mergeParses(parseActivityText(bracketed), parseActivityText(bracketed), { a: bracketed, b: bracketed });
   const r = m.rows.find(x => x.csv.includes("08:00"));
   check("month-anchor: same-month bracket fills the month", r?.csv === "27/10/2025 08:00,S,XAUUSD,0.0060,4076.61", r?.csv);
-  check("month-anchor: inferred month is flagged", r?.flags.some(f => f.includes("เดาเป็นเดือน")), JSON.stringify(r?.flags));
-  check("month-anchor: flag records what OCR read", r?.flags.some(f => f.includes('อ่านเดือนได้ "A.A."')), JSON.stringify(r?.flags));
+  check("month-anchor: an adjacent bracket needs no flag", !r?.flags.length, JSON.stringify(r?.flags));
+  // Push the anchors away with unrelated lines: the rows in between could have crossed a
+  // month boundary unseen, so the fill becomes a guess again and must say what it read.
+  const filler = Array.from({ length: 10 }, (_, i) => `รายการอื่น ${i}`).join("\n");
+  const far = bracketed.split("\n").slice(0, 3).join("\n") + "\n" + filler + "\n"
+            + bracketed.split("\n").slice(3, 6).join("\n") + "\n" + filler + "\n"
+            + bracketed.split("\n").slice(6).join("\n");
+  const mf = mergeParses(parseActivityText(far), parseActivityText(far), { a: far, b: far });
+  const rf = mf.rows.find(x => x.csv.includes("08:00"));
+  check("month-anchor: a distant bracket is still flagged", rf?.flags.some(f => f.includes("เดาเป็นเดือน")), JSON.stringify(rf?.flags));
+  check("month-anchor: that flag records what OCR read", rf?.flags.some(f => f.includes('อ่านเดือนได้ "A.A."')), JSON.stringify(rf?.flags));
   check("month-anchor: all 3 rows present", m.rows.length === 3 && m.incomplete === 0, `rows=${m.rows.length} inc=${m.incomplete}`);
 
   // A month boundary between the neighbours (Oct above, Nov below) is NOT safe → drop.

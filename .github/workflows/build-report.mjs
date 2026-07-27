@@ -45,8 +45,16 @@ const ocrReview = (log) => {
 };
 const codeBlock = (lines) => ["```", ...lines, "```"];
 
+// The assertions a failing check actually reported. Without these the comment could say
+// "failed (exit 1) — 203 passed, 2 failed" and show nothing else: the row-level review
+// section only covers OCR rows, so a failing UNIT test left no visible trace at all and
+// you had to expand the log to find out what broke.
+const failedAssertions = (log) =>
+  log.split("\n").map(l => l.trim()).filter(l => l.startsWith("✗ FAIL")).slice(0, 20);
+
 let anyFail = false, anyMissing = false;
 const rows = [];
+const failures = [];
 const details = [];
 let review = [];
 
@@ -59,6 +67,11 @@ for (const c of CHECKS) {
   else { icon = "❌"; status = `failed (exit ${code})`; anyFail = true; }
   const extra = summarize(log);
   rows.push(`| ${icon} ${c.label} | \`${c.cmd}\` | ${status}${extra ? ` — ${extra}` : ""} |`);
+  if (code !== null && code !== 0) {
+    const bad = failedAssertions(log);
+    failures.push(`**❌ ${c.label}**`, ...(bad.length ? codeBlock(bad)
+      : ["_ไม่พบบรรทัด `✗ FAIL` — ดู log ด้านล่าง_"]), "");
+  }
   if (c.key === "ocr") review = ocrReview(log);
   if (log.trim()) {
     // The OCR log is long (unit tests + per-fixture detail); keep more of its tail so
@@ -96,6 +109,7 @@ const body = [
   "| --- | --- | --- |",
   ...rows,
   "",
+  ...(failures.length ? ["#### ❌ ที่ไม่ผ่าน", "", ...failures] : []),
   ...reviewBlock,
   "",
   ...details,
