@@ -47,6 +47,14 @@ const applyPriceCache = (list: any[]): any[] => {
 };
 
 
+// Share counts arrive with 7 decimals, so each one carries up to 5e-8 of rounding and a
+// position built from several buys drifts further. Selling a position out therefore lands a
+// few 1e-7 above the sum of its buys — a real HPQ position summed to 0.5745690 against a
+// 0.5745693 sell. The old 1e-9 guard was 100x tighter than the data's own precision and
+// rejected those as "not enough shares"; 1e-6 absorbs the rounding while staying far below
+// any economically meaningful shortfall.
+const QTY_EPS = 1e-6;
+
 export default function App() {
   const [token, setToken] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -576,7 +584,7 @@ export default function App() {
       if (h) {
         const withoutThis = { ...h, realizedHistory: (h.realizedHistory||[]).filter((_:any,i:number)=>i!==index) };
         const avail = computeFromHistory(withoutThis).shares;
-        if (q > avail + 1e-9) { alert(`จำนวนไม่พอขาย: มีแค่ ${avail.toFixed(7)} หุ้น (ใส่ ${q.toFixed(7)})`); return; }
+        if (q > avail + QTY_EPS) { alert(`จำนวนไม่พอขาย: มีแค่ ${avail.toFixed(7)} หุ้น (ใส่ ${q.toFixed(7)})`); return; }
       }
     }
 
@@ -740,7 +748,7 @@ export default function App() {
         if (idx<0) { skipCount++; continue; }
         if (isDupSell(updatedHoldings[idx], iso, qty)) { dupCount++; continue; }
         const eff = computeFromHistory(updatedHoldings[idx]);
-        if (qty > eff.shares + 1e-9) { insufficientCount++; continue; } // จำนวนไม่พอขาย
+        if (qty > eff.shares + QTY_EPS) { insufficientCount++; continue; } // จำนวนไม่พอขาย
         const avgCostAtSale = fifoBasisForSale(updatedHoldings[idx], qty); // FIFO basis of sold lots
         const grossGain = (price-avgCostAtSale)*qty;
         const proceeds = qty*price;
@@ -758,7 +766,7 @@ export default function App() {
           if (idx<0) { skipCount++; continue; }
           if (isDupSell(updatedHoldings[idx], iso, qty)) { dupCount++; continue; }
           const eff = computeFromHistory(updatedHoldings[idx]);
-          if (qty > eff.shares + 1e-9) { insufficientCount++; continue; } // จำนวนไม่พอขาย
+          if (qty > eff.shares + QTY_EPS) { insufficientCount++; continue; } // จำนวนไม่พอขาย
           const avgCostAtSale = fifoBasisForSale(updatedHoldings[idx], qty); // transfer-out at FIFO basis → zero P&L
           const sellEntry = { date:iso, qty, sellPrice:avgCostAtSale, avgCostAtSale, proceeds:qty*avgCostAtSale, grossGain:0, fees:0, feeDetail:{commission:0,vat:0,secFee:0,tafFee:0,catFee:0}, gain:0, gainPct:0 };
           updatedHoldings[idx] = { ...updatedHoldings[idx], realizedHistory:[...(updatedHoldings[idx].realizedHistory||[]),sellEntry] };
