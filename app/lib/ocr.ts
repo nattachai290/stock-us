@@ -22,6 +22,7 @@ export type OcrTxRow = {
   sideFromTotal?: boolean; // side B inferred from a Thai total-style header (internal)
   monthInferred?: boolean; // month was filled from same-month neighbours, not read — flag
   monthReadAs?: string;    // what OCR actually rendered the month token as ("A.A.")
+  monthBracketed?: boolean;// inferred month proven by the anchors immediately either side
 };
 
 export type OcrParseResult = { rows: OcrTxRow[]; incomplete: number };
@@ -126,6 +127,14 @@ const qtyFix = (s: string, dp: number) => {
   for (const v of variants) if ((v.split(".")[1] || "").length === dp) return v;
   return variants[0];
 };
+// Ticker shapes: a plain symbol (NVDA) or a class share, which the broker prints with a
+// dot (BRK.B) while the portfolio and importer store it with a dash (BRK-B). Matching only
+// [A-Z]{1,6} truncated "BRK.B" to "BRK" — a valid-LOOKING symbol, so it was emitted with no
+// flag at all. SCAN_TICKER finds one in a line; TICKER_OK validates an already-picked one.
+const SCAN_TICKER = /\b([A-Z]{1,6}(?:[.\-][A-Z]{1,2})?)\b/g;
+const TICKER_OK = /^[A-Z]{1,6}(-[A-Z]{1,2})?$/;
+const normTicker = (t: string) => t.toUpperCase().replace(/\./g, "-");
+
 // Currency/marker words that match the ticker shape but are never tickers
 const NOT_TICKERS = new Set(["USD", "THB", "DCA", "CA", "GOLD", "OZ", "AM", "PM"]);
 
@@ -156,7 +165,29 @@ const editDist1 = (a: string, b: string): boolean => {
 // Extract (share-count → ticker) pairs from the eng-only text: the broker prints
 // share counts with 7 decimals, so the count uniquely identifies its row and lets
 // the main parse adopt the eng reading for blocks whose ticker it couldn't read.
-export function extractTickerHints(text: string): Record<string, string> {
+// Merge ticker hints read at different upscales. Neither scale dominates — 2x reads names
+// 3x loses and vice versa ("IPR" at 2x vs the correct "IIPR" at 3x) — so a fixed precedence
+// picks wrong half the time. Arbitrate on the portfolio instead: a name the user actually
+// holds beats one they don't, and only when neither (or both) are held does 2x win.
+export function mergeTickerHints(
+  primary: Record<string, string>, secondary: Record<string, string>, known?: string[],
+): Record<string, string> {
+  const held = new Set((known ?? []).map(k => k.toUpperCase()));
+  const out = { ...secondary, ...primary };
+  for (const k of Object.keys(out)) {
+    const p = primary[k], s = secondary[k];
+    if (p && s && p !== s && held.size && !held.has(p) && held.has(s)) out[k] = s;
+  }
+  return out;
+}
+
+export function extractTickerHints(text: string, known?: string[]): Record<string, string> {
+  // One-letter tickers (O, V) are normally excluded: mangled Thai sheds stray capitals,
+  // and a single letter is indistinguishable from that noise. They are accepted only when
+  // the portfolio actually holds that symbol, which is the same whitelist gate the rest of
+  // the ticker recovery uses. Without this, "O" — which ONLY the eng pass reads, and only
+  // at 3x, since eng+tha renders it as the Thai zero ๐ — can never come through.
+  const single = new Set((known ?? []).filter(k => k.length === 1).map(k => k.toUpperCase()));
   const hints: Record<string, string> = {};
   const clash = new Set<string>();
   const add = (q: string, t: string) => {
@@ -174,7 +205,14 @@ export function extractTickerHints(text: string): Record<string, string> {
     // the mangled Thai label can shed uppercase junk that must not be taken as a ticker.
     const dateLine = /[-–—]\s*\d{1,2}[:.]\d{2}/.test(line);
     let ticker: string | null = null;
-    if (!dateLine) for (const m of line.matchAll(/\b([A-Z]{2,6})\b/g)) if (!NOT_TICKERS.has(m[1])) { ticker = m[1]; break; }
+    if (!dateLine) {
+      const pat = single.size ? /\b([A-Z]{1,6}(?:[.\-][A-Z]{1,2})?)\b/g : /\b([A-Z]{2,6}(?:[.\-][A-Z]{1,2})?)\b/g;
+      for (const m of line.matchAll(pat)) {
+        if (NOT_TICKERS.has(m[1])) continue;
+        if (m[1].length === 1 && !single.has(m[1])) continue;   // stray capital, not a held ticker
+        ticker = m[1]; break;
+      }
+    }
     const q = qty7(line);
     if (ticker && q) { add(q[1], ticker); pending = null; continue; }        // sell header: ticker + count
     if (ticker && /\d+\.\d{2}(?!\d)/.test(line)) { pending = ticker; ttl = 3; continue; } // buy header: ticker + total
@@ -256,7 +294,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       total: c.total, currency: c.currency, check, isGold: c.isGold,
       sideUncertain: c.sideUncertain, symbolFromHint: c.symbolFromHint,
       symbolHintMismatch: c.symbolHintMismatch, symbolCorrected: c.symbolCorrected,
-      monthInferred: c.monthInferred, monthReadAs: c.monthReadAs,
+      monthInferred: c.monthInferred, monthReadAs: c.monthReadAs, monthBracketed: c.monthBracketed,
     });
   };
 
@@ -267,7 +305,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     if (cur.isCA) {
       const q = cur.caOutStr ?? cur.qtyStr;
       const sym = cur.symbol;
-      if (q && sym && /^[A-Z]{1,6}$/.test(sym) && !NOT_TICKERS.has(sym) && cur.iso)
+      if (q && sym && TICKER_OK.test(sym) && !NOT_TICKERS.has(sym) && cur.iso)
         caLegs.push({ symbol: sym, iso: cur.iso, qtyStr: q, dir: cur.caOutStr ? "out" : "in" });
       cur = null; return;
     }
@@ -281,7 +319,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     // shed uppercase junk — but a disagreement is surfaced as a review flag.
     if (!cur.isGold && cur.qtyStr && hints) {
       const hint = hints[cur.qtyStr];
-      const valid = cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol);
+      const valid = cur.symbol && TICKER_OK.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol);
       if (hint && !valid) {
         cur.symbol = hint;
         // A rescued name the user actually holds has two independent confirmations
@@ -289,26 +327,34 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
         // A rescued name NOT in the portfolio keeps the review flag.
         cur.symbolFromHint = !knownSet.has(hint);
       }
-      else if (hint && valid && hint !== cur.symbol) cur.symbolHintMismatch = hint;
+      // Compare NAMES, not spellings: the broker prints class shares with a dot and we
+      // store them with a dash, so an eng pass reading "BRK.B" against a stored "BRK-B"
+      // was reported as a disagreement about a symbol both passes had read correctly.
+      else if (hint && valid && normTicker(hint) !== cur.symbol) cur.symbolHintMismatch = hint;
     }
     // Last resort for the one-letter ticker "O": it has no letter shape to survive Thai
     // OCR (both passes render it as a zero glyph), so nothing above can have read it.
     // Only adopt it when no pass produced a ticker AND the portfolio holds O — a name any
     // pass actually read always wins, and the row is flagged as a whitelist fix.
     if (!cur.isGold && cur.zeroTicker && knownSet.has("O")) {
-      const valid = cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol);
+      const valid = cur.symbol && TICKER_OK.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol);
       if (!valid) { cur.symbol = "O"; cur.symbolCorrected = "๐"; }
     }
     // Portfolio-whitelist fix: a read ticker the user doesn't hold, one edit away from
     // exactly ONE symbol they do hold, is almost certainly that symbol (OCR merged or
     // swapped a glyph). Ambiguity (2+ candidates) leaves the reading alone; the fix is
     // always flagged for review in mergeParses — never silent.
+    // A held symbol is the read one plus a class suffix ("BRK" → "BRK-B"): the eng rescue
+    // pass reads the base letters but loses the ".B", and one pass reading BRK while the
+    // other reads BRK-B splits ONE transaction into two rows. Treated like the edit-1 fix.
+    const classOf = (read: string, held: string) =>
+      held.startsWith(read + "-") && /^[A-Z]{1,2}$/.test(held.slice(read.length + 1));
     if (!cur.isGold && cur.symbol && knownSet.size && !knownSet.has(cur.symbol)) {
-      const cands = [...knownSet].filter(k => editDist1(cur!.symbol!, k));
+      const cands = [...knownSet].filter(k => editDist1(cur!.symbol!, k) || classOf(cur!.symbol!, k));
       if (cands.length === 1) { cur.symbolCorrected = cur.symbol; cur.symbol = cands[0]; }
     }
     // A ticker that OCR mangled must not be emitted with a wrong symbol
-    const cleanSym = cur.isGold || (cur.symbol && /^[A-Z]{1,6}$/.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol));
+    const cleanSym = cur.isGold || (cur.symbol && TICKER_OK.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol));
     const complete = cur.side && cleanSym && cur.qty && cur.price;
     if (complete && cur.iso) {
       emitRow(cur);
@@ -361,12 +407,12 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       const goldHdr = line.match(/\b([A-Z]{2,}-?GOLD)\b/i);
       const anyTotal  = /[\d,OolI|]+\.\d{2}\s*(?:บ|USD|THB)/i.test(line); // a spent/received total → header
       const bahtTotal = /[\d,OolI|]+\.\d{2}\s*(?:บ|THB)/i.test(line);     // baht spent = a BUY, unambiguously
-      let sellM = line.match(/\b([A-Z]{1,6})\b\s+(-?[\d.OolI|\]]{6,})\s*(?:ห|Ku|Au|Kn)/); // "ticker qty หุ้น" (sell)
+      let sellM = line.match(/\b([A-Z]{1,6}(?:[.\-][A-Z]{1,2})?)\b\s+(-?[\d.OolI|\]]{6,})\s*(?:ห|Ku|Au|Kn)/); // "ticker qty หุ้น" (sell)
       if (sellM && NOT_TICKERS.has(sellM[1])) sellM = null;
       // uppercase-only — a Thai-mangled ticker won't match; skip currency/marker words
       // so "ซื้อ <mangled> 1.60 USD" can't emit USD as the symbol
       let ticker: string | null = null;
-      for (const tm of line.matchAll(/\b([A-Z]{1,6})\b/g)) {
+      for (const tm of line.matchAll(SCAN_TICKER)) {
         if (!NOT_TICKERS.has(tm[1])) { ticker = tm[1]; break; }
       }
       // The one-letter ticker "O" has no letter shape to survive Thai OCR — both passes
@@ -407,7 +453,8 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
         // When the "<ticker> <qty> หุ้น" shape matched, its capture is the ticker: it is
         // pinned to the share count, unlike `ticker` which is just the line's first
         // uppercase run and can pick up a Thai word OCR'd into caps ("รับ" → "SU NFLX …").
-        cur = { side, symbol: gold ? "MTS-GOLD" : (sellM?.[1] ?? ticker)?.toUpperCase(), isGold: gold, sideUncertain: uncertain, sideFromTotal: fromTotal };
+        const picked = sellM?.[1] ?? ticker;
+        cur = { side, symbol: gold ? "MTS-GOLD" : (picked ? normTicker(picked) : undefined), isGold: gold, sideUncertain: uncertain, sideFromTotal: fromTotal };
         if (zeroTicker && !sellM) cur.zeroTicker = true;
         const qtyTok = sellM ? sellM[2] : qtyUnit?.[1];
         if (qtyTok && !bahtTotal) {
@@ -525,6 +572,12 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     if (before && after && before.mon === after.mon && before.year === after.year) {
       p.iso = `${before.year}-${before.mon}-${p.pendDay!.padStart(2, "0")}T${p.pendHH!.padStart(2, "0")}:${p.pendMM}:00`;
       p.monthInferred = true;
+      // A block is ~3 lines, so anchors this close are the readable dates of the rows
+      // directly above and below. In a strictly chronological list, being between two
+      // dates of the same month LEAVES NO OTHER OPTION — that is a proof, not a guess, so
+      // it carries no review flag. A distant bracket stays flagged: rows in between could
+      // have crossed a month boundary unseen.
+      p.monthBracketed = (p.ord! - before.ord) <= 8 && (after.ord - p.ord!) <= 8;
       emitRow(p);
     } else {
       incomplete++;
@@ -610,6 +663,19 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
   // reads) — an independent OCR of the same pixels finding the same three numbers is
   // strong evidence the value is right, so the flag is dropped. This never changes a
   // value; it only clears a review flag when a second reader agrees.
+  // Every row on one screenshot was funded at the same USD/THB rate, so a baht total and
+  // a share count imply that rate. When the two passes disagree on a price and the row has
+  // no USD total to settle it arithmetically (baht rows never do — the rate isn't printed),
+  // the reading whose implied rate matches the rest of the batch is the real one:
+  // MRK at 11.03 implies 327 THB/USD, at 111.03 it implies 32.55, and its neighbours sit
+  // at 32.55-32.73.
+  const impliedFx = (r: OcrTxRow) =>
+    r.currency === "THB" && r.total && r.qty > 0 && r.price > 0 ? r.total / (r.price * r.qty) : null;
+  const fxSamples = [...a.rows, ...b.rows].map(impliedFx)
+    .filter((x): x is number => x !== null && x > 5 && x < 200).sort((x, y) => x - y);
+  // median over at least a few rows, so one misread price can't define the reference
+  const medianFx = fxSamples.length >= 3 ? fxSamples[fxSamples.length >> 1] : null;
+
   const extra = texts?.extra || [];
   const confirmedBy = (r: OcrTxRow, primary?: string) =>
     r.isSplit || confirmedInText(r, primary) || extra.some(t => confirmedInText(r, t));
@@ -622,7 +688,7 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
   const rows: MergedRow[] = [];
 
   const finalize = (best: OcrTxRow, side: OcrTxRow["side"], flags: string[], valuesOk = false) => {
-    if (best.monthInferred) flags.push(`OCR อ่านเดือนได้ "${best.monthReadAs}" — เดาเป็นเดือน ${best.csv.slice(3, 5)} จากรายการข้างเคียง ตรวจกับรูป`);
+    if (best.monthInferred && !best.monthBracketed) flags.push(`OCR อ่านเดือนได้ "${best.monthReadAs}" — เดาเป็นเดือน ${best.csv.slice(3, 5)} จากรายการข้างเคียง ตรวจกับรูป`);
     if (best.symbolFromHint) flags.push("ชื่อหุ้นอ่านจากรอบภาษาอังกฤษ — ตรวจกับรูป");
     if (best.symbolHintMismatch) flags.push(`รอบภาษาอังกฤษอ่านชื่อหุ้นเป็น ${best.symbolHintMismatch} — ตรวจกับรูป`);
     if (best.symbolCorrected) flags.push(`OCR อ่านได้ "${best.symbolCorrected}" — แก้เป็น ${best.symbol} ตามหุ้นในพอร์ต ตรวจกับรูป`);
@@ -684,7 +750,23 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
           const bOk = decimalsOf(rb.qtyStr) === SHARE_DP;
           if (aOk && !bOk) best = ra;
           else if (bOk && !aOk) best = rb;
-          else { best = aOk ? ra : rb; if (!ra.isGold && !rb.isGold) flags.push(`จำนวนหุ้นสองรอบไม่ตรงกัน (${ra.qtyStr} / ${rb.qtyStr})`); }
+          else {
+            // Both readings have the expected decimals, so decimal count can't choose. The
+            // batch FX rate can: a share count is only right if total/(price×qty) lands on
+            // the rate the rest of the screenshot implies (HPQ 0.1480446 → 31.4, the
+            // 0.4480446 misread → 10.4). Same evidence and same strict thresholds as the
+            // price tiebreak, so it only fires when one reading is plainly impossible.
+            const bahtQ = [ra, rb].find(r => r.currency === "THB" && r.total)?.total;
+            let qtyPick: OcrTxRow | null = null;
+            if (medianFx && bahtQ && ra.price > 0) {
+              const off = (q: number) => q > 0 ? Math.abs(bahtQ / (ra.price * q) - medianFx) / medianFx : Infinity;
+              const oa = off(ra.qty), ob = off(rb.qty);
+              if (oa <= 0.15 && ob > 0.5) qtyPick = ra;
+              else if (ob <= 0.15 && oa > 0.5) qtyPick = rb;
+            }
+            if (qtyPick) best = qtyPick;
+            else { best = aOk ? ra : rb; if (!ra.isGold && !rb.isGold) flags.push(`จำนวนหุ้นสองรอบไม่ตรงกัน (${ra.qtyStr} / ${rb.qtyStr})`); }
+          }
         }
         if (ra.priceStr !== rb.priceStr) {
           // Arithmetic cross-tiebreak: a USD total from EITHER pass settles which price
@@ -702,7 +784,25 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
             if (okA && !okB) picked = ra;
             else if (okB && !okA) picked = rb;
           }
+          // Baht fallback: no USD total, but the batch's implied FX rate settles it. The
+          // thresholds are deliberately far apart — one reading within 15% of the batch
+          // rate AND the other off by more than 50% — so this only fires on an unmistakable
+          // misread (MRK implied 327 vs 32.55), never on two plausible readings.
+          let fxPick: OcrTxRow | null = null;
+          const baht = [ra, rb].find(r => r.currency === "THB" && r.total)?.total;
+          if (!picked && medianFx && baht && best.qty > 0) {
+            const off = (p: number) => p > 0 ? Math.abs(baht / (p * best.qty) - medianFx) / medianFx : Infinity;
+            const oa = off(ra.price), ob = off(rb.price);
+            if (oa <= 0.15 && ob > 0.5) fxPick = ra;
+            else if (ob <= 0.15 && oa > 0.5) fxPick = rb;
+          }
+          // The total itself is never imported, so it is never worth a review flag — it is
+          // only evidence about the price, which IS imported. When that evidence is
+          // decisive (one reading matches the batch rate, the other is off by more than
+          // half) the answer is settled and there is nothing for a human to adjudicate, so
+          // the row goes through clean, exactly like the USD arithmetic tiebreak above.
           if (picked) best = picked;
+          else if (fxPick) best = fxPick;
           else flags.push(`ราคาสองรอบไม่ตรงกัน (${ra.priceStr} / ${rb.priceStr})`);
         }
       }
@@ -717,6 +817,48 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
     if (!conf) flags.push("เห็นในรอบ OCR เดียว — ตรวจกับรูป");
     if (rb.sideUncertain) flags.push("อ่านชนิด ซื้อ/ขาย ไม่ชัด — ตรวจกับรูป");
     finalize(rb, rb.side, flags, conf);
+  }
+
+  // Same symbol, share count, price AND minute on two different DAYS is one transaction
+  // whose day a pass misread ("1 พ.ค." → "11"), not two — a broker never prints the same
+  // 7-decimal share count for a symbol twice in the same minute. Both rows survived
+  // unflagged because confirmedInText corroborates on time+price+qty and never looks at
+  // the date, so each was "confirmed" by the other pass's text. Collapse the group and
+  // flag it: which day is right is exactly what a human has to check.
+  const byTx = new Map<string, MergedRow[]>();
+  for (const r of rows) {
+    const k = `${r.symbol}|${r.qtyStr}|${r.priceStr}|${r.csv.slice(11, 16)}`;
+    const g = byTx.get(k); if (g) g.push(r); else byTx.set(k, [r]);
+  }
+  if (byTx.size !== rows.length) {
+    // Snapshot the groups first: the window a disputed row is checked against has to be
+    // every OTHER row on the page, so it cannot be read out of a list still being rebuilt.
+    const groups = [...byTx.values()];
+    const collapsed: MergedRow[] = [];
+    for (let gi = 0; gi < groups.length; gi++) {
+      const g = groups[gi];
+      if (g.length === 1) { collapsed.push(g[0]); continue; }
+      g.sort((x, y) => new Date(x.iso).getTime() - new Date(y.iso).getTime());
+      // One screenshot shows a contiguous slice of history, so a row printed among the
+      // others has to fall inside the window they span. ELF read as 11/05 sat outside a
+      // page running 26/04-01/05 while its other reading, 01/05, sat inside — decisive.
+      // If the disputed row is the newest or oldest on the page both readings can be
+      // outside, and then the flag stays rather than a coin flip.
+      const others = groups.filter((_, i) => i !== gi).flatMap(x => x.map(r => new Date(r.iso).getTime()));
+      let pick: MergedRow | null = null;
+      if (others.length >= 2) {
+        const lo = Math.min(...others), hi = Math.max(...others);
+        const inside = g.filter(r => { const t = new Date(r.iso).getTime(); return t >= lo && t <= hi; });
+        if (inside.length === 1) pick = inside[0];
+      }
+      if (pick) collapsed.push(pick);
+      else {
+        const days = g.map(r => r.csv.slice(0, 10));
+        collapsed.push({ ...g[0], flags: [...g[0].flags, `วันที่สองรอบไม่ตรงกัน (${days.join(" / ")}) — ตรวจกับรูป`] });
+      }
+    }
+    rows.length = 0;
+    rows.push(...collapsed);
   }
 
   rows.sort((x, y) => new Date(x.iso).getTime() - new Date(y.iso).getTime());

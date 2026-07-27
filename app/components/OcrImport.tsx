@@ -1,8 +1,8 @@
 "use client";
 import { useRef, useState } from "react";
-import { parseActivityText, mergeParses, extractTickerHints, extractMonthHints, rowAppearsIn, type MergeResult } from "../lib/ocr";
-import { grayscaleInvert, resizeBilinear } from "../lib/preprocess";
-import { decodeJpeg, isJpeg } from "../lib/decode";
+import { parseActivityText, mergeParses, extractTickerHints, mergeTickerHints, extractMonthHints, rowAppearsIn, type MergeResult } from "../lib/ocr";
+import { grayscaleNormalize, resizeBilinear } from "../lib/preprocess";
+import { decodeImage } from "../lib/decode";
 import { btnGhost, btnPrimary } from "../lib/ui";
 
 // Upload broker-app Activity screenshots → OCR (tesseract.js, fully client-side,
@@ -47,16 +47,14 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
   // Decode → grayscale+invert at native size (white-on-dark → black-on-white) → a
   // DETERMINISTIC bilinear upscale. Every step is the shared code the test harness runs
   // (lib/decode + lib/preprocess), so the same file yields the same pixels here, in CI,
-  // and across browser engines. JPEG goes through jpeg-js rather than the browser's own
-  // decoder, which disagrees with Jimp's on ~6% of bytes — enough to change which rows
-  // OCR reads. Other formats fall back to the browser decoder (results may then vary by
-  // engine); broker screenshots are JPEG. Canvas is used only to encode the PNG.
+  // and across browser engines — the platform's own JPEG decoder disagrees with Jimp's on
+  // ~6% of bytes, enough to change which rows OCR reads. JPEG and PNG (the two formats the
+  // picker accepts) both decode through the shared path; anything else, or a PNG variant
+  // the decoder refuses, falls back to the browser decoder. Canvas only encodes the PNG.
   const preprocess = async (file: File, scale: number): Promise<Blob> => {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    let src: { data: Uint8ClampedArray; width: number; height: number };
-    if (isJpeg(bytes)) {
-      src = decodeJpeg(bytes);
-    } else {
+    let src = decodeImage(bytes) as { data: Uint8ClampedArray; width: number; height: number } | null;
+    if (!src) {
       const bmp = await createImageBitmap(new Blob([bytes]));
       const c1 = document.createElement("canvas");
       c1.width = bmp.width; c1.height = bmp.height;
@@ -64,7 +62,7 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       const id = c1.getContext("2d")!.getImageData(0, 0, c1.width, c1.height);
       src = { data: id.data, width: c1.width, height: c1.height };
     }
-    grayscaleInvert(src.data);
+    grayscaleNormalize(src.data);
     const r = resizeBilinear(src.data, src.width, src.height, scale);
     const c2 = document.createElement("canvas");
     c2.width = r.width; c2.height = r.height;
@@ -116,8 +114,13 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       // (incomplete), an inferred month, OR a row only one main pass saw — the specialists'
       // raw text is a third/fourth reader that can corroborate a single-round row and clear
       // its "เห็นในรอบ OCR เดียว" flag.
+      // a symbol recovered from the portfolio whitelist ("ตามหุ้นในพอร์ต") is a GUESS from
+      // glyph shape — the eng pass often reads that same header properly, so it must trigger
+      // the specialists too. Without it the ๐→O fallback masked its own fix: it produced a
+      // complete-looking flagged row, so nothing was unread and no trigger flag was present,
+      // and the eng pass that reads "CRWD" on that line never ran.
       const needsSpecialists = merged.incomplete > 0
-        || merged.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน") || f.includes("เห็นในรอบ OCR เดียว")));
+        || merged.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน") || f.includes("เห็นในรอบ OCR เดียว") || f.includes("ตามหุ้นในพอร์ต")));
       if (needsSpecialists) {
         // eng-only reads Latin tickers the Thai model mangles (keyed by share count);
         // tha-only reads Thai month abbreviations eng+tha renders as Latin (keyed by day+time).
@@ -131,18 +134,25 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
           setProgress(`กำลังอ่านรูปที่ ${Math.min(slow + 1, N)}/${N}`);
           setPct(Math.round(((done[0] + done[1]) / (2 * N)) * 100));
         };
-        const runLang = async (lang: string, k: number) => {
+        const runLang = async (lang: string, k: number, scales: number[]) => {
           const w = await mkWorker(lang);
-          let text = "";
+          const out: Record<number, string> = {};
           for (let i = 0; i < N; i++) {
-            const { data } = await w.recognize(await preprocess(list[i], 2));
-            text += data.text + "\n"; bump(k);
+            for (const sc of scales) {
+              const { data } = await w.recognize(await preprocess(list[i], sc));
+              out[sc] = (out[sc] ?? "") + data.text + "\n";
+            }
+            bump(k);
           }
           await w.terminate();
-          return text;
+          return out;
         };
-        const [engText, thaText] = await Promise.all([runLang("eng", 0), runLang("tha", 1)]);
-        hints = extractTickerHints(engText);
+        // eng at BOTH scales: some tickers only survive at one of them — "O" is read at 3x
+        // and lost at 2x, while 2x catches names 3x misses. 2x takes precedence and 3x only
+        // fills gaps, so adding it can never cost a hint the old single-scale pass had.
+        const [engOut, thaOut] = await Promise.all([runLang("eng", 0, [2, 3]), runLang("tha", 1, [2])]);
+        const engText = engOut[2] + engOut[3], thaText = thaOut[2];
+        hints = mergeTickerHints(extractTickerHints(engOut[2], knownSymbols), extractTickerHints(engOut[3], knownSymbols), knownSymbols);
         monthHints = extractMonthHints(thaText);
         merged = parseMain(hints, monthHints, [engText, thaText]);
       }
@@ -181,7 +191,7 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
 
   return (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed var(--line)" }}>
-      <input ref={fileRef} type="file" accept="image/*" multiple style={{ display: "none" }}
+      <input ref={fileRef} type="file" accept="image/jpeg,image/png,.jpg,.jpeg,.png" multiple style={{ display: "none" }}
         onChange={e => e.target.files && run(e.target.files)} />
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <button onClick={() => fileRef.current?.click()} disabled={busy} style={{ ...btnGhost({ fontSize: 12, opacity: busy ? 0.6 : 1 }) }}>

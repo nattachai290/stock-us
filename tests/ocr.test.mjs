@@ -23,12 +23,12 @@ const FIX = (f) => path.join(ROOT, "tests", "fixtures", f);
 
 // compile the TS modules on the fly so the test always runs the current source
 const src = execSync("npx esbuild app/lib/ocr.ts --format=esm", { cwd: ROOT }).toString();
-const { parseActivityText, mergeParses, extractTickerHints, extractMonthHints } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
+const { parseActivityText, mergeParses, extractTickerHints, mergeTickerHints, extractMonthHints } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 const preSrc = execSync("npx esbuild app/lib/preprocess.ts --format=esm", { cwd: ROOT }).toString();
-const { grayscaleInvert, resizeBilinear } = await import("data:text/javascript;base64," + Buffer.from(preSrc).toString("base64"));
+const { grayscaleNormalize, resizeBilinear } = await import("data:text/javascript;base64," + Buffer.from(preSrc).toString("base64"));
 // --bundle inlines jpeg-js so this is byte-for-byte the decoder the browser bundle runs
 const decSrc = execSync("npx esbuild app/lib/decode.ts --format=esm --bundle", { cwd: ROOT }).toString();
-const { decodeJpeg } = await import("data:text/javascript;base64," + Buffer.from(decSrc).toString("base64"));
+const { decodeImage } = await import("data:text/javascript;base64," + Buffer.from(decSrc).toString("base64"));
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = "") => {
@@ -40,9 +40,16 @@ const check = (name, cond, detail = "") => {
 
 {
   // Shared preprocessing must be deterministic and match the documented math.
-  const px = new Uint8ClampedArray([255, 255, 255, 255, 0, 0, 0, 255]); // white, black
-  grayscaleInvert(px);
-  check("preprocess: white → 0, black → 255", px[0] === 0 && px[4] === 255, `${px[0]},${px[4]}`);
+  // a mostly-white page keeps its polarity; a mostly-black one is flipped to match
+  const px = new Uint8ClampedArray([255,255,255,255, 255,255,255,255, 255,255,255,255, 0,0,0,255]);
+  grayscaleNormalize(px);
+  check("preprocess: light page keeps white/black as-is", px[0] === 255 && px[12] === 0, `${px[0]},${px[12]}`);
+  // Which way to normalise is decided from the image, not fixed: a light page must be
+  // left alone (inverting it costs reads), a dark one flipped to dark-on-light.
+  const page = (v) => { const a = new Uint8ClampedArray(16); for (let i = 0; i < 16; i += 4) { a[i] = a[i+1] = a[i+2] = v; a[i+3] = 255; } return a; };
+  const lit = page(240), drk = page(20);
+  check("preprocess: light page is not inverted", grayscaleNormalize(lit) === false && lit[0] === 240, String(lit[0]));
+  check("preprocess: dark page is inverted", grayscaleNormalize(drk) === true && drk[0] > 200, String(drk[0]));
   const r = resizeBilinear(new Uint8ClampedArray([100, 100, 100, 255]), 1, 1, 2);
   check("preprocess: 1x1 → 2x2, value preserved", r.width === 2 && r.height === 2 && [0, 4, 8, 12].every(i => r.data[i] === 100), JSON.stringify([...r.data]));
   // two-pixel gradient upscaled 2x: center-aligned sampling gives 0,0,100,100 → interpolated midpoints
@@ -317,7 +324,9 @@ Weight 0.0029 oz
 {
   // Month-anchor inference: a row whose month is unreadable ("A.A.") is filled from
   // its neighbours ONLY when the nearest readable month before and after agree — the
-  // broker's strict chronological order makes a same-month bracket safe. Filled → flagged.
+  // broker's strict chronological order makes a same-month bracket safe. A bracket this
+  // tight (the rows directly above and below) leaves no other month possible, so the row
+  // is filled WITHOUT a flag — see the distant-anchor case below, which still flags.
   const bracketed = `ซื้อ MTS-GOLD 100.00 บาท
 ราคาที่ได้จริง 4000.00 30 ต.ค. 68 - 10:00:00 น.
 น้ำหนัก 0.0100 oz
@@ -330,8 +339,17 @@ Weight 0.0029 oz
   const m = mergeParses(parseActivityText(bracketed), parseActivityText(bracketed), { a: bracketed, b: bracketed });
   const r = m.rows.find(x => x.csv.includes("08:00"));
   check("month-anchor: same-month bracket fills the month", r?.csv === "27/10/2025 08:00,S,XAUUSD,0.0060,4076.61", r?.csv);
-  check("month-anchor: inferred month is flagged", r?.flags.some(f => f.includes("เดาเป็นเดือน")), JSON.stringify(r?.flags));
-  check("month-anchor: flag records what OCR read", r?.flags.some(f => f.includes('อ่านเดือนได้ "A.A."')), JSON.stringify(r?.flags));
+  check("month-anchor: an adjacent bracket needs no flag", !r?.flags.length, JSON.stringify(r?.flags));
+  // Push the anchors away with unrelated lines: the rows in between could have crossed a
+  // month boundary unseen, so the fill becomes a guess again and must say what it read.
+  const filler = Array.from({ length: 10 }, (_, i) => `รายการอื่น ${i}`).join("\n");
+  const far = bracketed.split("\n").slice(0, 3).join("\n") + "\n" + filler + "\n"
+            + bracketed.split("\n").slice(3, 6).join("\n") + "\n" + filler + "\n"
+            + bracketed.split("\n").slice(6).join("\n");
+  const mf = mergeParses(parseActivityText(far), parseActivityText(far), { a: far, b: far });
+  const rf = mf.rows.find(x => x.csv.includes("08:00"));
+  check("month-anchor: a distant bracket is still flagged", rf?.flags.some(f => f.includes("เดาเป็นเดือน")), JSON.stringify(rf?.flags));
+  check("month-anchor: that flag records what OCR read", rf?.flags.some(f => f.includes('อ่านเดือนได้ "A.A."')), JSON.stringify(rf?.flags));
   check("month-anchor: all 3 rows present", m.rows.length === 3 && m.incomplete === 0, `rows=${m.rows.length} inc=${m.incomplete}`);
 
   // A month boundary between the neighbours (Oct above, Nov below) is NOT safe → drop.
@@ -612,6 +630,26 @@ const TRUTH_TH_SELLS = [
 // minutes (หัก 15:41, รับ 15:47) and in reverse order on screen — they must still pair,
 // and the "-" leg must be emitted before the "+" leg for importTxCSV to record a split.
 {
+  // Class shares print with a dot ("BRK.B") but the portfolio and importer use a dash.
+  // Matching only [A-Z]{1,6} truncated it to "BRK" — a valid-LOOKING ticker, so the row
+  // came out with the WRONG symbol and no flag at all. Both spellings must normalise.
+  const hdr = (sym) => ["ซื ้ อ " + sym + " 99.92 บ า ท",
+                        "ร า ค า ท ี ่ ได ้ จ ร ิ ง 469.60 26 เ ม . ย . 69 - 21:12:23 u.",
+                        "จ ํ า น ว น ห ุ ้ น 0.0065374"].join("\n");
+  for (const sym of ["BRK.B", "BRK-B"]) {
+    const t = hdr(sym);
+    const m = mergeParses(parseActivityText(t, undefined, ["BRK-B"]), parseActivityText(t, undefined, ["BRK-B"]), { a: t, b: t });
+    check(`class-share ticker: ${sym} → BRK-B`, m.rows[0]?.symbol === "BRK-B", m.rows[0]?.csv);
+  }
+  // plain and single-letter tickers must be untouched by the widened pattern
+  for (const sym of ["NVDA", "V"]) {
+    const t = hdr(sym);
+    const m = mergeParses(parseActivityText(t, undefined, [sym]), parseActivityText(t, undefined, [sym]), { a: t, b: t });
+    check(`plain ticker unaffected: ${sym}`, m.rows[0]?.symbol === sym, m.rows[0]?.csv);
+  }
+}
+
+{
   // The one-letter ticker "O" has no letter shape to survive Thai OCR — both passes render
   // it as a zero glyph. It may be adopted only from the portfolio whitelist, and flagged.
   const t = ["ซื ้ อ ๐ 99.99 บ า ท",
@@ -661,8 +699,17 @@ const TH_STOCK_MORE = {
   "th-stock-13.jpg": ["16/03/2026 21:49,B,VYM,0.0205697,149.2480","16/03/2026 21:49,B,VOO,0.0049951,614.5940","16/03/2026 21:48,B,VIG,0.0140287,218.8360","16/03/2026 21:48,B,UPS,0.0314536,97.6040","16/03/2026 21:48,B,SPYD,0.0668001,45.9580"],
   "th-stock-14.jpg": ["02/04/2026 13:16,B,ALAB,0.0297993,101.68","01/04/2026 15:18,B,RXRX,0.9776357,3.13","30/03/2026 20:23,B,O,0.0494613,61.26","30/03/2026 20:22,B,HIMS,0.1565891,19.35","27/03/2026 20:16,B,CRWD,0.0081351,370.00"],
   "th-stock-15.jpg": ["01/05/2026 14:53,B,NFLX,0.0322819,94.48","01/05/2026 14:52,B,NU,0.2087611,14.61","01/05/2026 14:52,B,ELF,0.0484944,63.10","26/04/2026 21:13,B,ASTS,0.0400365,76.68","26/04/2026 21:13,B,MRK,0.0276501,111.03"],
+  // Two more pages of the same account. 16 carries a DOTTED ticker (BRK.B, which the
+  // portfolio stores as BRK-B) and 17 the single-letter ticker V — both shapes the
+  // "first uppercase run" ticker match handles badly. 17's last row (IONQ 17 มี.ค.) is the
+  // clipped one at the top of th-stock-13, so the two pages join up.
+  "th-stock-16.jpg": ["26/04/2026 21:12,B,HCA,0.0070009,438.51","26/04/2026 21:12,B,BRK-B,0.0065374,469.60","23/04/2026 21:08,B,LMT,0.0057109,535.8160","22/04/2026 19:42,B,WM,0.0137715,223.65","15/04/2026 21:51,B,OXY,0.0552328,56.1260"],
+  "th-stock-17.jpg": ["19/03/2026 22:00,B,ABBV,0.0145783,207.1560","18/03/2026 21:28,B,V,0.0099667,304.0120","18/03/2026 21:27,B,TMDX,0.0255622,118.5340","18/03/2026 21:27,B,NUE,0.0186491,162.4740","17/03/2026 21:05,B,IONQ,0.0920374,33.3560"],
 };
-const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2, "th-stock-13.jpg":2, "th-stock-14.jpg":2, "th-stock-15.jpg":2 };
+// Set only where a fixture genuinely can't be read whole. OXY and V used to land here;
+// both read fine once the invert direction stopped being assumed, so the map is empty.
+const TH_EXP_INC = {};
+const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2, "th-stock-13.jpg":2, "th-stock-14.jpg":2, "th-stock-15.jpg":2, "th-stock-16.jpg":2, "th-stock-17.jpg":2 };
 
 // eng+tha main passes + an eng-only rescue pass, using the exact self-hosted data
 // the browser ships (public/tesseract) — mirrors OcrImport.tsx
@@ -684,8 +731,8 @@ async function ocrText(w, imgs, scale) {
     // DECODE and preprocessing are both the shared browser code now (lib/decode +
     // lib/preprocess), so app and CI hand tesseract identical pixels for the same file.
     // jimp is left only to encode the result as PNG, which is lossless.
-    const { data: view, width, height } = decodeJpeg(new Uint8Array(fs.readFileSync(p)));
-    grayscaleInvert(view);
+    const { data: view, width, height } = decodeImage(new Uint8Array(fs.readFileSync(p)));
+    grayscaleNormalize(view);
     const r = resizeBilinear(view, width, height, scale);
     const out = new Jimp({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height });
     const { data } = await w.recognize(await out.getBufferAsync(Jimp.MIME_PNG));
@@ -713,7 +760,7 @@ const CASES = [
   { name: "gold DCA Thai (USD-total sells)", imgs: [FIX("gold-mts-thai-4.jpg")], truth: TRUTH_GOLD_THAI_4, minExact: 6 },
   { name: "Thai stock sells", imgs: [FIX("th-stock-sells.jpg")], truth: TRUTH_TH_SELLS, minExact: 6 },
   { name: "Thai stock buys + CA split", imgs: [FIX("th-stock-ca.jpg")], truth: TRUTH_TH_CA, minExact: 3 },
-  ...Object.entries(TH_STOCK_MORE).map(([f, truth]) => ({ name: f, imgs: [FIX(f)], truth, minExact: TH_MIN_EXACT[f] })),
+  ...Object.entries(TH_STOCK_MORE).map(([f, truth]) => ({ name: f, imgs: [FIX(f)], truth, minExact: TH_MIN_EXACT[f], expIncomplete: TH_EXP_INC[f] ?? 0 })),
 ];
 // Pass/fail is decided ONLY by the safety guarantees below — never by the exact-match
 // count. Real-screenshot OCR can't hit 100% exact (even the English fixtures don't), so
@@ -731,12 +778,14 @@ for (const c of CASES) {
   const parseMain = (h, mh, extra) =>
     mergeParses(parseActivityText(textA, h, known, mh), parseActivityText(textB, h, known, mh), { a: textA, b: textB, extra });
   let m = parseMain();
-  if (m.incomplete > 0 || m.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน") || f.includes("เห็นในรอบ OCR เดียว")))) {
-    const engText = await ocrText(engWorker, c.imgs, 2);
+  if (m.incomplete > 0 || m.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน") || f.includes("เห็นในรอบ OCR เดียว") || f.includes("ตามหุ้นในพอร์ต")))) {
+    // MIRROR the app: eng at both scales, 2x taking precedence and 3x filling gaps only.
+    const eng2 = await ocrText(engWorker, c.imgs, 2);
+    const eng3 = await ocrText(engWorker, c.imgs, 3);
     const thaText = await ocrText(thaWorker, c.imgs, 2);
-    const hints = extractTickerHints(engText);
+    const hints = mergeTickerHints(extractTickerHints(eng2, known), extractTickerHints(eng3, known), known);
     const monthHints = extractMonthHints(thaText);
-    m = parseMain(hints, monthHints, [engText, thaText]);
+    m = parseMain(hints, monthHints, [eng2 + eng3, thaText]);
   }
   const exact = c.truth.filter(t => m.rows.some(r => r.csv === t)).length;
   const silent = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length === 0);
@@ -752,9 +801,13 @@ for (const c of CASES) {
   // Per-row detail for anything not clean, so the CI comment shows exactly which row of
   // which fixture is flagged/missing, what OCR read, and (when wrong) what it SHOULD be
   // — no need to re-run to inspect. Value-wrong rows print the expected value inline.
+  // Pair a wrong row with the truth row it corresponds to. SYMBOL first: several
+  // transactions can share a minute (ASTS and MRK both at 21:13), and matching on
+  // date+time first paired MRK's misread price against ASTS's row, reporting a correct
+  // row as the expected value for a different one.
   const nearestTruth = (csv) =>
-    c.truth.find(t => t.slice(0, 16) === csv.slice(0, 16)) ||      // same date+time
-    c.truth.find(t => t.split(",")[2] === csv.split(",")[2]);      // else same symbol
+    c.truth.find(t => t.split(",")[2] === csv.split(",")[2]) ||    // same symbol
+    c.truth.find(t => t.slice(0, 16) === csv.slice(0, 16));        // else same date+time
   for (const r of m.rows) {
     if (!r.flags.length) continue;
     if (c.truth.includes(r.csv)) {
@@ -766,14 +819,18 @@ for (const c of CASES) {
   }
   for (const t of c.truth) {
     if (m.rows.some(r => r.csv === t)) continue;
-    const near = m.rows.find(r => r.csv.slice(0, 16) === t.slice(0, 16) || r.csv.split(",")[2] === t.split(",")[2]);
+    const near = m.rows.find(r => r.csv.split(",")[2] === t.split(",")[2])
+              || m.rows.find(r => r.csv.slice(0, 16) === t.slice(0, 16) && !c.truth.includes(r.csv));
+    // A row that came out wrong is already printed above as ⚠ with its expected value;
+    // repeating it here as "missing" describes the same defect twice.
+    if (near && !c.truth.includes(near.csv) && near.flags.length) continue;
     console.log(`      ✗ [${c.name}] ที่ถูก: ${t}${near ? `  (OCR อ่านได้: ${near.csv})` : "  (ไม่มีแถวออกมาเลย)"}`);
   }
   if (m.incomplete > 0) console.log(`      ⊘ [${c.name}] อ่านไม่ครบ ${m.incomplete} รายการ (ตรวจไม่ออกว่าแถวไหน — เทียบกับรูป)`);
   // ── hard guarantees (these decide pass/fail) ──
   check(`${c.name}: no row is silently wrong (matches expect or is flagged)`, silent.length === 0, silent.map(r => r.csv).join(" | "));
   check(`${c.name}: no spurious rows invented (<= ${c.truth.length})`, m.rows.length <= c.truth.length, `got ${m.rows.length}`);
-  check(`${c.name}: every emitted symbol is a valid ticker`, m.rows.every(r => /^([A-Z]{1,6}|XAUUSD)$/.test(r.symbol)), m.rows.map(r => r.symbol).join(","));
+  check(`${c.name}: every emitted symbol is a valid ticker`, m.rows.every(r => /^([A-Z]{1,6}(-[A-Z]{1,2})?|XAUUSD)$/.test(r.symbol)), m.rows.map(r => r.symbol).join(","));
   // The "อ่านไม่ครบ" count the user sees must match the rows genuinely missing from the
   // merged output — never inflated by per-pass failures that the other pass recovered.
   check(`${c.name}: incomplete count matches missing rows (expect ${c.expIncomplete ?? 0})`, m.incomplete === (c.expIncomplete ?? 0), `got ${m.incomplete}`);

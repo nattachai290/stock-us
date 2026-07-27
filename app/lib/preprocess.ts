@@ -7,12 +7,25 @@
 // any device and in CI. (The one residual difference is JPEG decoding itself, which
 // can vary by ±1 gray level between decoders — below tesseract's noise floor.)
 
-// White-text-on-dark screenshots → black-on-white: grayscale then invert, in place.
-export function grayscaleInvert(d: Uint8ClampedArray): void {
+// Tesseract wants dark text on a light background. Broker screenshots come in both
+// themes, so which way to go is a property of the image, not a constant: grayscale, then
+// invert ONLY when the page is dark. Inverting an already-light screenshot turns it into
+// white-on-black and measurably costs reads — "OXY" came out as "0). 4'", "V" as "ง" and
+// "BRK.B" as "ธ จ .8" purely from being inverted when it should not have been.
+//
+// The decision is the mean luminance over the whole image, which for a screenshot is
+// dominated by its background. Deterministic and identical in the browser and in Node.
+// Returns whether it inverted, for diagnostics.
+export function grayscaleNormalize(d: Uint8ClampedArray): boolean {
+  let sum = 0;
   for (let i = 0; i < d.length; i += 4) {
-    const g = 255 - (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
-    d[i] = d[i + 1] = d[i + 2] = g;
+    const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    d[i] = d[i + 1] = d[i + 2] = g;   // grayscale first; the invert decision needs the mean
+    sum += g;
   }
+  const dark = sum / (d.length / 4) < 128;
+  if (dark) for (let i = 0; i < d.length; i += 4) d[i] = d[i + 1] = d[i + 2] = 255 - d[i];
+  return dark;
 }
 
 // Deterministic bilinear upscale of an RGBA buffer (center-aligned sampling).
