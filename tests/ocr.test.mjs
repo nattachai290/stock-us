@@ -567,6 +567,16 @@ const TRUTH_DCA2 = [
   "20/07/2026 09:41,B,ASTS,0.2052431,57.98",
 ];
 
+// English US-stock page, DARK theme — so it exercises the other branch of the invert
+// decision, alongside the light Thai pages. Also carries a status line the layout has not
+// had before ("● Matched and Settling" between the sell header and its executed price),
+// and a sell printed as "<qty> Shares" rather than a money total.
+const TRUTH_DCA3 = [
+  "03/08/2026 22:00,S,ENPH,1.3241420,39.10",
+  "03/08/2026 09:15,B,PLTR,0.0948166,126.56",
+  "03/08/2026 09:14,B,IIPR,0.2049096,58.66",
+];
+
 // Gold DCA screenshot (MTS-GOLD, English) — Weight/oz, THB totals, all map to XAUUSD
 const TRUTH_GOLD = [
   "12/11/2024 21:57,B,XAUUSD,0.0043,2611.23", "08/07/2025 01:20,B,XAUUSD,0.0036,3329.87",
@@ -749,6 +759,7 @@ const CASES = [
   // price/share line, so no record is ever opened: it drops silently rather than counting
   // as unread. What matters is that it never becomes a row.
   { name: "US DCA (activity-6)", imgs: [FIX("activity-6-dca.jpg")], truth: TRUTH_DCA2, minExact: 4 },
+  { name: "US DCA dark (activity-7)", imgs: [FIX("activity-7.jpg")], truth: TRUTH_DCA3, minExact: 2 },
   { name: "gold DCA (MTS-GOLD)", imgs: [FIX("gold-mts.jpg")], truth: TRUTH_GOLD, minExact: 5 },
   { name: "gold DCA Thai (MTS-GOLD)", imgs: [FIX("gold-mts-thai.jpg")], truth: TRUTH_GOLD_THAI, minExact: 4 },
   { name: "gold DCA Thai light theme", imgs: [FIX("gold-mts-thai-light.jpg")], truth: TRUTH_GOLD_THAI_LIGHT, minExact: 6 },
