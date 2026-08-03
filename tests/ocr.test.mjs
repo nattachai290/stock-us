@@ -534,6 +534,17 @@ s1AA 175.32 26 A.W. 69 - 21:46:06 u.
   check("whitelist: distant symbols untouched", m4.rows[0]?.symbol === "IPR", m4.rows[0]?.csv);
 }
 
+{
+  // English sell layout: the count sits on the header, the date on a status line, and the
+  // executed price on a line of its own — none of which the buy layout does.
+  const t = ["Sell ENPH 1.3241420 Shares",
+             "@ Matched and Settling 3 Aug 2026 - 10:00:34 PM",
+             "Executed Price 39.10"].join("\n");
+  const m = mergeParses(parseActivityText(t, undefined, ["ENPH"]), parseActivityText(t, undefined, ["ENPH"]), { a: t, b: t });
+  check("english sell-by-shares: header count is read", m.rows[0]?.csv === "03/08/2026 22:00,S,ENPH,1.3241420,39.10", m.rows[0]?.csv);
+  check("english sell-by-shares: nothing left unread", m.incomplete === 0, `inc=${m.incomplete}`);
+}
+
 // ── End-to-end OCR tests on real screenshots ──────────────────────────────────
 
 const TRUTH_ALL = [

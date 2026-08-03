@@ -396,6 +396,12 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     if (m) {
       flush();
       cur = { side: m[1] === "Buy" ? "B" : "S", symbol: m[2].toUpperCase().replace(/\./g, "-") };
+      // English SELL headers carry the share count themselves ("Sell ENPH 1.3241420
+      // Shares"), the way the Thai layout does with หุ้น — only the BUY layout puts it on a
+      // separate "Shares ..." line. Without this the count is never read and the block is
+      // dropped as unfinished even though every line OCR'd perfectly.
+      const sh = line.match(/([\d.OolI|\]]{7,})\s*Shares\b/i);
+      if (sh) { const f = qtyFix(sh[1], 7); const v = parseFloat(f); if (v > 0) { cur.qty = v; cur.qtyStr = f; } }
     } else {
       // Thai header line. Anchors are all Latin/structural, so they survive the noisy Thai:
       //  • gold: the product name contains GOLD
