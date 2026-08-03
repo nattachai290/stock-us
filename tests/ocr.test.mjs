@@ -545,6 +545,22 @@ s1AA 175.32 26 A.W. 69 - 21:46:06 u.
   check("english sell-by-shares: nothing left unread", m.incomplete === 0, `inc=${m.incomplete}`);
 }
 
+{
+  // Thai sell whose date is on a status line, leaving the executed price alone on its own
+  // row — the Thai counterpart of the English sell layout above.
+  const t = ["ขาย ENPH 0.4383884 หุ้น",
+             "@ จับคู่แล้ว และกำลังคืนเงิน 3 ส.ค. 69 - 22:00:26 น.",
+             "ราคาที่ได้จริง 39.1060"].join("\n");
+  const m = mergeParses(parseActivityText(t, undefined, ["ENPH"]), parseActivityText(t, undefined, ["ENPH"]), { a: t, b: t });
+  check("thai sell, price on its own line", m.rows[0]?.csv === "03/08/2026 22:00,S,ENPH,0.4383884,39.1060", m.rows[0]?.csv);
+  check("thai sell, price on its own line: nothing unread", m.incomplete === 0, `inc=${m.incomplete}`);
+  // The combined layout must keep taking its price from the date line, not the tail number
+  const c = ["ขาย HPQ 0.5745693 หุ้น",
+             "ราคาที่ได้จริง 21.89 1 ก.ค. 69 - 20:21:36 น."].join("\n");
+  const mc = mergeParses(parseActivityText(c, undefined, ["HPQ"]), parseActivityText(c, undefined, ["HPQ"]), { a: c, b: c });
+  check("thai sell, combined price+date still reads the price", mc.rows[0]?.csv === "01/07/2026 20:21,S,HPQ,0.5745693,21.89", mc.rows[0]?.csv);
+}
+
 // ── End-to-end OCR tests on real screenshots ──────────────────────────────────
 
 const TRUTH_ALL = [

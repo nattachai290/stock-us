@@ -535,6 +535,16 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       }
     }
 
+    // A Thai executed-price line with NO date on it. The usual Thai layout prints the price
+    // and the date together, so the price is normally taken from the date line's prefix —
+    // but a sell whose date sits on a status line ("จับคู่แล้ว และกำลังคืนเงิน 3 ส.ค. 69 -
+    // 22:00:26 น.") leaves "ราคาที่ได้จริง 39.1060" alone on its own row, where nothing read
+    // it. Requiring the line to carry no time keeps this away from the combined layout.
+    if (cur.price == null && compact.includes("จริง") && !/[-–—]\s*\d{1,2}[:.]\d{2}/.test(line)) {
+      const pm = line.match(/([\d,.OolI|]+\.\d{2,})\s*$/);
+      if (pm) { const v = toNum(pm[1]); if (v > 0) { cur.price = v; cur.priceStr = numFix(pm[1]); } }
+    }
+
     // "Shares 0.0371384" (stocks) or "Weight 0.0029 oz" / "น้ำหนัก 0.0976 oz" (gold, 4dp).
     // The "oz" unit is Latin, so anchoring on it works regardless of label language.
     // OCR sometimes renders "oz" as the Thai digit zero + a stray digit ("๐ 7", "๐ 2") —
