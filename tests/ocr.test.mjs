@@ -726,11 +726,15 @@ const TH_STOCK_MORE = {
   // clipped one at the top of th-stock-13, so the two pages join up.
   "th-stock-16.jpg": ["26/04/2026 21:12,B,HCA,0.0070009,438.51","26/04/2026 21:12,B,BRK-B,0.0065374,469.60","23/04/2026 21:08,B,LMT,0.0057109,535.8160","22/04/2026 19:42,B,WM,0.0137715,223.65","15/04/2026 21:51,B,OXY,0.0552328,56.1260"],
   "th-stock-17.jpg": ["19/03/2026 22:00,B,ABBV,0.0145783,207.1560","18/03/2026 21:28,B,V,0.0099667,304.0120","18/03/2026 21:27,B,TMDX,0.0255622,118.5340","18/03/2026 21:27,B,NUE,0.0186491,162.4740","17/03/2026 21:05,B,IONQ,0.0920374,33.3560"],
+  // Thai page for the US-stock tab, so Thai labels around English tickers, plus a sell with
+  // a status line ("จับคู่แล้ว และกำลังคืนเงิน") between its header and price — the Thai
+  // counterpart of activity-7's layout. HIMS carries trailing zeros (0.1080000).
+  "th-stock-18.jpg": ["03/08/2026 22:00,S,ENPH,0.4383884,39.1060","03/08/2026 19:44,B,PLTR,0.0234671,126.56","03/08/2026 19:44,B,IIPR,0.0508012,58.66","31/07/2026 10:01,B,HIMS,0.1080000,27.50"],
 };
 // Set only where a fixture genuinely can't be read whole. OXY and V used to land here;
 // both read fine once the invert direction stopped being assumed, so the map is empty.
 const TH_EXP_INC = {};
-const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2, "th-stock-13.jpg":2, "th-stock-14.jpg":2, "th-stock-15.jpg":2, "th-stock-16.jpg":2, "th-stock-17.jpg":2 };
+const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2, "th-stock-13.jpg":2, "th-stock-14.jpg":2, "th-stock-15.jpg":2, "th-stock-16.jpg":2, "th-stock-17.jpg":2, "th-stock-18.jpg":2 };
 
 // eng+tha main passes + an eng-only rescue pass, using the exact self-hosted data
 // the browser ships (public/tesseract) — mirrors OcrImport.tsx
