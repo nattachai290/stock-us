@@ -23,6 +23,15 @@ export default function HoldingsList({ holdings, tv, pc, onSelect }: {
         // table, so a position reads the same wherever it's shown. The bar caps at 100%,
         // so "full + red" = over target and "full + green" = exactly at target.
         const barColor = target > 0 && w > target ? "var(--loss)" : "var(--gain)";
+        // Trim suggestion for a position that has drifted above its target. The amount is
+        // capped at the position's unrealized GAIN, so trimming only ever sells profit and
+        // never dips into the original capital: $30 over target with $3 of gain is a $3
+        // sell, not $30. Nothing is suggested without a target, without drift, or while the
+        // position is at a loss — there is no profit to take then.
+        const overAmt = target > 0 && w > target ? (w - target) / 100 * tv : 0;
+        const unreal = h.shares * (h.currentPrice - h.avgCost);
+        const trimAmt = Math.min(overAmt, unreal);
+        const trimShares = h.currentPrice > 0 ? trimAmt / h.currentPrice : 0;
 
         return (
           <div key={h.id} onClick={() => onSelect(h.id)}
@@ -49,6 +58,13 @@ export default function HoldingsList({ holdings, tv, pc, onSelect }: {
                 <span style={{ color: pc(pp) }}>P&L {pp >= 0 ? "+" : ""}{pp.toFixed(1)}%</span>
               </div>
             </div>
+
+            {trimAmt > 0 && (
+              <div style={{ fontSize: 10.5, color: "var(--loss)", marginTop: 4 }}>
+                เกินเป้า ${overAmt.toLocaleString("en", { maximumFractionDigits: 0 })} · ขายได้ ${trimAmt.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                <span style={{ color: "var(--faint)" }}> ({trimShares.toFixed(4)} หุ้น — เท่ากำไรที่มี)</span>
+              </div>
+            )}
 
             {isStale && (
               <div style={{ fontSize: 10, color: "var(--warn)", marginTop: 4 }}>
