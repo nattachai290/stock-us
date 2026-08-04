@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
 import DateTimePicker24h from "./components/DateTimePicker24h";
-import { parseCSV, toCSV, copyToClipboard, fifoBasisForSale, computeFromHistory } from "./lib/portfolio";
+import { parseCSV, toCSV, copyToClipboard, fifoBasisForSale, computeFromHistory , trimSuggestion } from "./lib/portfolio";
 import { setOnDriveAuthExpired, listPortfolios, loadPortfolio, savePortfolio, deletePortfolio, renamePortfolio } from "./lib/drive";
 import { btn, btnPrimary, btnGhost, inp } from "./lib/ui";
 import Snackbar from "./components/Snackbar";
@@ -108,7 +108,7 @@ export default function App() {
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
   const [detailId, setDetailId] = useState<number|null>(null);
   const [query, setQuery] = useState("");
-  const [sortBy, setSortBy] = useState<"value"|"pl"|"today"|"az"|"under">("value");
+  const [sortBy, setSortBy] = useState<"value"|"pl"|"today"|"az"|"under"|"trim">("value");
   const [sortDesc, setSortDesc] = useState(true);
   const [showAddSheet, setShowAddSheet] = useState(false);
   useEffect(() => {
@@ -939,6 +939,13 @@ export default function App() {
     let list = [...activeHoldings];
     const q = query.trim().toUpperCase();
     if (q) list = list.filter((h:any)=>h.symbol.toUpperCase().includes(q) || (h.sector||"").toUpperCase().includes(q));
+    if (sortBy === "trim") {
+      // Only positions that are above target AND sitting on a gain — the same rule the
+      // cards and the detail sheet use — ordered by how much can be taken off the table.
+      list = list.filter((h:any)=>trimSuggestion(h, tv).amount > 0);
+      list.sort((a:any,b:any)=>trimSuggestion(b, tv).amount - trimSuggestion(a, tv).amount);
+      return list;
+    }
     if (sortBy === "under") {
       list = list.filter((h:any)=>h.targetPct>0 && weightOf(h)<h.targetPct);
       list.sort((a:any,b:any)=>(b.targetPct-weightOf(b))-(a.targetPct-weightOf(a)));
@@ -1144,11 +1151,11 @@ export default function App() {
                 ]}/>
               </div>
               <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
-                {([["value","มูลค่า"],["pl","P&L %"],["today","วันนี้"],["az","A–Z"],["under","ยังไม่ถึงเป้า"]] as const).map(([key,label])=>(
+                {([["value","มูลค่า"],["pl","P&L %"],["today","วันนี้"],["az","A–Z"],["under","ยังไม่ถึงเป้า"],["trim","แนะนำขาย"]] as const).map(([key,label])=>(
                   <button key={key} onClick={()=>{ if(sortBy===key) setSortDesc(v=>!v); else { setSortBy(key); setSortDesc(key!=="az"); } }}
                     style={{fontSize:11,fontWeight:600,padding:"5px 11px",borderRadius:999,cursor:"pointer",
                       background:sortBy===key?"var(--brass)":"var(--card2)", color:sortBy===key?"var(--on-brass)":"var(--mut)", border:"none"}}>
-                    {label}{sortBy===key&&key!=="under"?(sortDesc?" ↓":" ↑"):""}
+                    {label}{sortBy===key&&key!=="under"&&key!=="trim"?(sortDesc?" ↓":" ↑"):""}
                   </button>
                 ))}
               </div>

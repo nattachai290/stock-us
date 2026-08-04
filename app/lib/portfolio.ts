@@ -101,3 +101,19 @@ export function formatDDMMYYYY(iso: string): string {
   const [y,m,d] = datePart.split("-");
   return `${d}/${m}/${y} ${timePart||""}`;
 }
+
+// How much of an over-target position can be trimmed, in dollars and shares. The amount is
+// capped at the position's unrealized GAIN so trimming only ever realises profit and never
+// dips into the original capital: $30 above target with $3 of gain is a $3 sell, not $30.
+// Zero when there is no target, no drift above it, or the position is at a loss — there is
+// no profit to take then. Shared by the holdings cards, the detail sheet and the filter so
+// all three agree on what "แนะนำขาย" means.
+export function trimSuggestion(h: any, totalValue: number): { amount: number; shares: number; overAmount: number } {
+  const target = h.targetPct || 0;
+  const value = h.shares * h.currentPrice;
+  const weight = totalValue > 0 ? value / totalValue * 100 : 0;
+  const overAmount = target > 0 && weight > target ? (weight - target) / 100 * totalValue : 0;
+  const unrealized = h.shares * (h.currentPrice - h.avgCost);
+  const amount = Math.max(0, Math.min(overAmount, unrealized));
+  return { amount, shares: h.currentPrice > 0 ? amount / h.currentPrice : 0, overAmount };
+}
