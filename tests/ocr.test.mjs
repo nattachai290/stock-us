@@ -534,6 +534,33 @@ s1AA 175.32 26 A.W. 69 - 21:46:06 u.
   check("whitelist: distant symbols untouched", m4.rows[0]?.symbol === "IPR", m4.rows[0]?.csv);
 }
 
+{
+  // English sell layout: the count sits on the header, the date on a status line, and the
+  // executed price on a line of its own — none of which the buy layout does.
+  const t = ["Sell ENPH 1.3241420 Shares",
+             "@ Matched and Settling 3 Aug 2026 - 10:00:34 PM",
+             "Executed Price 39.10"].join("\n");
+  const m = mergeParses(parseActivityText(t, undefined, ["ENPH"]), parseActivityText(t, undefined, ["ENPH"]), { a: t, b: t });
+  check("english sell-by-shares: header count is read", m.rows[0]?.csv === "03/08/2026 22:00,S,ENPH,1.3241420,39.10", m.rows[0]?.csv);
+  check("english sell-by-shares: nothing left unread", m.incomplete === 0, `inc=${m.incomplete}`);
+}
+
+{
+  // Thai sell whose date is on a status line, leaving the executed price alone on its own
+  // row — the Thai counterpart of the English sell layout above.
+  const t = ["ขาย ENPH 0.4383884 หุ้น",
+             "@ จับคู่แล้ว และกำลังคืนเงิน 3 ส.ค. 69 - 22:00:26 น.",
+             "ราคาที่ได้จริง 39.1060"].join("\n");
+  const m = mergeParses(parseActivityText(t, undefined, ["ENPH"]), parseActivityText(t, undefined, ["ENPH"]), { a: t, b: t });
+  check("thai sell, price on its own line", m.rows[0]?.csv === "03/08/2026 22:00,S,ENPH,0.4383884,39.1060", m.rows[0]?.csv);
+  check("thai sell, price on its own line: nothing unread", m.incomplete === 0, `inc=${m.incomplete}`);
+  // The combined layout must keep taking its price from the date line, not the tail number
+  const c = ["ขาย HPQ 0.5745693 หุ้น",
+             "ราคาที่ได้จริง 21.89 1 ก.ค. 69 - 20:21:36 น."].join("\n");
+  const mc = mergeParses(parseActivityText(c, undefined, ["HPQ"]), parseActivityText(c, undefined, ["HPQ"]), { a: c, b: c });
+  check("thai sell, combined price+date still reads the price", mc.rows[0]?.csv === "01/07/2026 20:21,S,HPQ,0.5745693,21.89", mc.rows[0]?.csv);
+}
+
 // ── End-to-end OCR tests on real screenshots ──────────────────────────────────
 
 const TRUTH_ALL = [
@@ -565,6 +592,16 @@ const TRUTH_DCA2 = [
   "20/07/2026 09:42,B,SPCX,0.0949493,125.33",
   "20/07/2026 09:41,B,RKLB,0.1740529,68.37",
   "20/07/2026 09:41,B,ASTS,0.2052431,57.98",
+];
+
+// English US-stock page, DARK theme — so it exercises the other branch of the invert
+// decision, alongside the light Thai pages. Also carries a status line the layout has not
+// had before ("● Matched and Settling" between the sell header and its executed price),
+// and a sell printed as "<qty> Shares" rather than a money total.
+const TRUTH_DCA3 = [
+  "03/08/2026 22:00,S,ENPH,1.3241420,39.10",
+  "03/08/2026 09:15,B,PLTR,0.0948166,126.56",
+  "03/08/2026 09:14,B,IIPR,0.2049096,58.66",
 ];
 
 // Gold DCA screenshot (MTS-GOLD, English) — Weight/oz, THB totals, all map to XAUUSD
@@ -705,11 +742,19 @@ const TH_STOCK_MORE = {
   // clipped one at the top of th-stock-13, so the two pages join up.
   "th-stock-16.jpg": ["26/04/2026 21:12,B,HCA,0.0070009,438.51","26/04/2026 21:12,B,BRK-B,0.0065374,469.60","23/04/2026 21:08,B,LMT,0.0057109,535.8160","22/04/2026 19:42,B,WM,0.0137715,223.65","15/04/2026 21:51,B,OXY,0.0552328,56.1260"],
   "th-stock-17.jpg": ["19/03/2026 22:00,B,ABBV,0.0145783,207.1560","18/03/2026 21:28,B,V,0.0099667,304.0120","18/03/2026 21:27,B,TMDX,0.0255622,118.5340","18/03/2026 21:27,B,NUE,0.0186491,162.4740","17/03/2026 21:05,B,IONQ,0.0920374,33.3560"],
+  // Thai page for the US-stock tab, so Thai labels around English tickers, plus a sell with
+  // a status line ("จับคู่แล้ว และกำลังคืนเงิน") between its header and price — the Thai
+  // counterpart of activity-7's layout. HIMS carries trailing zeros (0.1080000).
+  "th-stock-18.jpg": ["03/08/2026 22:00,S,ENPH,0.4383884,39.1060","03/08/2026 19:44,B,PLTR,0.0234671,126.56","03/08/2026 19:44,B,IIPR,0.0508012,58.66","31/07/2026 10:01,B,HIMS,0.1080000,27.50"],
+  // Six Thai-labelled US-stock buys. RXRX holds MORE than one share (1.0034129) where every
+  // other fixture is a fraction, and CELH is priced in USD on a page whose other five rows
+  // are baht — so the batch FX reference has to ignore it rather than average it in.
+  "th-stock-19.jpg": ["23/07/2026 08:30,B,RXRX,1.0034129,2.93","23/07/2026 08:29,B,LMT,0.0053551,549.00","23/07/2026 08:29,B,ISRG,0.0086930,338.20","23/07/2026 08:28,B,FSLR,0.0141652,207.55","23/07/2026 08:28,B,AXON,0.0058848,499.59","21/07/2026 11:57,B,CELH,0.1036287,28.66"],
 };
 // Set only where a fixture genuinely can't be read whole. OXY and V used to land here;
 // both read fine once the invert direction stopped being assumed, so the map is empty.
 const TH_EXP_INC = {};
-const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2, "th-stock-13.jpg":2, "th-stock-14.jpg":2, "th-stock-15.jpg":2, "th-stock-16.jpg":2, "th-stock-17.jpg":2 };
+const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2, "th-stock-13.jpg":2, "th-stock-14.jpg":2, "th-stock-15.jpg":2, "th-stock-16.jpg":2, "th-stock-17.jpg":2, "th-stock-18.jpg":2, "th-stock-19.jpg":2 };
 
 // eng+tha main passes + an eng-only rescue pass, using the exact self-hosted data
 // the browser ships (public/tesseract) — mirrors OcrImport.tsx
@@ -749,6 +794,7 @@ const CASES = [
   // price/share line, so no record is ever opened: it drops silently rather than counting
   // as unread. What matters is that it never becomes a row.
   { name: "US DCA (activity-6)", imgs: [FIX("activity-6-dca.jpg")], truth: TRUTH_DCA2, minExact: 4 },
+  { name: "US DCA dark (activity-7)", imgs: [FIX("activity-7.jpg")], truth: TRUTH_DCA3, minExact: 2 },
   { name: "gold DCA (MTS-GOLD)", imgs: [FIX("gold-mts.jpg")], truth: TRUTH_GOLD, minExact: 5 },
   { name: "gold DCA Thai (MTS-GOLD)", imgs: [FIX("gold-mts-thai.jpg")], truth: TRUTH_GOLD_THAI, minExact: 4 },
   { name: "gold DCA Thai light theme", imgs: [FIX("gold-mts-thai-light.jpg")], truth: TRUTH_GOLD_THAI_LIGHT, minExact: 6 },
