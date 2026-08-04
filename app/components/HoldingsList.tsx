@@ -1,4 +1,5 @@
 "use client";
+import { trimSuggestion } from "../lib/portfolio";
 
 // Mobile card list for the portfolio tab (§5.3). Presentational only — all the
 // numbers here are the same per-row math the old table already computed; this
@@ -23,15 +24,7 @@ export default function HoldingsList({ holdings, tv, pc, onSelect }: {
         // table, so a position reads the same wherever it's shown. The bar caps at 100%,
         // so "full + red" = over target and "full + green" = exactly at target.
         const barColor = target > 0 && w > target ? "var(--loss)" : "var(--gain)";
-        // Trim suggestion for a position that has drifted above its target. The amount is
-        // capped at the position's unrealized GAIN, so trimming only ever sells profit and
-        // never dips into the original capital: $30 over target with $3 of gain is a $3
-        // sell, not $30. Nothing is suggested without a target, without drift, or while the
-        // position is at a loss — there is no profit to take then.
-        const overAmt = target > 0 && w > target ? (w - target) / 100 * tv : 0;
-        const unreal = h.shares * (h.currentPrice - h.avgCost);
-        const trimAmt = Math.min(overAmt, unreal);
-        const trimShares = h.currentPrice > 0 ? trimAmt / h.currentPrice : 0;
+        const { amount: trimAmt, shares: trimShares, overAmount: overAmt } = trimSuggestion(h, tv);
 
         return (
           <div key={h.id} onClick={() => onSelect(h.id)}

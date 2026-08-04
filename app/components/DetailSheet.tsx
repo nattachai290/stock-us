@@ -1,4 +1,5 @@
 "use client";
+import { trimSuggestion } from "../lib/portfolio";
 import Sheet from "./Sheet";
 import { btnPrimary, btnGhost } from "../lib/ui";
 
@@ -34,6 +35,7 @@ export default function DetailSheet({
         const realized = (h.realizedHistory || []).reduce((s: number, r: any) => s + (r.gain || 0), 0);
         const underNeed = (target > 0 && target < 100 && w < target) ? ((target / 100 * tv - val) / (1 - target / 100)) : 0;
         const overAmt = (target > 0 && w > target) ? ((w - target) / 100 * tv) : 0;
+        const trim = trimSuggestion(holding, tv);
         const isEditing = editId === h.id;
 
         if (isEditing) {
@@ -95,6 +97,14 @@ export default function DetailSheet({
             {target > 0 && <div style={{ background: "var(--line)", borderRadius: 3, height: 4, overflow: "hidden" }}><div style={{ width: `${Math.min(w / target * 100, 100)}%`, height: "100%", background: w > target ? "var(--loss)" : "var(--gain)", borderRadius: 3 }} /></div>}
             {underNeed > 0 && <div style={{ fontSize: 12, color: "var(--gain)", marginTop: 4 }}>ซื้อเพิ่ม ~${underNeed.toLocaleString("en", { maximumFractionDigits: 2 })} ถึงเป้า</div>}
             {overAmt > 0 && <div style={{ fontSize: 12, color: "var(--loss)", marginTop: 4 }}>เกิน +${overAmt.toFixed(2)}</div>}
+            {/* Capped at the unrealized gain, so a trim only ever sells profit — same rule
+                and same helper the holdings cards and the แนะนำขาย filter use. */}
+            {trim.amount > 0 && (
+              <div style={{ fontSize: 12, color: "var(--loss)", marginTop: 4 }}>
+                ขายได้ ${trim.amount.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                <span style={{ color: "var(--faint)" }}> ({trim.shares.toFixed(4)} หุ้น — เท่ากำไรที่มี)</span>
+              </div>
+            )}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, marginTop: 16 }}>
