@@ -102,7 +102,7 @@ export default function DetailSheet({
             {trim.amount > 0 && (
               <div style={{ fontSize: 12, color: "var(--loss)", marginTop: 4 }}>
                 ขายได้ ${trim.amount.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                <span style={{ color: "var(--faint)" }}> ({trim.shares.toFixed(4)} หุ้น — เท่ากำไรที่มี)</span>
+                <span style={{ color: "var(--faint)" }}> ({trim.shares.toFixed(4)})</span>
               </div>
             )}
           </div>
