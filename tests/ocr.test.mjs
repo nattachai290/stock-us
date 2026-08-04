@@ -746,11 +746,15 @@ const TH_STOCK_MORE = {
   // a status line ("จับคู่แล้ว และกำลังคืนเงิน") between its header and price — the Thai
   // counterpart of activity-7's layout. HIMS carries trailing zeros (0.1080000).
   "th-stock-18.jpg": ["03/08/2026 22:00,S,ENPH,0.4383884,39.1060","03/08/2026 19:44,B,PLTR,0.0234671,126.56","03/08/2026 19:44,B,IIPR,0.0508012,58.66","31/07/2026 10:01,B,HIMS,0.1080000,27.50"],
+  // Six Thai-labelled US-stock buys. RXRX holds MORE than one share (1.0034129) where every
+  // other fixture is a fraction, and CELH is priced in USD on a page whose other five rows
+  // are baht — so the batch FX reference has to ignore it rather than average it in.
+  "th-stock-19.jpg": ["23/07/2026 08:30,B,RXRX,1.0034129,2.93","23/07/2026 08:29,B,LMT,0.0053551,549.00","23/07/2026 08:29,B,ISRG,0.0086930,338.20","23/07/2026 08:28,B,FSLR,0.0141652,207.55","23/07/2026 08:28,B,AXON,0.0058848,499.59","21/07/2026 11:57,B,CELH,0.1036287,28.66"],
 };
 // Set only where a fixture genuinely can't be read whole. OXY and V used to land here;
 // both read fine once the invert direction stopped being assumed, so the map is empty.
 const TH_EXP_INC = {};
-const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2, "th-stock-13.jpg":2, "th-stock-14.jpg":2, "th-stock-15.jpg":2, "th-stock-16.jpg":2, "th-stock-17.jpg":2, "th-stock-18.jpg":2 };
+const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":1, "th-stock-6.jpg":2, "th-stock-7.jpg":5, "th-stock-8.jpg":3, "th-stock-9.jpg":2, "th-stock-10.jpg":2, "th-stock-11.jpg":4, "th-stock-12.jpg":2, "th-stock-13.jpg":2, "th-stock-14.jpg":2, "th-stock-15.jpg":2, "th-stock-16.jpg":2, "th-stock-17.jpg":2, "th-stock-18.jpg":2, "th-stock-19.jpg":2 };
 
 // eng+tha main passes + an eng-only rescue pass, using the exact self-hosted data
 // the browser ships (public/tesseract) — mirrors OcrImport.tsx
