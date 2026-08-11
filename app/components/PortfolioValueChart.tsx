@@ -90,8 +90,8 @@ export default function PortfolioValueChart({
   }
   const empty = view.length < 2;
 
-  // S&P 500 benchmark, rebased to the visible range's first portfolio value.
-  const bench = useMemo(() => benchmarkSeries(view, cache), [view, cache]);
+  // S&P 500 benchmark = the same buy/sell cash flows invested into SPY instead.
+  const bench = useMemo(() => benchmarkSeries(view, holdings, cache), [view, holdings, cache]);
   const hasBench = bench.some(v => v != null);
 
   const W = 600, H = 160, P = 6;
@@ -117,12 +117,9 @@ export default function PortfolioValueChart({
 
   const missCount = symbolsMissing.length;
   const endV = view.at(-1)?.v ?? 0;
-  // End-to-end % for portfolio vs benchmark over the visible range (for the legend).
-  const startV = view[0]?.v ?? 0;
-  const pctPort = startV > 0 ? ((endV - startV) / startV) * 100 : null;
-  const benchStart = bench.find(v => v != null) ?? null;
+  // Compare the two end values: how the portfolio did vs the same cash put into S&P 500.
   const benchEnd = [...bench].reverse().find(v => v != null) ?? null;
-  const pctBench = benchStart && benchEnd ? ((benchEnd - benchStart) / benchStart) * 100 : null;
+  const outperf = benchEnd && benchEnd > 0 ? ((endV - benchEnd) / benchEnd) * 100 : null;
   const partialSet = useMemo(() => new Set(view.flatMap(p => p.missing)), [view]);
   const pct = (v: number | null) => (v == null ? "" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
 
@@ -144,12 +141,16 @@ export default function PortfolioValueChart({
             {benchPath && <path d={benchPath} fill="none" stroke="var(--mut)" strokeWidth="1.5" strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />}
             <path d={path} fill="none" stroke="var(--brass)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
           </svg>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10.5, marginTop: 4 }}>
-            <span style={{ color: "var(--mut)" }}>{fmt$(minV)} – {fmt$(maxV)}</span>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10.5, marginTop: 4, flexWrap: "wrap", gap: 6 }}>
             <span style={{ display: "flex", gap: 10 }}>
-              <span style={{ color: "var(--brass)", fontWeight: 700 }}>■ พอต {pct(pctPort)}</span>
-              {hasBench && <span style={{ color: "var(--mut)" }}>┄ S&amp;P 500 {pct(pctBench)}</span>}
+              <span style={{ color: "var(--brass)", fontWeight: 700 }}>■ พอต {fmt$(endV)}</span>
+              {hasBench && benchEnd != null && <span style={{ color: "var(--mut)" }}>┄ S&amp;P 500 {fmt$(benchEnd)}</span>}
             </span>
+            {outperf != null && (
+              <span style={{ color: outperf >= 0 ? "var(--pos, #16a34a)" : "var(--neg, #dc2626)", fontWeight: 700 }}>
+                {outperf >= 0 ? "ชนะ" : "แพ้"} S&amp;P {pct(outperf)}
+              </span>
+            )}
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--faint)", marginTop: 2 }}>
             <span>{fmtD(t0)}</span><span>{fmtD(t1)}</span>
