@@ -1,12 +1,12 @@
 "use client";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  loadPriceHistory, savePriceHistory, neededRanges, isCovered,
-  portfolioValueSeries, benchmarkSeries, BENCHMARK_DEFS, BENCHMARKS, todayStr, type PriceHistory,
+  ensurePrices, portfolioValueSeries, benchmarkSeries, BENCHMARK_DEFS, type PriceHistory,
 } from "../lib/pricehistory";
 
 // มูลค่าพอตย้อนหลัง = ผลรวมของ (จำนวนหุ้นที่ถือ ณ วันนั้น × ราคาปิดวันนั้น) ทุก symbol
-// ราคาปิดดึงครั้งเดียวเก็บบน Drive แชร์ทุกพอต — กดปุ่มเพื่อดึงเฉพาะตัวที่ยังไม่มี
+// ราคาปิด shard ต่อ symbol-year: cache ในเครื่อง (IndexedDB) + ดึงเฉพาะที่ขาด/ปีปัจจุบันผ่าน
+// /api/history (Vercel Blob) — ปีเก่าโหลดครั้งเดียวตลอด
 // days: number = last N days · null = all · "ytd" = since Jan 1 this year
 type RangeVal = number | null | "ytd";
 const RANGES: { label: string; days: RangeVal }[] = [
@@ -26,70 +26,44 @@ const fmt$ = (v: number) => "$" + v.toLocaleString("en", { minimumFractionDigits
 const fmtD = (t: number) => { const d = new Date(t); return `${d.getDate()}/${d.getMonth() + 1}/${String(d.getFullYear()).slice(2)}`; };
 
 export default function PortfolioValueChart({
-  holdings, token, onMsg,
-}: { holdings: any[]; token: string | null; onMsg: (m: string) => void }) {
+  holdings, onMsg,
+}: { holdings: any[]; token?: string | null; onMsg: (m: string) => void }) {
   const [cache, setCache] = useState<PriceHistory>({});
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [days, setDays] = useState<RangeVal>(365);
-  const [diag, setDiag] = useState<string[]>([]); // per-symbol fetch errors (for debugging on Vercel)
+  const [diag, setDiag] = useState<string[]>([]); // per-symbol fetch errors
   const [enabled, setEnabled] = useState<Set<string>>(new Set(["SPY", "QQQ"])); // shown benchmarks
 
-  // On login, pull whatever closes are already on Drive so the chart renders without a fetch.
-  useEffect(() => {
-    if (!token) { setLoaded(false); setCache({}); return; }
-    let alive = true;
-    loadPriceHistory(token)
-      .then(({ data }) => { if (alive) { setCache(data); setLoaded(true); } })
-      .catch(() => { if (alive) setLoaded(true); });
-    return () => { alive = false; };
-  }, [token]);
+  // onMsg is a fresh arrow each parent render; keep it in a ref so `load`'s identity stays
+  // stable and the auto-load effect doesn't loop.
+  const onMsgRef = useRef(onMsg);
+  onMsgRef.current = onMsg;
 
-  const symbolsMissing = useMemo(() => {
-    const ranges = neededRanges(holdings);
-    return ranges.filter(r => !isCovered(cache, r.symbol, r.from));
-  }, [holdings, cache]);
-
-  const fetchMissing = useCallback(async () => {
-    if (!token) { onMsg("กรุณา Login Google ก่อน (ราคาปิดเก็บบน Drive)"); return; }
+  // Load prices for held symbols + enabled benchmarks: instant from IndexedDB, then only
+  // missing/stale shards hit /api/history. `force` re-pulls the current year.
+  const load = useCallback(async (force: boolean) => {
+    if (!(holdings || []).length) { setCache({}); setLoaded(true); return; }
     setBusy(true);
     try {
-      const { fileId, data } = await loadPriceHistory(token);
-      const base = neededRanges(holdings);
-      const ranges = base.filter(r => !isCovered(data, r.symbol, r.from));
-      // Also keep the benchmarks (S&P 500, Nasdaq) covered across the whole history.
-      const earliest = base.map(r => r.from).sort()[0];
-      if (earliest) {
-        for (const bm of BENCHMARKS) {
-          if (!isCovered(data, bm, earliest)) ranges.push({ symbol: bm, from: earliest, to: todayStr() });
-        }
+      const { cache, errors } = await ensurePrices(holdings, [...enabled], force);
+      setCache(cache);
+      setDiag(Object.entries(errors).map(([s, e]) => `${s}: ${e}`));
+      if (force) {
+        const failed = Object.keys(errors).length;
+        onMsgRef.current(failed ? `อัพเดทแล้ว · พลาด ${failed} ตัว — ดูใต้กราฟ` : "อัพเดทราคาปิดแล้ว ✓");
       }
-      if (!ranges.length) { setCache(data); onMsg("ราคาปิดครบแล้ว ✓"); setBusy(false); return; }
-
-      // One request per symbol-range (each symbol may start on a different date).
-      const merged: PriceHistory = { ...data };
-      const errs: string[] = [];
-      let done = 0, failed = 0;
-      for (const r of ranges) {
-        onMsg(`ดึงราคาปิด... (${done + failed + 1}/${ranges.length}) ${r.symbol}`);
-        try {
-          const res = await fetch(`/api/history?symbols=${encodeURIComponent(r.symbol)}&from=${r.from}&to=${r.to}&t=${Date.now()}`, { cache: "no-store" });
-          const j = await res.json();
-          const dm = j.results?.[r.symbol];
-          if (dm && Object.keys(dm).length) { merged[r.symbol] = { ...(merged[r.symbol] || {}), ...dm }; done++; }
-          else { failed++; errs.push(`${r.symbol}: ${j.errors?.[r.symbol] || "no data"}`); }
-        } catch (e: any) { failed++; errs.push(`${r.symbol}: ${e?.message || "fetch failed"}`); }
-        await new Promise(res => setTimeout(res, 150));
-      }
-      if (done > 0) await savePriceHistory(token, fileId, merged);
-      setCache(merged);
-      setDiag(errs);
-      onMsg(failed ? `ดึงแล้ว ${done} · พลาด ${failed} — ดูสาเหตุใต้กราฟ` : `ดึงราคาปิดครบ ${done} ตัว ✓`);
     } catch (e: any) {
-      onMsg("ดึงราคาปิดไม่ได้: " + (e?.message || e));
+      onMsgRef.current("โหลดราคาปิดไม่ได้: " + (e?.message || e));
     }
-    setBusy(false);
-  }, [token, holdings, onMsg]);
+    setBusy(false); setLoaded(true);
+  }, [holdings, enabled]);
+
+  // Auto-load whenever holdings or the enabled benchmarks change (enabling a new index
+  // fetches it automatically).
+  useEffect(() => { load(false); }, [load]);
+
+  const fetchMissing = useCallback(() => load(true), [load]);
 
   const pts = useMemo(() => portfolioValueSeries(holdings, cache).filter(p => p.v > 0), [holdings, cache]);
 
@@ -141,7 +115,6 @@ export default function PortfolioValueChart({
     for (const b of benches) benchPaths.push({ d: line(b.data), color: b.def.color, dash: b.def.dash });
   }
 
-  const missCount = symbolsMissing.length;
   const endV = view.at(-1)?.v ?? 0;
   const partialSet = useMemo(() => new Set(view.flatMap(p => p.missing)), [view]);
   const pct = (v: number | null) => (v == null ? "" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
@@ -156,7 +129,7 @@ export default function PortfolioValueChart({
 
       {empty ? (
         <div style={{ fontSize: 12, color: "var(--mut)", padding: "22px 0", textAlign: "center" }}>
-          {loaded && !Object.keys(cache).length ? "ยังไม่มีราคาปิด — กดปุ่มด้านล่างเพื่อดึง" : "ไม่มีข้อมูลพอในช่วงนี้"}
+          {busy ? "กำลังโหลดราคาปิด..." : loaded && !Object.keys(cache).length ? "ยังไม่มีราคาปิด — กดปุ่มด้านล่างเพื่อโหลด" : "ไม่มีข้อมูลพอในช่วงนี้"}
         </div>
       ) : (
         <>
@@ -223,21 +196,12 @@ export default function PortfolioValueChart({
         })}
       </div>
 
-      {(() => {
-        const need = BENCHMARK_DEFS.filter(d => enabled.has(d.sym) && !(cache[d.sym] && Object.keys(cache[d.sym]).length));
-        return need.length ? (
-          <div style={{ fontSize: 10.5, color: "var(--brass)", marginTop: 6 }}>
-            กด “ดึงราคาปิด” ด้านล่างเพื่อโหลด: {need.map(d => d.label).join(", ")}
-          </div>
-        ) : null;
-      })()}
-
       <button onClick={fetchMissing} disabled={busy}
         style={{
           width: "100%", marginTop: 8, padding: "8px 0", fontSize: 12, borderRadius: 6, cursor: busy ? "default" : "pointer",
           border: "1px solid var(--line)", background: "transparent", color: "var(--mut)", opacity: busy ? 0.6 : 1,
         }}>
-        {busy ? "กำลังดึง..." : missCount > 0 ? `⬇ ดึงราคาปิดย้อนหลัง (${missCount} ตัวใหม่)` : "↻ ดึงราคาปิดเพิ่ม/อัพเดท"}
+        {busy ? "กำลังอัพเดท..." : "↻ อัพเดทราคาปิดล่าสุด"}
       </button>
 
       {partialSet.size > 0 && (
