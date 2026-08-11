@@ -108,79 +108,118 @@ function closeOnOrBefore(days: DayMap | undefined, date: string): number | null 
 export const BENCHMARK_SYMBOL = "SPY"; // S&P 500 proxy (Nasdaq serves the ETF)
 export const todayStr = () => dayStr(Date.now());
 
-// "Same cash into S&P 500" counterfactual, valued at each point's date.
+// "Same money into S&P 500 over the visible window" counterfactual.
 //
-// The portfolio grows mostly by CONTRIBUTIONS, not price, so comparing its raw %
-// gain to the index is apples-to-oranges (a portfolio that starts at one $9 buy and
-// accumulates more buys shows a meaningless +60000%). Instead we replay the exact
-// cash flows — every buy is dollars in, every sell is dollars out — into SPY at that
-// day's close, then value the resulting SPY position on each point's date. Both lines
-// then represent real dollars, so "am I beating the index with my actual buying
-// schedule?" is answered by comparing the two end values.
+// Comparing the portfolio's raw % gain to the index is apples-to-oranges — a portfolio
+// grows mostly by CONTRIBUTIONS, not price. Instead the benchmark line starts at the
+// SAME value as the portfolio at the window's left edge (prior contributions baked into
+// that seed), then applies only the buy/sell cash flows INSIDE the window into SPY. Both
+// lines are real dollars starting equal, so their ending gap is a fair, range-aware
+// "am I beating the S&P over this period?" — and it re-anchors when the range changes.
 export function benchmarkSeries(points: ValuePoint[], holdings: any[], cache: PriceHistory, sym: string = BENCHMARK_SYMBOL): (number | null)[] {
   const days = cache[sym];
   if (!days || !points.length) return points.map(() => null);
+
+  // Seed at the first point that has both a portfolio value and an index close.
+  let i0 = -1, seedClose = 0;
+  for (let i = 0; i < points.length; i++) {
+    const c = closeOnOrBefore(days, dayStr(points[i].t));
+    if (points[i].v > 0 && c != null && c > 0) { i0 = i; seedClose = c; break; }
+  }
+  if (i0 < 0) return points.map(() => null);
+  const startT = points[i0].t;
 
   const flows: { t: number; cash: number; sign: 1 | -1 }[] = [];
   for (const h of holdings || []) {
     for (const b of h.buyHistory || []) {
       const t = Date.parse(b.date), cash = (+b.qty || 0) * (+b.price || 0);
-      if (Number.isFinite(t) && cash > 0) flows.push({ t, cash, sign: 1 });
+      if (Number.isFinite(t) && t > startT && cash > 0) flows.push({ t, cash, sign: 1 });
     }
     for (const s of h.realizedHistory || []) {
       const t = Date.parse(s.date), cash = (+s.qty || 0) * (+s.sellPrice || 0);
-      if (Number.isFinite(t) && cash > 0) flows.push({ t, cash, sign: -1 });
+      if (Number.isFinite(t) && t > startT && cash > 0) flows.push({ t, cash, sign: -1 });
     }
   }
   flows.sort((a, b) => a.t - b.t);
 
-  const out: (number | null)[] = [];
-  let fi = 0, spyShares = 0;
-  for (const p of points) {
-    // Apply every cash flow up to this point's date (including any before the visible
-    // range, so switching ranges never drops earlier contributions).
-    while (fi < flows.length && flows[fi].t <= p.t) {
+  const out: (number | null)[] = points.map(() => null);
+  let fi = 0, spyShares = points[i0].v / seedClose; // seed: bench starts on the portfolio line
+  for (let i = i0; i < points.length; i++) {
+    while (fi < flows.length && flows[fi].t <= points[i].t) {
       const f = flows[fi++];
       const c = closeOnOrBefore(days, dayStr(f.t));
       if (c && c > 0) spyShares += f.sign * (f.cash / c);
     }
-    const c = closeOnOrBefore(days, dayStr(p.t));
-    out.push(c != null ? Math.max(spyShares, 0) * c : null);
+    const c = closeOnOrBefore(days, dayStr(points[i].t));
+    out[i] = c != null ? Math.max(spyShares, 0) * c : null;
   }
   return out;
 }
 
 export type ValuePoint = { t: number; v: number; missing: string[] };
 
-// Portfolio market value at each transaction date (+ today). Each point sums, over every
-// holding, sharesAtDate × close-on-or-before-that-date. Symbols with no cached close for
-// a point are listed in `missing` so the UI can flag partial coverage.
+// Portfolio market value on a DENSE daily grid — one point per trading day the cache
+// carries (union of every held symbol's close dates), from the first transaction to
+// today. A dense line makes short ranges (7/30/90d) meaningful and the curve smooth.
+//
+// Swept in one ascending pass with per-holding pointers (events + close index), so it
+// stays O(days × holdings) instead of re-sorting/scanning inside every cell.
 export function portfolioValueSeries(holdings: any[], cache: PriceHistory): ValuePoint[] {
-  const dateSet = new Set<string>();
-  for (const h of holdings || []) {
-    for (const b of h.buyHistory || []) { const t = Date.parse(b.date); if (Number.isFinite(t)) dateSet.add(dayStr(t)); }
-    for (const s of h.realizedHistory || []) { const t = Date.parse(s.date); if (Number.isFinite(t)) dateSet.add(dayStr(t)); }
-    for (const sp of h.splitHistory || []) { const t = Date.parse(sp.date); if (Number.isFinite(t)) dateSet.add(dayStr(t)); }
+  const hs = holdings || [];
+
+  // Earliest dated transaction — the grid never starts before the portfolio existed.
+  let minT = Infinity;
+  for (const h of hs) {
+    for (const arr of [h.buyHistory, h.realizedHistory, h.splitHistory]) {
+      for (const e of arr || []) { const t = Date.parse(e.date); if (Number.isFinite(t) && t < minT) minT = t; }
+    }
   }
-  const todayStr = dayStr(Date.now());
-  dateSet.add(todayStr);
-  const dates = [...dateSet].sort();
+  if (!Number.isFinite(minT)) return [];
+  const minDay = dayStr(minT);
+  const today = dayStr(Date.now());
+
+  // Grid = union of all cached close dates >= first transaction, plus today.
+  const gridSet = new Set<string>([today]);
+  for (const h of hs) {
+    const dm = cache[h.symbol];
+    if (!dm) continue;
+    for (const d in dm) if (d >= minDay) gridSet.add(d);
+  }
+  const dates = [...gridSet].sort();
+  if (dates.length < 2) return [];
+
+  // Per-holding cursors: sorted events (for share count) and sorted (date,close) pairs.
+  const cursors = hs.map(h => {
+    const events = [
+      ...(h.buyHistory || []).map((b: any) => ({ t: Date.parse(b.date), kind: "buy", qty: +b.qty || 0, target: 0 })),
+      ...(h.realizedHistory || []).map((s: any) => ({ t: Date.parse(s.date), kind: "sell", qty: +s.qty || 0, target: 0 })),
+      ...(h.splitHistory || []).map((sp: any) => ({ t: Date.parse(sp.date), kind: "split", qty: 0, target: parseFloat(sp.ratio) || 0 })),
+    ].filter(e => Number.isFinite(e.t)).sort((a, b) => a.t - b.t);
+    const dm = cache[h.symbol] || {};
+    const closeDates = Object.keys(dm).sort();
+    return { h, events, ei: 0, shares: 0, closeDates, dm, ci: -1, lastClose: null as number | null };
+  });
 
   const points: ValuePoint[] = [];
   for (const d of dates) {
     const t = Date.parse(d + "T00:00:00Z");
-    const isToday = d === todayStr;
+    const isToday = d === today;
     let v = 0;
     const missing: string[] = [];
-    for (const h of holdings || []) {
-      const sh = sharesAtDate(h, t);
-      if (sh <= 0) continue;
-      // Today's point uses the live currentPrice (the weekly close can lag ~a week),
-      // so the chart ends on the same total the rest of the app shows.
-      const live = isToday && h.currentPrice > 0 ? h.currentPrice : null;
-      const close = live ?? closeOnOrBefore(cache[h.symbol], d);
-      if (close == null) { missing.push(h.symbol); continue; }
-      v += sh * close;
+    for (const c of cursors) {
+      while (c.ei < c.events.length && c.events[c.ei].t <= t) {
+        const e = c.events[c.ei++];
+        if (e.kind === "buy") c.shares += e.qty;
+        else if (e.kind === "sell") c.shares -= e.qty;
+        else if (e.target > 0) c.shares = e.target;
+      }
+      if (c.shares <= 0) continue;
+      while (c.ci + 1 < c.closeDates.length && c.closeDates[c.ci + 1] <= d) { c.ci++; c.lastClose = c.dm[c.closeDates[c.ci]]; }
+      // Today uses the live currentPrice so the line ends on the app's shown total.
+      const live = isToday && c.h.currentPrice > 0 ? c.h.currentPrice : null;
+      const close = live ?? c.lastClose;
+      if (close == null) { missing.push(c.h.symbol); continue; }
+      v += Math.max(c.shares, 0) * close;
     }
     points.push({ t, v, missing });
   }

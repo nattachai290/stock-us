@@ -8,6 +8,9 @@ import {
 // มูลค่าพอตย้อนหลัง = ผลรวมของ (จำนวนหุ้นที่ถือ ณ วันนั้น × ราคาปิดวันนั้น) ทุก symbol
 // ราคาปิดดึงครั้งเดียวเก็บบน Drive แชร์ทุกพอต — กดปุ่มเพื่อดึงเฉพาะตัวที่ยังไม่มี
 const RANGES: { label: string; days: number | null }[] = [
+  { label: "7 วัน", days: 7 },
+  { label: "30 วัน", days: 30 },
+  { label: "90 วัน", days: 90 },
   { label: "180 วัน", days: 180 },
   { label: "1 ปี", days: 365 },
   { label: "3 ปี", days: 365 * 3 },
@@ -148,7 +151,7 @@ export default function PortfolioValueChart({
             </span>
             {outperf != null && (
               <span style={{ color: outperf >= 0 ? "var(--pos, #16a34a)" : "var(--neg, #dc2626)", fontWeight: 700 }}>
-                {outperf >= 0 ? "ชนะ" : "แพ้"} S&amp;P {pct(outperf)}
+                {outperf >= 0 ? "ชนะ" : "แพ้"} S&amp;P 500 {pct(outperf)}
               </span>
             )}
           </div>
@@ -158,11 +161,11 @@ export default function PortfolioValueChart({
         </>
       )}
 
-      <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+      <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
         {RANGES.map(r => (
           <button key={r.label} onClick={() => setDays(r.days)}
             style={{
-              flex: 1, padding: "5px 0", fontSize: 11.5, borderRadius: 6, cursor: "pointer",
+              flex: "1 1 auto", minWidth: 52, padding: "5px 8px", fontSize: 11.5, borderRadius: 999, cursor: "pointer",
               border: "1px solid " + (days === r.days ? "var(--brass)" : "var(--line)"),
               background: days === r.days ? "var(--brass)" : "transparent",
               color: days === r.days ? "var(--on-brass)" : "var(--mut)", fontWeight: days === r.days ? 700 : 400,
