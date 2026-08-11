@@ -165,7 +165,7 @@ export default function App() {
     authExpiredRef.current = true;
     trySilentRefresh().then(t => {
       if (t) { msg("🔄 ต่ออายุ Google อัตโนมัติแล้ว ✓"); return; }
-      setToken(null); tokenRef.current = null; setUserEmail(null);
+      setToken(null); tokenRef.current = null; setUserEmail(null); setHoldings([]);
       localStorage.removeItem("gtoken"); localStorage.removeItem("gemail");
       msg("⚠️ Session Google หมดอายุ — ออกให้อัตโนมัติแล้ว กรุณาเชื่อมต่อใหม่", 8000);
     });
@@ -275,7 +275,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    setToken(null); tokenRef.current = null; setUserEmail(null);
+    setToken(null); tokenRef.current = null; setUserEmail(null); setHoldings([]);
     localStorage.removeItem("gtoken"); localStorage.removeItem("gemail");
     msg("ออกจาก Google แล้ว");
   };
@@ -1083,6 +1083,20 @@ export default function App() {
 
       <div className="app-body" style={{maxWidth:1320,margin:"0 auto"}}>
 
+        {!userEmail ? (
+          <div style={{maxWidth:420,margin:"48px auto",textAlign:"center",background:"var(--card)",border:"1px solid var(--line)",borderRadius:"var(--r-lg)",padding:"32px 24px"}}>
+            <div style={{fontSize:40,marginBottom:12}}>🔒</div>
+            <div style={{fontSize:16,fontWeight:800,color:"var(--ink)",marginBottom:6}}>เชื่อมต่อ Google Drive</div>
+            <div style={{fontSize:12.5,color:"var(--mut)",lineHeight:1.6,marginBottom:20}}>
+              ข้อมูลพอร์ตเก็บบน Google Drive ของคุณ<br/>กรุณาเชื่อมต่อเพื่อดูมูลค่าและรายการต่างๆ
+            </div>
+            <button onClick={handleGoogleLogin} disabled={googleLoading}
+              style={{...btn("var(--brass)","var(--on-brass)",{fontSize:13,padding:"10px 20px",opacity:googleLoading?0.6:1})}}>
+              {googleLoading?"กำลังเชื่อมต่อ...":"เชื่อมต่อ Google Drive"}
+            </button>
+          </div>
+        ) : (<>
+
         <AppShell tab={tab} onTabChange={setTab}/>
 
         <div className="content-area">
@@ -1355,6 +1369,7 @@ export default function App() {
         )}
 
         </div>{/* content-area */}
+        </>)}
       </div>{/* app-body */}
 
       {/* EDIT TRANSACTION MODAL */}
