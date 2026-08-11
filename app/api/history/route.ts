@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { list, put } from "@vercel/blob";
 
 // Historical daily CLOSE prices for a set of symbols over a date range.
 // Response: { results: { AAPL: { "2024-01-02": 185.64, ... } }, errors: { SYM: "reason" } }
@@ -190,6 +191,87 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return out;
 }
 
+// ── Vercel Blob shard cache (px/{SYMBOL}/{YEAR}.json) ─────────────────────────
+// Closes for a past year never change, so each (symbol, year) is cached once and shared
+// by every user/device. Past-year shards are immutable (1-year CDN cache); the current
+// year is short-lived and refreshed when its tail goes stale.
+const hasBlob = () => !!process.env.BLOB_READ_WRITE_TOKEN;
+const curYear = () => new Date().getUTCFullYear();
+
+function splitByYear(days: DayMap): Record<string, DayMap> {
+  const out: Record<string, DayMap> = {};
+  for (const d in days) { const y = d.slice(0, 4); (out[y] ||= {})[d] = days[d]; }
+  return out;
+}
+
+async function listShards(sym: string): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  try {
+    const { blobs } = await list({ prefix: `px/${sym}/` });
+    for (const b of blobs) { const m = b.pathname.match(/\/(\d{4})\.json$/); if (m) out[m[1]] = b.url; }
+  } catch {}
+  return out;
+}
+
+async function readShard(url: string): Promise<DayMap> {
+  try { const r = await fetch(url, { cache: "no-store" }); return r.ok ? await r.json() : {}; } catch { return {}; }
+}
+
+async function writeShard(sym: string, year: number, days: DayMap) {
+  try {
+    await put(`px/${sym}/${year}.json`, JSON.stringify(days), {
+      access: "public", addRandomSuffix: false, allowOverwrite: true,
+      contentType: "application/json",
+      cacheControlMaxAge: year < curYear() ? 31536000 : 3600,
+    });
+  } catch {}
+}
+
+// Resolve one symbol over [p1,p2] from Blob shards, filling misses from the providers and
+// persisting new shards. Falls back to direct provider fetch when no Blob store is wired.
+async function resolveSymbol(sym: string, p1: number, p2: number): Promise<SymResult> {
+  if (!hasBlob()) return fetchSymbol(sym, p1, p2);
+
+  const y1 = new Date(p1).getUTCFullYear(), y2 = new Date(p2).getUTCFullYear(), cur = curYear();
+  const shards = await listShards(sym);
+  const result: DayMap = {};
+  const missing: number[] = [];
+
+  for (let y = y1; y <= y2; y++) {
+    if (shards[String(y)]) {
+      const dm = await readShard(shards[String(y)]);
+      Object.assign(result, dm);
+      if (y === cur) { // current-year shard may be stale
+        const last = Object.keys(dm).sort().pop();
+        if (!last || Date.parse(last) < Date.now() - 3 * 86400000) missing.push(y);
+      }
+    } else missing.push(y);
+  }
+
+  if (missing.length) {
+    // Fetch a wide range (earliest-missing → today) so Nasdaq returns DAILY granularity,
+    // then shard by year. Short single-year ranges make Nasdaq return coarse/empty data.
+    const lo = Math.min(...missing);
+    const nas = await fetchSymbol(sym, Date.parse(`${lo}-01-01T00:00:00Z`), Date.now());
+    if (nas.days) {
+      const byYear = splitByYear(nas.days);
+      for (let y = lo; y <= cur; y++) {
+        if (!missing.includes(y) && y !== cur) continue;
+        const dm = byYear[String(y)] || {};
+        if (Object.keys(dm).length || y < cur) await writeShard(sym, y, dm); // empty past = known-no-data
+        if (y >= y1 && y <= y2) Object.assign(result, dm);
+      }
+    } else if (!Object.keys(result).length) {
+      return { symbol: sym, error: nas.error };
+    }
+  }
+
+  const from = new Date(p1).toISOString().slice(0, 10), to = new Date(p2).toISOString().slice(0, 10);
+  const filtered: DayMap = {};
+  for (const d in result) if (d >= from && d <= to) filtered[d] = result[d];
+  return Object.keys(filtered).length ? { symbol: sym, days: filtered } : { symbol: sym, error: "no data" };
+}
+
 export async function GET(request: NextRequest) {
   const q = request.nextUrl.searchParams;
   const symbols = (q.get("symbols") ?? "").split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
@@ -200,12 +282,12 @@ export async function GET(request: NextRequest) {
   const p1 = fromStr ? Date.parse(fromStr + "T00:00:00Z") : Date.now() - 3 * 365 * 86400000;
   const p2 = toStr ? Date.parse(toStr + "T23:59:59Z") : Date.now();
 
-  const settled = await mapLimit(symbols, 4, s => fetchSymbol(s, p1, p2));
+  const settled = await mapLimit(symbols, 4, s => resolveSymbol(s, p1, p2));
   const results: Record<string, DayMap> = {};
   const errors: Record<string, string> = {};
   for (const r of settled) {
     if (r.days) results[r.symbol] = r.days;
     else errors[r.symbol] = r.error || "no data";
   }
-  return Response.json({ results, errors });
+  return Response.json({ results, errors, cached: hasBlob() });
 }

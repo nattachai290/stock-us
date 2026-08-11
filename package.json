@@ -13,6 +13,7 @@
     "test:parity": "node tests/parity-browser.mjs"
   },
   "dependencies": {
+    "@vercel/blob": "^2.8.0",
     "jpeg-js": "^0.4.4",
     "next": "16.2.9",
     "pako": "^1.0.11",
