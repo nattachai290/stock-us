@@ -117,18 +117,23 @@ export function portfolioValueSeries(holdings: any[], cache: PriceHistory): Valu
     for (const s of h.realizedHistory || []) { const t = Date.parse(s.date); if (Number.isFinite(t)) dateSet.add(dayStr(t)); }
     for (const sp of h.splitHistory || []) { const t = Date.parse(sp.date); if (Number.isFinite(t)) dateSet.add(dayStr(t)); }
   }
-  dateSet.add(dayStr(Date.now()));
+  const todayStr = dayStr(Date.now());
+  dateSet.add(todayStr);
   const dates = [...dateSet].sort();
 
   const points: ValuePoint[] = [];
   for (const d of dates) {
     const t = Date.parse(d + "T00:00:00Z");
+    const isToday = d === todayStr;
     let v = 0;
     const missing: string[] = [];
     for (const h of holdings || []) {
       const sh = sharesAtDate(h, t);
       if (sh <= 0) continue;
-      const close = closeOnOrBefore(cache[h.symbol], d);
+      // Today's point uses the live currentPrice (the weekly close can lag ~a week),
+      // so the chart ends on the same total the rest of the app shows.
+      const live = isToday && h.currentPrice > 0 ? h.currentPrice : null;
+      const close = live ?? closeOnOrBefore(cache[h.symbol], d);
       if (close == null) { missing.push(h.symbol); continue; }
       v += sh * close;
     }
