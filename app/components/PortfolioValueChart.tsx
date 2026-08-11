@@ -2,18 +2,23 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   loadPriceHistory, savePriceHistory, neededRanges, isCovered,
-  portfolioValueSeries, benchmarkSeries, BENCHMARK_SYMBOL, todayStr, type PriceHistory,
+  portfolioValueSeries, benchmarkSeries, BENCHMARK_SYMBOL, NASDAQ_SYMBOL, BENCHMARKS, todayStr, type PriceHistory,
 } from "../lib/pricehistory";
 
 // มูลค่าพอตย้อนหลัง = ผลรวมของ (จำนวนหุ้นที่ถือ ณ วันนั้น × ราคาปิดวันนั้น) ทุก symbol
 // ราคาปิดดึงครั้งเดียวเก็บบน Drive แชร์ทุกพอต — กดปุ่มเพื่อดึงเฉพาะตัวที่ยังไม่มี
-const RANGES: { label: string; days: number | null }[] = [
+// days: number = last N days · null = all · "ytd" = since Jan 1 this year
+type RangeVal = number | null | "ytd";
+const RANGES: { label: string; days: RangeVal }[] = [
   { label: "7 วัน", days: 7 },
   { label: "30 วัน", days: 30 },
   { label: "90 วัน", days: 90 },
   { label: "180 วัน", days: 180 },
+  { label: "YTD", days: "ytd" },
   { label: "1 ปี", days: 365 },
   { label: "3 ปี", days: 365 * 3 },
+  { label: "5 ปี", days: 365 * 5 },
+  { label: "10 ปี", days: 365 * 10 },
   { label: "ทั้งหมด", days: null },
 ];
 
@@ -26,7 +31,7 @@ export default function PortfolioValueChart({
   const [cache, setCache] = useState<PriceHistory>({});
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [days, setDays] = useState<number | null>(365);
+  const [days, setDays] = useState<RangeVal>(365);
   const [diag, setDiag] = useState<string[]>([]); // per-symbol fetch errors (for debugging on Vercel)
 
   // On login, pull whatever closes are already on Drive so the chart renders without a fetch.
@@ -51,10 +56,12 @@ export default function PortfolioValueChart({
       const { fileId, data } = await loadPriceHistory(token);
       const base = neededRanges(holdings);
       const ranges = base.filter(r => !isCovered(data, r.symbol, r.from));
-      // Also keep the S&P 500 benchmark covered, spanning the whole portfolio history.
+      // Also keep the benchmarks (S&P 500, Nasdaq) covered across the whole history.
       const earliest = base.map(r => r.from).sort()[0];
-      if (earliest && !isCovered(data, BENCHMARK_SYMBOL, earliest)) {
-        ranges.push({ symbol: BENCHMARK_SYMBOL, from: earliest, to: todayStr() });
+      if (earliest) {
+        for (const bm of BENCHMARKS) {
+          if (!isCovered(data, bm, earliest)) ranges.push({ symbol: bm, from: earliest, to: todayStr() });
+        }
       }
       if (!ranges.length) { setCache(data); onMsg("ราคาปิดครบแล้ว ✓"); setBusy(false); return; }
 
@@ -87,44 +94,57 @@ export default function PortfolioValueChart({
 
   const now = Date.now();
   let view = pts;
-  if (days) {
+  if (days === "ytd") {
+    const jan1 = Date.parse(`${new Date().getFullYear()}-01-01T00:00:00Z`);
+    view = pts.filter(p => p.t >= jan1);
+  } else if (days) {
     const cutoff = now - days * 86400000;
     view = pts.filter(p => p.t >= cutoff);
   }
   const empty = view.length < 2;
 
-  // S&P 500 benchmark = the same buy/sell cash flows invested into SPY instead.
-  const bench = useMemo(() => benchmarkSeries(view, holdings, cache), [view, holdings, cache]);
-  const hasBench = bench.some(v => v != null);
+  // Benchmarks = the same buy/sell cash flows invested into SPY (S&P 500) / QQQ (Nasdaq).
+  const benchSP = useMemo(() => benchmarkSeries(view, holdings, cache, BENCHMARK_SYMBOL), [view, holdings, cache]);
+  const benchND = useMemo(() => benchmarkSeries(view, holdings, cache, NASDAQ_SYMBOL), [view, holdings, cache]);
+  const hasSP = benchSP.some(v => v != null);
+  const hasND = benchND.some(v => v != null);
 
   const W = 600, H = 160, P = 6;
-  let path = "", area = "", benchPath = "", minV = 0, maxV = 0, t0 = 0, t1 = 0;
+  let path = "", area = "", spPath = "", ndPath = "", minV = 0, maxV = 0, t0 = 0, t1 = 0;
   if (!empty) {
     t0 = view[0].t; t1 = view.at(-1)!.t;
-    const vs = view.map(p => p.v);
-    const benchVs = bench.filter((v): v is number => v != null);
-    minV = Math.min(...vs, ...benchVs); maxV = Math.max(...vs, ...benchVs);
+    const nn = (arr: (number | null)[]) => arr.filter((v): v is number => v != null);
+    const all = [...view.map(p => p.v), ...nn(benchSP), ...nn(benchND)];
+    minV = Math.min(...all); maxV = Math.max(...all);
     const x = (t: number) => P + ((t - t0) / (t1 - t0 || 1)) * (W - 2 * P);
     const y = (v: number) => H - P - ((v - minV) / (maxV - minV || 1)) * (H - 2 * P);
     path = `M ${x(view[0].t)} ${y(view[0].v)}`;
     for (let i = 1; i < view.length; i++) path += ` L ${x(view[i].t)} ${y(view[i].v)}`;
     area = `${path} L ${x(view.at(-1)!.t)} ${H - P} L ${x(view[0].t)} ${H - P} Z`;
-    let started = false;
-    for (let i = 0; i < view.length; i++) {
-      const bv = bench[i];
-      if (bv == null) continue;
-      benchPath += `${started ? " L" : "M"} ${x(view[i].t)} ${y(bv)}`;
-      started = true;
-    }
+    const line = (arr: (number | null)[]) => {
+      let s = "", started = false;
+      for (let i = 0; i < view.length; i++) {
+        const bv = arr[i];
+        if (bv == null) continue;
+        s += `${started ? " L" : "M"} ${x(view[i].t)} ${y(bv)}`;
+        started = true;
+      }
+      return s;
+    };
+    spPath = line(benchSP); ndPath = line(benchND);
   }
 
   const missCount = symbolsMissing.length;
   const endV = view.at(-1)?.v ?? 0;
-  // Compare the two end values: how the portfolio did vs the same cash put into S&P 500.
-  const benchEnd = [...bench].reverse().find(v => v != null) ?? null;
-  const outperf = benchEnd && benchEnd > 0 ? ((endV - benchEnd) / benchEnd) * 100 : null;
+  // Compare end values: portfolio vs the same cash put into each index over this window.
+  const lastOf = (arr: (number | null)[]) => [...arr].reverse().find(v => v != null) ?? null;
+  const spEnd = lastOf(benchSP), ndEnd = lastOf(benchND);
+  const outSP = spEnd && spEnd > 0 ? ((endV - spEnd) / spEnd) * 100 : null;
+  const outND = ndEnd && ndEnd > 0 ? ((endV - ndEnd) / ndEnd) * 100 : null;
   const partialSet = useMemo(() => new Set(view.flatMap(p => p.missing)), [view]);
   const pct = (v: number | null) => (v == null ? "" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
+  const winColor = (v: number | null) => (v == null ? "var(--mut)" : v >= 0 ? "var(--pos, #16a34a)" : "var(--neg, #dc2626)");
+  const NASDAQ_COLOR = "#6ea8ff";
 
   return (
     <div style={{ background: "var(--card)", borderRadius: "var(--r-md)", padding: 16, marginBottom: 12, border: "1px solid var(--line)" }}>
@@ -141,20 +161,21 @@ export default function PortfolioValueChart({
         <>
           <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} preserveAspectRatio="none" aria-label="กราฟมูลค่าพอตย้อนหลัง">
             <path d={area} fill="var(--brass)" opacity="0.08" />
-            {benchPath && <path d={benchPath} fill="none" stroke="var(--mut)" strokeWidth="1.5" strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />}
+            {ndPath && <path d={ndPath} fill="none" stroke={NASDAQ_COLOR} strokeWidth="1.5" strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />}
+            {spPath && <path d={spPath} fill="none" stroke="var(--mut)" strokeWidth="1.5" strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />}
             <path d={path} fill="none" stroke="var(--brass)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
           </svg>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10.5, marginTop: 4, flexWrap: "wrap", gap: 6 }}>
-            <span style={{ display: "flex", gap: 10 }}>
-              <span style={{ color: "var(--brass)", fontWeight: 700 }}>■ พอต {fmt$(endV)}</span>
-              {hasBench && benchEnd != null && <span style={{ color: "var(--mut)" }}>┄ S&amp;P 500 {fmt$(benchEnd)}</span>}
-            </span>
-            {outperf != null && (
-              <span style={{ color: outperf >= 0 ? "var(--pos, #16a34a)" : "var(--neg, #dc2626)", fontWeight: 700 }}>
-                {outperf >= 0 ? "ชนะ" : "แพ้"} S&amp;P 500 {pct(outperf)}
-              </span>
-            )}
+          <div style={{ display: "flex", alignItems: "center", fontSize: 10.5, marginTop: 4, flexWrap: "wrap", gap: "3px 12px" }}>
+            <span style={{ color: "var(--brass)", fontWeight: 700 }}>■ พอต {fmt$(endV)}</span>
+            {hasSP && spEnd != null && <span style={{ color: "var(--mut)" }}>┄ S&amp;P 500 {fmt$(spEnd)}</span>}
+            {hasND && ndEnd != null && <span style={{ color: NASDAQ_COLOR }}>┄ Nasdaq {fmt$(ndEnd)}</span>}
           </div>
+          {(outSP != null || outND != null) && (
+            <div style={{ display: "flex", gap: 14, fontSize: 10.5, marginTop: 3, flexWrap: "wrap" }}>
+              {outSP != null && <span style={{ color: winColor(outSP), fontWeight: 700 }}>{outSP >= 0 ? "ชนะ" : "แพ้"} S&amp;P 500 {pct(outSP)}</span>}
+              {outND != null && <span style={{ color: winColor(outND), fontWeight: 700 }}>{outND >= 0 ? "ชนะ" : "แพ้"} Nasdaq {pct(outND)}</span>}
+            </div>
+          )}
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--faint)", marginTop: 2 }}>
             <span>{fmtD(t0)}</span><span>{fmtD(t1)}</span>
           </div>

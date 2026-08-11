@@ -105,7 +105,9 @@ function closeOnOrBefore(days: DayMap | undefined, date: string): number | null 
   return best ? days[best] : null;
 }
 
-export const BENCHMARK_SYMBOL = "SPY"; // S&P 500 proxy (Nasdaq serves the ETF)
+export const BENCHMARK_SYMBOL = "SPY";  // S&P 500 proxy (ETF)
+export const NASDAQ_SYMBOL = "QQQ";     // Nasdaq-100 proxy (ETF)
+export const BENCHMARKS = [BENCHMARK_SYMBOL, NASDAQ_SYMBOL];
 export const todayStr = () => dayStr(Date.now());
 
 // "Same money into S&P 500 over the visible window" counterfactual.
