@@ -24,6 +24,7 @@ export default function PortfolioValueChart({
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [days, setDays] = useState<number | null>(365);
+  const [diag, setDiag] = useState<string[]>([]); // per-symbol fetch errors (for debugging on Vercel)
 
   // On login, pull whatever closes are already on Drive so the chart renders without a fetch.
   useEffect(() => {
@@ -50,6 +51,7 @@ export default function PortfolioValueChart({
 
       // One request per symbol-range (each symbol may start on a different date).
       const merged: PriceHistory = { ...data };
+      const errs: string[] = [];
       let done = 0, failed = 0;
       for (const r of ranges) {
         onMsg(`ดึงราคาปิด... (${done + failed + 1}/${ranges.length}) ${r.symbol}`);
@@ -58,13 +60,14 @@ export default function PortfolioValueChart({
           const j = await res.json();
           const dm = j.results?.[r.symbol];
           if (dm && Object.keys(dm).length) { merged[r.symbol] = { ...(merged[r.symbol] || {}), ...dm }; done++; }
-          else failed++;
-        } catch { failed++; }
+          else { failed++; errs.push(`${r.symbol}: ${j.errors?.[r.symbol] || "no data"}`); }
+        } catch (e: any) { failed++; errs.push(`${r.symbol}: ${e?.message || "fetch failed"}`); }
         await new Promise(res => setTimeout(res, 150));
       }
-      await savePriceHistory(token, fileId, merged);
+      if (done > 0) await savePriceHistory(token, fileId, merged);
       setCache(merged);
-      onMsg(failed ? `ดึงแล้ว ${done} ตัว · พลาด ${failed} ตัว` : `ดึงราคาปิดครบ ${done} ตัว ✓`);
+      setDiag(errs);
+      onMsg(failed ? `ดึงแล้ว ${done} · พลาด ${failed} — ดูสาเหตุใต้กราฟ` : `ดึงราคาปิดครบ ${done} ตัว ✓`);
     } catch (e: any) {
       onMsg("ดึงราคาปิดไม่ได้: " + (e?.message || e));
     }
@@ -149,6 +152,12 @@ export default function PortfolioValueChart({
       {partialSet.size > 0 && (
         <div style={{ fontSize: 10.5, color: "var(--mut)", marginTop: 6 }}>
           ยังไม่มีราคาปิดบางวันของ: {[...partialSet].join(", ")}
+        </div>
+      )}
+
+      {diag.length > 0 && (
+        <div style={{ fontSize: 10, color: "#d08", marginTop: 6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          สาเหตุที่ดึงไม่ได้:{"\n"}{diag.slice(0, 12).join("\n")}{diag.length > 12 ? `\n…อีก ${diag.length - 12} ตัว` : ""}
         </div>
       )}
     </div>
