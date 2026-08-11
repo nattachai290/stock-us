@@ -72,39 +72,68 @@ async function fromStooq(symbol: string, p1: number, p2: number): Promise<SymRes
   return Object.keys(days).length ? { symbol, days } : { symbol, error: "stooq empty" };
 }
 
-// ── CNBC (fallback): time-series chart ────────────────────────────────────────
-async function fromCnbc(symbol: string, p1: number, p2: number): Promise<SymResult> {
-  const years = Math.max(1, Math.ceil((Date.now() - p1) / (365 * 86400000)));
-  const range = years <= 1 ? "1Y" : years <= 2 ? "2Y" : years <= 5 ? "5Y" : "ALL";
-  const url = `https://ts-api.cnbc.com/harmony/app/charts/${range}/${encodeURIComponent(symbol)}.json`;
-  const res = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" }, cache: "no-store" });
-  if (!res.ok) return { symbol, error: `cnbc ${res.status}` };
-  const json = await res.json().catch(() => null);
-  const bars = json?.barData?.priceBars ?? json?.priceBars ?? [];
-  if (!Array.isArray(bars) || !bars.length) return { symbol, error: "cnbc no data" };
+// ── CNBC (reachable from Vercel): time-series chart ───────────────────────────
+// ts-api.cnbc.com answers from datacenter IPs (returns 400 on a bad path rather than
+// refusing the connection), so it's our primary historical source. The harmony chart
+// path shape varies, so try the known variants until one returns priceBars. Items look
+// like { tradeTime:"20240102", tradeTimeinMills:1704...e12, open/high/low/close }.
+function parseCnbcBars(json: any): DayMap {
+  const bars = json?.barData?.priceBars ?? json?.priceBars ?? json?.data?.priceBars ?? [];
   const days: DayMap = {};
+  if (!Array.isArray(bars)) return days;
   for (const b of bars) {
-    const tRaw = b?.tradeTimeinMills ?? b?.tradeTime ?? b?.time;
-    const ms = typeof tRaw === "string" ? Date.parse(tRaw) : Number(tRaw) * (String(tRaw).length <= 10 ? 1000 : 1);
+    let ms = NaN;
+    const mills = b?.tradeTimeinMills;
+    const tt = b?.tradeTime;
+    if (mills != null && Number.isFinite(Number(mills))) ms = Number(mills);
+    else if (typeof tt === "string" && /^\d{8}$/.test(tt)) ms = Date.parse(`${tt.slice(0, 4)}-${tt.slice(4, 6)}-${tt.slice(6, 8)}T00:00:00Z`);
+    else if (tt != null) ms = Date.parse(String(tt));
     const close = parseFloat(b?.close);
     if (Number.isFinite(ms) && Number.isFinite(close)) days[iso(ms)] = Math.round(close * 10000) / 10000;
   }
-  return Object.keys(days).length ? { symbol, days } : { symbol, error: "cnbc empty" };
+  return days;
+}
+
+async function fromCnbc(symbol: string, p1: number, _p2: number): Promise<SymResult> {
+  const years = Math.max(1, Math.ceil((Date.now() - p1) / (365 * 86400000)));
+  const range = years <= 1 ? "1Y" : years <= 2 ? "2Y" : years <= 5 ? "5Y" : "ALL";
+  const sym = encodeURIComponent(symbol);
+  const urls = [
+    `https://ts-api.cnbc.com/harmony/app/charts/${range}.json?symbol=${sym}`,
+    `https://ts-api.cnbc.com/harmony/app/charts/${range}/${sym}.json`,
+    `https://ts-api.cnbc.com/harmony/app/bars/${sym}/1/day/${range}.json`,
+  ];
+  let lastErr = "cnbc no data";
+  for (const url of urls) {
+    const res = await fetch(url, { headers: { "User-Agent": UA, Accept: "application/json" }, cache: "no-store" });
+    if (!res.ok) {
+      const body = (await res.text().catch(() => "")).slice(0, 90).replace(/\s+/g, " ");
+      lastErr = `cnbc ${res.status} ${body}`;
+      continue;
+    }
+    const json = await res.json().catch(() => null);
+    const days = parseCnbcBars(json);
+    if (Object.keys(days).length) return { symbol, days };
+    lastErr = "cnbc empty";
+  }
+  return { symbol, error: lastErr };
 }
 
 async function fetchSymbol(symbol: string, p1: number, p2: number): Promise<SymResult> {
-  const providers = [fromYahoo, fromStooq, fromCnbc];
-  let lastErr = "no data";
+  // CNBC first: it's the one host proven reachable from Vercel. Yahoo/Stooq stay as
+  // fallbacks in case they're reachable in some regions.
+  const providers = [fromCnbc, fromYahoo, fromStooq];
+  const errs: string[] = [];
   for (const p of providers) {
     try {
       const r = await p(symbol, p1, p2);
       if (r.days && Object.keys(r.days).length) return r;
-      lastErr = r.error || lastErr;
+      if (r.error) errs.push(r.error);
     } catch (e: any) {
-      lastErr = e?.message || "fetch failed";
+      errs.push(e?.name === "AbortError" ? "timeout" : (e?.message || "fetch failed"));
     }
   }
-  return { symbol, error: lastErr };
+  return { symbol, error: errs.join(" | ") || "no data" };
 }
 
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
