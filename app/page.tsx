@@ -11,7 +11,6 @@ import DetailSheet from "./components/DetailSheet";
 import AppShell from "./components/AppShell";
 import AiTab from "./components/AiTab";
 import ToolsMenu from "./components/ToolsMenu";
-import InvestedChart from "./components/InvestedChart";
 import PortfolioValueChart from "./components/PortfolioValueChart";
 import ChartsTab from "./components/ChartsTab";
 import HistoryTab from "./components/HistoryTab";
@@ -1110,8 +1109,6 @@ export default function App() {
                 {priceAsOf ? `ราคาเมื่อ ${priceAsOf.toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}` : "ยังไม่เคยอัพเดทราคา — กดปุ่มด้านบน"}
               </div>
             </div>
-
-            <InvestedChart holdings={holdings}/>
 
             <PortfolioValueChart holdings={holdings} token={token} onMsg={(m:string)=>msg(m)}/>
 
