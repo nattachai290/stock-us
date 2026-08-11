@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   loadPriceHistory, savePriceHistory, neededRanges, isCovered,
   portfolioValueSeries, benchmarkSeries, BENCHMARK_DEFS, BENCHMARKS, todayStr, type PriceHistory,
@@ -165,20 +165,25 @@ export default function PortfolioValueChart({
             {benchPaths.map((b, i) => b.d && <path key={i} d={b.d} fill="none" stroke={b.color} strokeWidth="1.5" strokeDasharray={b.dash} vectorEffect="non-scaling-stroke" />)}
             <path d={path} fill="none" stroke="var(--brass)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
           </svg>
-          <div style={{ display: "flex", alignItems: "center", fontSize: 10.5, marginTop: 4, flexWrap: "wrap", gap: "3px 12px" }}>
-            <span style={{ color: "var(--brass)", fontWeight: 700 }}>■ พอต {fmt$(endV)}</span>
-            {benches.map(b => b.end != null && <span key={b.def.sym} style={{ color: b.def.color }}>┄ {b.def.label} {fmt$(b.end)}</span>)}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", alignItems: "center", columnGap: 14, rowGap: 3, fontSize: 11, marginTop: 8 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--ink)", fontWeight: 700 }}>
+              <span style={{ width: 14, height: 3, borderRadius: 2, background: "var(--brass)" }} /> พอต
+            </span>
+            <span style={{ textAlign: "right", fontWeight: 700, color: "var(--ink)" }}>{fmt$(endV)}</span>
+            <span />
+            {benches.map(b => {
+              const o = b.end && b.end > 0 ? ((endV - b.end) / b.end) * 100 : null;
+              return (
+                <Fragment key={b.def.sym}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--mut)" }}>
+                    <span style={{ width: 14, height: 0, borderTop: `2px dashed ${b.def.color}` }} /> {b.def.label}
+                  </span>
+                  <span style={{ textAlign: "right", color: "var(--mut)" }}>{b.end != null ? fmt$(b.end) : "—"}</span>
+                  <span style={{ textAlign: "right", fontWeight: 700, color: winColor(o) }}>{o == null ? "" : `${o >= 0 ? "ชนะ " : "แพ้ "}${pct(o)}`}</span>
+                </Fragment>
+              );
+            })}
           </div>
-          {benches.some(b => b.end && b.end > 0) && (
-            <div style={{ display: "flex", gap: 14, fontSize: 10.5, marginTop: 3, flexWrap: "wrap" }}>
-              {benches.map(b => {
-                const o = b.end && b.end > 0 ? ((endV - b.end) / b.end) * 100 : null;
-                return o == null ? null : (
-                  <span key={b.def.sym} style={{ color: winColor(o), fontWeight: 700 }}>{o >= 0 ? "ชนะ" : "แพ้"} {b.def.label} {pct(o)}</span>
-                );
-              })}
-            </div>
-          )}
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--faint)", marginTop: 2 }}>
             <span>{fmtD(t0)}</span><span>{fmtD(t1)}</span>
           </div>
@@ -217,6 +222,15 @@ export default function PortfolioValueChart({
           );
         })}
       </div>
+
+      {(() => {
+        const need = BENCHMARK_DEFS.filter(d => enabled.has(d.sym) && !(cache[d.sym] && Object.keys(cache[d.sym]).length));
+        return need.length ? (
+          <div style={{ fontSize: 10.5, color: "var(--brass)", marginTop: 6 }}>
+            กด “ดึงราคาปิด” ด้านล่างเพื่อโหลด: {need.map(d => d.label).join(", ")}
+          </div>
+        ) : null;
+      })()}
 
       <button onClick={fetchMissing} disabled={busy}
         style={{
