@@ -108,20 +108,46 @@ function closeOnOrBefore(days: DayMap | undefined, date: string): number | null 
 export const BENCHMARK_SYMBOL = "SPY"; // S&P 500 proxy (Nasdaq serves the ETF)
 export const todayStr = () => dayStr(Date.now());
 
-// Benchmark line aligned to `points`: rebased so it starts at the same value as the
-// first point (growth-of-the-same-money view), then tracks the index's % change.
-// Returns null where no close is available. Rebasing to the visible range's first
-// point means the comparison re-anchors when the user switches the range.
-export function benchmarkSeries(points: ValuePoint[], cache: PriceHistory, sym: string = BENCHMARK_SYMBOL): (number | null)[] {
+// "Same cash into S&P 500" counterfactual, valued at each point's date.
+//
+// The portfolio grows mostly by CONTRIBUTIONS, not price, so comparing its raw %
+// gain to the index is apples-to-oranges (a portfolio that starts at one $9 buy and
+// accumulates more buys shows a meaningless +60000%). Instead we replay the exact
+// cash flows — every buy is dollars in, every sell is dollars out — into SPY at that
+// day's close, then value the resulting SPY position on each point's date. Both lines
+// then represent real dollars, so "am I beating the index with my actual buying
+// schedule?" is answered by comparing the two end values.
+export function benchmarkSeries(points: ValuePoint[], holdings: any[], cache: PriceHistory, sym: string = BENCHMARK_SYMBOL): (number | null)[] {
   const days = cache[sym];
   if (!days || !points.length) return points.map(() => null);
-  const closes = points.map(p => closeOnOrBefore(days, dayStr(p.t)));
-  let base: number | null = null, baseClose: number | null = null;
-  for (let i = 0; i < points.length; i++) {
-    if (points[i].v > 0 && closes[i] != null) { base = points[i].v; baseClose = closes[i]; break; }
+
+  const flows: { t: number; cash: number; sign: 1 | -1 }[] = [];
+  for (const h of holdings || []) {
+    for (const b of h.buyHistory || []) {
+      const t = Date.parse(b.date), cash = (+b.qty || 0) * (+b.price || 0);
+      if (Number.isFinite(t) && cash > 0) flows.push({ t, cash, sign: 1 });
+    }
+    for (const s of h.realizedHistory || []) {
+      const t = Date.parse(s.date), cash = (+s.qty || 0) * (+s.sellPrice || 0);
+      if (Number.isFinite(t) && cash > 0) flows.push({ t, cash, sign: -1 });
+    }
   }
-  if (base == null || baseClose == null) return points.map(() => null);
-  return closes.map(c => (c != null ? base! * (c / baseClose!) : null));
+  flows.sort((a, b) => a.t - b.t);
+
+  const out: (number | null)[] = [];
+  let fi = 0, spyShares = 0;
+  for (const p of points) {
+    // Apply every cash flow up to this point's date (including any before the visible
+    // range, so switching ranges never drops earlier contributions).
+    while (fi < flows.length && flows[fi].t <= p.t) {
+      const f = flows[fi++];
+      const c = closeOnOrBefore(days, dayStr(f.t));
+      if (c && c > 0) spyShares += f.sign * (f.cash / c);
+    }
+    const c = closeOnOrBefore(days, dayStr(p.t));
+    out.push(c != null ? Math.max(spyShares, 0) * c : null);
+  }
+  return out;
 }
 
 export type ValuePoint = { t: number; v: number; missing: string[] };
