@@ -16,7 +16,48 @@ type SymResult = { symbol: string; days?: DayMap; error?: string };
 
 const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 
-// ── Yahoo (primary): crumb-authenticated v8 chart ─────────────────────────────
+// ── Nasdaq (primary): official historical API, works from datacenter IPs ───────
+// GET /api/quote/{SYM}/historical?assetclass=stocks&fromdate=..&todate=..&limit=9999
+// → data.tradesTable.rows[] = { date:"01/02/2024", close:"$185.64", ... }
+// ETFs need assetclass=etf, so try stocks then etf. Nasdaq is picky about headers.
+async function nasdaqTry(symbol: string, assetclass: string, from: string, to: string): Promise<DayMap | null> {
+  const url = `https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/historical?assetclass=${assetclass}&fromdate=${from}&todate=${to}&limit=9999`;
+  const res = await fetch(url, {
+    headers: {
+      "User-Agent": UA,
+      "Accept": "application/json, text/plain, */*",
+      "Accept-Language": "en-US,en;q=0.9",
+      "Origin": "https://www.nasdaq.com",
+      "Referer": "https://www.nasdaq.com/",
+    },
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`nasdaq ${assetclass} ${res.status}`);
+  const json = await res.json().catch(() => null);
+  const rows = json?.data?.tradesTable?.rows;
+  if (!Array.isArray(rows) || !rows.length) return null;
+  const days: DayMap = {};
+  for (const r of rows) {
+    const [mm, dd, yyyy] = String(r?.date || "").split("/");
+    const close = parseFloat(String(r?.close || "").replace(/[$,]/g, ""));
+    if (yyyy && mm && dd && Number.isFinite(close)) days[`${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`] = Math.round(close * 10000) / 10000;
+  }
+  return Object.keys(days).length ? days : null;
+}
+
+async function fromNasdaq(symbol: string, p1: number, p2: number): Promise<SymResult> {
+  const from = iso(p1), to = iso(p2);
+  let lastErr = "nasdaq no data";
+  for (const ac of ["stocks", "etf"]) {
+    try {
+      const days = await nasdaqTry(symbol, ac, from, to);
+      if (days) return { symbol, days };
+    } catch (e: any) { lastErr = e?.message || "nasdaq failed"; }
+  }
+  return { symbol, error: lastErr };
+}
+
+// ── Yahoo (fallback): crumb-authenticated v8 chart ────────────────────────────
 let crumbCache: { crumb: string; cookie: string; expires: number } | null = null;
 
 async function fetchCrumb(): Promise<{ crumb: string; cookie: string } | null> {
@@ -62,7 +103,7 @@ async function fromStooq(symbol: string, p1: number, p2: number): Promise<SymRes
   const csv = await res.text();
   // Header: Date,Open,High,Low,Close,Volume
   const lines = csv.trim().split("\n");
-  if (lines.length < 2 || !/^date,/i.test(lines[0])) return { symbol, error: "stooq no data" };
+  if (lines.length < 2 || !/^date,/i.test(lines[0])) return { symbol, error: `stooq: ${csv.slice(0, 50).replace(/\s+/g, " ")}` };
   const days: DayMap = {};
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split(",");
@@ -120,9 +161,8 @@ async function fromCnbc(symbol: string, p1: number, _p2: number): Promise<SymRes
 }
 
 async function fetchSymbol(symbol: string, p1: number, p2: number): Promise<SymResult> {
-  // CNBC first: it's the one host proven reachable from Vercel. Yahoo/Stooq stay as
-  // fallbacks in case they're reachable in some regions.
-  const providers = [fromCnbc, fromYahoo, fromStooq];
+  // Nasdaq first (official historical API, datacenter-friendly); others as fallback.
+  const providers = [fromNasdaq, fromCnbc, fromYahoo, fromStooq];
   const errs: string[] = [];
   for (const p of providers) {
     try {
