@@ -160,14 +160,19 @@ export default function App() {
   // On Drive 401: try a silent renewal first; only log out if that fails.
   // Guard so the many in-flight Drive calls that all 401 at once trigger this once.
   const authExpiredRef = useRef(false);
+  // Points at handleGoogleLogin (defined later); kept in a ref so the expiry handler can
+  // auto-open the reconnect popup without ordering/dependency issues.
+  const loginRef = useRef<() => void>(() => {});
   const handleAuthExpired = useCallback(() => {
     if (authExpiredRef.current) return;
     authExpiredRef.current = true;
     trySilentRefresh().then(t => {
       if (t) { msg("🔄 ต่ออายุ Google อัตโนมัติแล้ว ✓"); return; }
+      // Silent renewal failed — hide values and auto-open the interactive reconnect popup.
       setToken(null); tokenRef.current = null; setUserEmail(null); setHoldings([]);
       localStorage.removeItem("gtoken"); localStorage.removeItem("gemail");
-      msg("⚠️ Session Google หมดอายุ — ออกให้อัตโนมัติแล้ว กรุณาเชื่อมต่อใหม่", 8000);
+      msg("⚠️ Session Google หมดอายุ — กำลังเปิดหน้าเชื่อมต่อใหม่...", 6000);
+      setTimeout(() => loginRef.current(), 400); // let the popup blocker see it as a fresh action
     });
   }, [trySilentRefresh]);
 
@@ -258,13 +263,14 @@ export default function App() {
           const ports = await listPortfolios(t);
           setPortfolios(ports);
           if (ports.length > 0) {
-            const first = ports[0];
-            const data = applyPriceCache(await loadPortfolio(t, first.id));
-            setHoldings(data); setCurrentPortId(first.id); setCurrentPortName(first.name);
-            localStorage.setItem("currentPortId", first.id);
-            localStorage.setItem("currentPortName", first.name);
-            localStorage.setItem(`holdings-${first.id}`, JSON.stringify(data));
-            msg(`โหลด "${first.name}" แล้ว ${data.length} รายการ ✓`);
+            // On reconnect, reopen the port the user was on (fall back to the first).
+            const target = ports.find(p => p.id === localStorage.getItem("currentPortId")) || ports[0];
+            const data = applyPriceCache(await loadPortfolio(t, target.id));
+            setHoldings(data); setCurrentPortId(target.id); setCurrentPortName(target.name);
+            localStorage.setItem("currentPortId", target.id);
+            localStorage.setItem("currentPortName", target.name);
+            localStorage.setItem(`holdings-${target.id}`, JSON.stringify(data));
+            msg(`โหลด "${target.name}" แล้ว ${data.length} รายการ ✓`);
           } else {
             msg("เชื่อมต่อแล้ว ยังไม่มี port ใน Drive");
           }
@@ -273,6 +279,7 @@ export default function App() {
     };
     client.requestAccessToken();
   };
+  loginRef.current = handleGoogleLogin; // keep the expiry handler's auto-reconnect current
 
   const handleLogout = () => {
     setToken(null); tokenRef.current = null; setUserEmail(null); setHoldings([]);
