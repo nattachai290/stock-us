@@ -1,51 +1,14 @@
-// ── Shared historical-close cache (Drive) + portfolio-value series ────────────
+// ── Historical closes: IndexedDB shard cache + /api/history (Vercel Blob) ──────
 //
-// Closing prices for a past (symbol, date) never change, so they're cached once in a
-// single Drive file shared by EVERY portfolio: switching ports reuses closes already
-// fetched, and only genuinely-missing symbols hit the network. The file lives beside
-// the portfolio-*.json files as `pricehistory.json`.
+// Closes are sharded by (symbol, year). Past-year shards never change → cached forever
+// in IndexedDB, so repeat sessions read them instantly and never re-download. Only the
+// current year (and brand-new symbols) hit /api/history, which itself serves shared
+// shards from Vercel Blob and only calls Nasdaq for genuinely-missing (symbol, year).
+
+import { getShards, putShards } from "./shardstore";
 
 export type DayMap = Record<string, number>;            // "YYYY-MM-DD" -> close
 export type PriceHistory = Record<string, DayMap>;      // symbol -> DayMap
-
-const FILE_NAME = "pricehistory.json";
-
-async function driveReq(url: string, token: string, options: RequestInit = {}) {
-  const res = await fetch(url, { ...options, headers: { Authorization: `Bearer ${token}`, ...(options.headers || {}) } });
-  if (!res.ok) throw new Error(`Drive ${res.status}`);
-  return res;
-}
-
-// Returns { fileId, data } — fileId null when the cache file doesn't exist yet.
-export async function loadPriceHistory(token: string): Promise<{ fileId: string | null; data: PriceHistory }> {
-  const q = encodeURIComponent(`name='${FILE_NAME}' and mimeType='application/json' and trashed=false`);
-  const res = await driveReq(`https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)`, token);
-  const list = await res.json();
-  const file = list.files?.[0];
-  if (!file) return { fileId: null, data: {} };
-  const dl = await driveReq(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, token);
-  const data = await dl.json().catch(() => ({}));
-  return { fileId: file.id, data: data && typeof data === "object" ? data : {} };
-}
-
-export async function savePriceHistory(token: string, fileId: string | null, data: PriceHistory): Promise<string> {
-  const json = JSON.stringify(data);
-  if (fileId) {
-    await driveReq(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, token, {
-      method: "PATCH", headers: { "Content-Type": "application/json" }, body: json,
-    });
-    return fileId;
-  }
-  const meta = JSON.stringify({ name: FILE_NAME, mimeType: "application/json" });
-  const boundary = "pb";
-  const body = `--${boundary}\r\nContent-Type: application/json\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${json}\r\n--${boundary}--`;
-  const res = await driveReq("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", token, {
-    method: "POST", headers: { "Content-Type": `multipart/related; boundary=${boundary}` }, body,
-  });
-  return (await res.json()).id;
-}
-
-// ── local computation ─────────────────────────────────────────────────────────
 
 const dayStr = (t: number) => new Date(t).toISOString().slice(0, 10);
 
@@ -67,42 +30,101 @@ export function sharesAtDate(h: any, t: number): number {
   return Math.max(shares, 0);
 }
 
-// Symbols + date range each one needs closes for: from its first dated transaction to today.
-export function neededRanges(holdings: any[]): { symbol: string; from: string; to: string }[] {
-  const today = dayStr(Date.now());
-  const out: { symbol: string; from: string; to: string }[] = [];
+// First year each symbol needs closes for (its earliest transaction). Benchmarks passed
+// via `extra` inherit the portfolio's global earliest year so they align on the chart.
+function firstYears(holdings: any[], extra: string[]): Record<string, number> {
+  const out: Record<string, number> = {};
   for (const h of holdings || []) {
-    const dates: number[] = [
-      ...(h.buyHistory || []).map((b: any) => Date.parse(b.date)),
-      ...(h.realizedHistory || []).map((s: any) => Date.parse(s.date)),
-      ...(h.splitHistory || []).map((sp: any) => Date.parse(sp.date)),
-    ].filter(Number.isFinite);
-    if (!dates.length || !h.symbol) continue;
-    out.push({ symbol: h.symbol, from: dayStr(Math.min(...dates)), to: today });
+    if (!h.symbol) continue;
+    const dates = [...(h.buyHistory || []), ...(h.realizedHistory || []), ...(h.splitHistory || [])]
+      .map((e: any) => Date.parse(e.date)).filter(Number.isFinite);
+    if (!dates.length) continue;
+    const y = new Date(Math.min(...dates)).getUTCFullYear();
+    out[h.symbol] = Math.min(out[h.symbol] ?? y, y);
   }
+  const globalFirst = Object.values(out).length ? Math.min(...Object.values(out)) : new Date().getUTCFullYear();
+  for (const s of extra) if (s) out[s] = Math.min(out[s] ?? globalFirst, globalFirst);
   return out;
 }
 
-// A symbol is "covered" if the cache has at least one close on/before its first needed
-// date and one within the last ~10 days (so today's tail is present). Cheap heuristic
-// to decide whether to skip a re-fetch.
-export function isCovered(cache: PriceHistory, symbol: string, from: string): boolean {
-  const days = cache[symbol];
-  if (!days) return false;
-  const keys = Object.keys(days).sort();
-  if (!keys.length) return false;
-  const recentEnough = Date.parse(keys[keys.length - 1] + "T00:00:00Z") >= Date.now() - 12 * 86400000;
-  return keys[0] <= from && recentEnough;
+// Load closes for all held symbols + `extra` benchmarks. Reads shards from IndexedDB,
+// fetches only missing past shards + a stale/absent current year via /api/history, stores
+// new shards back, and returns the assembled in-memory cache. `force` re-fetches the
+// current year even if a recent shard is present.
+export async function ensurePrices(
+  holdings: any[], extra: string[] = [], force = false
+): Promise<{ cache: PriceHistory; errors: Record<string, string> }> {
+  const cur = new Date().getUTCFullYear();
+  const firstY = firstYears(holdings, extra);
+  const symbols = Object.keys(firstY);
+  if (!symbols.length) return { cache: {}, errors: {} };
+
+  const keys: string[] = [];
+  for (const s of symbols) for (let y = firstY[s]; y <= cur; y++) keys.push(`${s}:${y}`);
+  const cached = await getShards(keys);
+
+  // Decide the earliest year to fetch per symbol: any missing shard, or a stale/forced current year.
+  const staleDay = dayStr(Date.now() - 4 * 86400000);
+  const fetchFrom: Record<string, number> = {};
+  for (const s of symbols) {
+    let need = Infinity;
+    for (let y = firstY[s]; y <= cur; y++) {
+      const sh = cached[`${s}:${y}`];
+      const staleCur = y === cur && (force || !sh || (Object.keys(sh).sort().pop() || "") < staleDay);
+      if (!sh || staleCur) need = Math.min(need, y);
+    }
+    if (need !== Infinity) fetchFrom[s] = need;
+  }
+
+  // Group by fetch-from year → one /api/history call per group (batched by 25 symbols).
+  const groups: Record<number, string[]> = {};
+  for (const s in fetchFrom) (groups[fetchFrom[s]] ||= []).push(s);
+
+  const errors: Record<string, string> = {};
+  const fetched: Record<string, DayMap> = {};      // "SYM:YEAR" -> DayMap
+  const today = dayStr(Date.now());
+  for (const yStr in groups) {
+    const syms = groups[yStr];
+    for (let i = 0; i < syms.length; i += 25) {
+      const batch = syms.slice(i, i + 25);
+      try {
+        const res = await fetch(`/api/history?symbols=${batch.join(",")}&from=${yStr}-01-01&to=${today}&t=${Date.now()}`, { cache: "no-store" });
+        const j = await res.json();
+        for (const s of batch) {
+          const dm = j.results?.[s];
+          if (dm && Object.keys(dm).length) {
+            for (const d in dm) { const y = d.slice(0, 4); (fetched[`${s}:${y}`] ||= {})[d] = dm[d]; }
+          } else if (j.errors?.[s]) errors[s] = j.errors[s];
+        }
+      } catch (e: any) { for (const s of batch) errors[s] = e?.message || "fetch failed"; }
+    }
+  }
+
+  if (Object.keys(fetched).length) await putShards(fetched);
+
+  const cache: PriceHistory = {};
+  const merge = (src: Record<string, DayMap>) => {
+    for (const k in src) { const s = k.slice(0, k.indexOf(":")); (cache[s] ||= {}); Object.assign(cache[s], src[k]); }
+  };
+  merge(cached); merge(fetched); // fetched (fresh current year) overlays cached
+  return { cache, errors };
 }
 
-// Close for `symbol` on the trading day at/just before `date` (weekends/holidays fall
+// Sorted view of a DayMap for O(log n) lookups. Built once, reused for many queries so
+// the search stays fast no matter how many years the symbol carries.
+type Sorted = { d: string[]; c: number[] };
+function toSorted(days: DayMap | undefined): Sorted {
+  if (!days) return { d: [], c: [] };
+  const d = Object.keys(days).sort();
+  return { d, c: d.map(k => days[k]) };
+}
+// Close on the trading day at/just before `date` (binary search; weekends/holidays fall
 // back to the previous available close).
-function closeOnOrBefore(days: DayMap | undefined, date: string): number | null {
-  if (!days) return null;
-  if (days[date] != null) return days[date];
-  let best: string | null = null;
-  for (const d in days) if (d <= date && (best === null || d > best)) best = d;
-  return best ? days[best] : null;
+function closeAt(s: Sorted, date: string): number | null {
+  const { d, c } = s;
+  let lo = 0, hi = d.length - 1, ans = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (d[m] <= date) { ans = m; lo = m + 1; } else hi = m - 1; }
+  return ans >= 0 ? c[ans] : null;
 }
 
 export const BENCHMARK_SYMBOL = "SPY";  // default index for benchmarkSeries()
@@ -130,11 +152,12 @@ export const BENCHMARKS = BENCHMARK_DEFS.map(b => b.sym);
 export function benchmarkSeries(points: ValuePoint[], holdings: any[], cache: PriceHistory, sym: string = BENCHMARK_SYMBOL): (number | null)[] {
   const days = cache[sym];
   if (!days || !points.length) return points.map(() => null);
+  const sorted = toSorted(days);
 
   // Seed at the first point that has both a portfolio value and an index close.
   let i0 = -1, seedClose = 0;
   for (let i = 0; i < points.length; i++) {
-    const c = closeOnOrBefore(days, dayStr(points[i].t));
+    const c = closeAt(sorted, dayStr(points[i].t));
     if (points[i].v > 0 && c != null && c > 0) { i0 = i; seedClose = c; break; }
   }
   if (i0 < 0) return points.map(() => null);
@@ -158,10 +181,10 @@ export function benchmarkSeries(points: ValuePoint[], holdings: any[], cache: Pr
   for (let i = i0; i < points.length; i++) {
     while (fi < flows.length && flows[fi].t <= points[i].t) {
       const f = flows[fi++];
-      const c = closeOnOrBefore(days, dayStr(f.t));
+      const c = closeAt(sorted, dayStr(f.t));
       if (c && c > 0) spyShares += f.sign * (f.cash / c);
     }
-    const c = closeOnOrBefore(days, dayStr(points[i].t));
+    const c = closeAt(sorted, dayStr(points[i].t));
     out[i] = c != null ? Math.max(spyShares, 0) * c : null;
   }
   return out;
