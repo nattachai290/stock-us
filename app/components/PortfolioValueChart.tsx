@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   loadPriceHistory, savePriceHistory, neededRanges, isCovered,
-  portfolioValueSeries, type PriceHistory,
+  portfolioValueSeries, benchmarkSeries, BENCHMARK_SYMBOL, todayStr, type PriceHistory,
 } from "../lib/pricehistory";
 
 // มูลค่าพอตย้อนหลัง = ผลรวมของ (จำนวนหุ้นที่ถือ ณ วันนั้น × ราคาปิดวันนั้น) ทุก symbol
@@ -46,7 +46,13 @@ export default function PortfolioValueChart({
     setBusy(true);
     try {
       const { fileId, data } = await loadPriceHistory(token);
-      const ranges = neededRanges(holdings).filter(r => !isCovered(data, r.symbol, r.from));
+      const base = neededRanges(holdings);
+      const ranges = base.filter(r => !isCovered(data, r.symbol, r.from));
+      // Also keep the S&P 500 benchmark covered, spanning the whole portfolio history.
+      const earliest = base.map(r => r.from).sort()[0];
+      if (earliest && !isCovered(data, BENCHMARK_SYMBOL, earliest)) {
+        ranges.push({ symbol: BENCHMARK_SYMBOL, from: earliest, to: todayStr() });
+      }
       if (!ranges.length) { setCache(data); onMsg("ราคาปิดครบแล้ว ✓"); setBusy(false); return; }
 
       // One request per symbol-range (each symbol may start on a different date).
@@ -84,22 +90,41 @@ export default function PortfolioValueChart({
   }
   const empty = view.length < 2;
 
+  // S&P 500 benchmark, rebased to the visible range's first portfolio value.
+  const bench = useMemo(() => benchmarkSeries(view, cache), [view, cache]);
+  const hasBench = bench.some(v => v != null);
+
   const W = 600, H = 160, P = 6;
-  let path = "", area = "", minV = 0, maxV = 0, t0 = 0, t1 = 0;
+  let path = "", area = "", benchPath = "", minV = 0, maxV = 0, t0 = 0, t1 = 0;
   if (!empty) {
     t0 = view[0].t; t1 = view.at(-1)!.t;
     const vs = view.map(p => p.v);
-    minV = Math.min(...vs); maxV = Math.max(...vs);
+    const benchVs = bench.filter((v): v is number => v != null);
+    minV = Math.min(...vs, ...benchVs); maxV = Math.max(...vs, ...benchVs);
     const x = (t: number) => P + ((t - t0) / (t1 - t0 || 1)) * (W - 2 * P);
     const y = (v: number) => H - P - ((v - minV) / (maxV - minV || 1)) * (H - 2 * P);
     path = `M ${x(view[0].t)} ${y(view[0].v)}`;
     for (let i = 1; i < view.length; i++) path += ` L ${x(view[i].t)} ${y(view[i].v)}`;
     area = `${path} L ${x(view.at(-1)!.t)} ${H - P} L ${x(view[0].t)} ${H - P} Z`;
+    let started = false;
+    for (let i = 0; i < view.length; i++) {
+      const bv = bench[i];
+      if (bv == null) continue;
+      benchPath += `${started ? " L" : "M"} ${x(view[i].t)} ${y(bv)}`;
+      started = true;
+    }
   }
 
   const missCount = symbolsMissing.length;
   const endV = view.at(-1)?.v ?? 0;
+  // End-to-end % for portfolio vs benchmark over the visible range (for the legend).
+  const startV = view[0]?.v ?? 0;
+  const pctPort = startV > 0 ? ((endV - startV) / startV) * 100 : null;
+  const benchStart = bench.find(v => v != null) ?? null;
+  const benchEnd = [...bench].reverse().find(v => v != null) ?? null;
+  const pctBench = benchStart && benchEnd ? ((benchEnd - benchStart) / benchStart) * 100 : null;
   const partialSet = useMemo(() => new Set(view.flatMap(p => p.missing)), [view]);
+  const pct = (v: number | null) => (v == null ? "" : `${v >= 0 ? "+" : ""}${v.toFixed(1)}%`);
 
   return (
     <div style={{ background: "var(--card)", borderRadius: "var(--r-md)", padding: 16, marginBottom: 12, border: "1px solid var(--line)" }}>
@@ -116,10 +141,15 @@ export default function PortfolioValueChart({
         <>
           <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} preserveAspectRatio="none" aria-label="กราฟมูลค่าพอตย้อนหลัง">
             <path d={area} fill="var(--brass)" opacity="0.08" />
+            {benchPath && <path d={benchPath} fill="none" stroke="var(--mut)" strokeWidth="1.5" strokeDasharray="4 3" vectorEffect="non-scaling-stroke" />}
             <path d={path} fill="none" stroke="var(--brass)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
           </svg>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--mut)", marginTop: 2 }}>
-            <span>{fmt$(minV)} – {fmt$(maxV)}</span>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 10.5, marginTop: 4 }}>
+            <span style={{ color: "var(--mut)" }}>{fmt$(minV)} – {fmt$(maxV)}</span>
+            <span style={{ display: "flex", gap: 10 }}>
+              <span style={{ color: "var(--brass)", fontWeight: 700 }}>■ พอต {pct(pctPort)}</span>
+              {hasBench && <span style={{ color: "var(--mut)" }}>┄ S&amp;P 500 {pct(pctBench)}</span>}
+            </span>
           </div>
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--faint)", marginTop: 2 }}>
             <span>{fmtD(t0)}</span><span>{fmtD(t1)}</span>

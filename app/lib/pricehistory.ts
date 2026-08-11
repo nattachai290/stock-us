@@ -105,6 +105,25 @@ function closeOnOrBefore(days: DayMap | undefined, date: string): number | null 
   return best ? days[best] : null;
 }
 
+export const BENCHMARK_SYMBOL = "SPY"; // S&P 500 proxy (Nasdaq serves the ETF)
+export const todayStr = () => dayStr(Date.now());
+
+// Benchmark line aligned to `points`: rebased so it starts at the same value as the
+// first point (growth-of-the-same-money view), then tracks the index's % change.
+// Returns null where no close is available. Rebasing to the visible range's first
+// point means the comparison re-anchors when the user switches the range.
+export function benchmarkSeries(points: ValuePoint[], cache: PriceHistory, sym: string = BENCHMARK_SYMBOL): (number | null)[] {
+  const days = cache[sym];
+  if (!days || !points.length) return points.map(() => null);
+  const closes = points.map(p => closeOnOrBefore(days, dayStr(p.t)));
+  let base: number | null = null, baseClose: number | null = null;
+  for (let i = 0; i < points.length; i++) {
+    if (points[i].v > 0 && closes[i] != null) { base = points[i].v; baseClose = closes[i]; break; }
+  }
+  if (base == null || baseClose == null) return points.map(() => null);
+  return closes.map(c => (c != null ? base! * (c / baseClose!) : null));
+}
+
 export type ValuePoint = { t: number; v: number; missing: string[] };
 
 // Portfolio market value at each transaction date (+ today). Each point sums, over every
