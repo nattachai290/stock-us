@@ -83,22 +83,33 @@ export async function ensurePrices(
   const errors: Record<string, string> = {};
   const fetched: Record<string, DayMap> = {};      // "SYM:YEAR" -> DayMap
   const today = dayStr(Date.now());
+
+  // Build one request per (fetch-from-year, batch of ≤15 symbols) then run them in
+  // parallel (bounded) so many holdings don't load one batch at a time.
+  const reqs: { from: string; syms: string[] }[] = [];
   for (const yStr in groups) {
     const syms = groups[yStr];
-    for (let i = 0; i < syms.length; i += 25) {
-      const batch = syms.slice(i, i + 25);
-      try {
-        const res = await fetch(`/api/history?symbols=${batch.join(",")}&from=${yStr}-01-01&to=${today}&t=${Date.now()}`, { cache: "no-store" });
-        const j = await res.json();
-        for (const s of batch) {
-          const dm = j.results?.[s];
-          if (dm && Object.keys(dm).length) {
-            for (const d in dm) { const y = d.slice(0, 4); (fetched[`${s}:${y}`] ||= {})[d] = dm[d]; }
-          } else if (j.errors?.[s]) errors[s] = j.errors[s];
-        }
-      } catch (e: any) { for (const s of batch) errors[s] = e?.message || "fetch failed"; }
-    }
+    for (let i = 0; i < syms.length; i += 15) reqs.push({ from: `${yStr}-01-01`, syms: syms.slice(i, i + 15) });
   }
+
+  const runReq = async (req: { from: string; syms: string[] }) => {
+    try {
+      const res = await fetch(`/api/history?symbols=${req.syms.join(",")}&from=${req.from}&to=${today}&t=${Date.now()}`, { cache: "no-store" });
+      const j = await res.json();
+      for (const s of req.syms) {
+        const dm = j.results?.[s];
+        if (dm && Object.keys(dm).length) {
+          for (const d in dm) { const y = d.slice(0, 4); (fetched[`${s}:${y}`] ||= {})[d] = dm[d]; }
+        } else if (j.errors?.[s]) errors[s] = j.errors[s];
+      }
+    } catch (e: any) { for (const s of req.syms) errors[s] = e?.message || "fetch failed"; }
+  };
+
+  // Bounded parallelism: up to 6 requests in flight at once.
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(6, reqs.length) }, async () => {
+    while (next < reqs.length) { const i = next++; await runReq(reqs[i]); }
+  }));
 
   if (Object.keys(fetched).length) await putShards(fetched);
 
