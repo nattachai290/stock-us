@@ -1014,45 +1014,72 @@ export default function App() {
       </div>
 
       {/* Portfolio Selector */}
-      {userEmail && (
-        <div style={{background:"var(--card)",borderBottom:"1px solid var(--line)",padding:"8px 20px",display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <span style={{fontSize:12,color:"var(--faint)"}}>Port:</span>
-          {portfolios.map(p=>(
-            <div key={p.id} style={{display:"flex",alignItems:"center",gap:4}}>
-              {renamePortId===p.id ? (
-                <>
+      {userEmail && (() => {
+        const roundBtn = (extra: any = {}) => ({ display:"grid", placeItems:"center", width:24, height:24, borderRadius:999, border:"none", cursor:"pointer", fontSize:11, lineHeight:1, ...extra });
+        return (
+        <div style={{background:"var(--card)",borderBottom:"1px solid var(--line)",padding:"10px 20px",display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+          <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.12em",textTransform:"uppercase",color:"var(--faint)"}}>พอร์ต</span>
+
+          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            {portfolios.map(p=>{
+              const active = currentPortId===p.id;
+              if (renamePortId===p.id) return (
+                <div key={p.id} style={{display:"flex",gap:4,alignItems:"center"}}>
                   <input autoFocus value={renameText} onChange={e=>setRenameText(e.target.value)}
                     onKeyDown={e=>{ if(e.key==="Enter") renamePort(p.id); if(e.key==="Escape") setRenamePortId(null); }}
-                    style={{background:"var(--bg)",border:"1px solid var(--brass)",borderRadius:4,color:"var(--ink)",fontSize:12,padding:"4px 8px",width:120}}/>
-                  <button onClick={()=>renamePort(p.id)} style={btn("var(--brass)","var(--on-brass)",{fontSize:12,padding:"4px 8px"})}>✓</button>
-                  <button onClick={()=>setRenamePortId(null)} style={{background:"none",border:"none",color:"var(--faint)",cursor:"pointer",fontSize:12}}>✕</button>
-                </>
-              ) : (
-                <>
-                  <button onClick={()=>switchPort(p.id,p.name)}
-                    style={btn(currentPortId===p.id?"var(--brass)":"var(--card2)", currentPortId===p.id?"var(--on-brass)":"var(--mut)",{fontSize:12,padding:"4px 10px"})}>
+                    style={{background:"var(--bg)",border:"1px solid var(--brass)",borderRadius:999,color:"var(--ink)",fontSize:12.5,padding:"6px 12px",width:130,outline:"none"}}/>
+                  <button onClick={()=>renamePort(p.id)} title="บันทึก" style={roundBtn({background:"var(--brass)",color:"var(--on-brass)",width:28,height:28,fontSize:13})}>✓</button>
+                  <button onClick={()=>setRenamePortId(null)} title="ยกเลิก" style={roundBtn({background:"var(--card2)",color:"var(--mut)",width:28,height:28})}>✕</button>
+                </div>
+              );
+              return (
+                <div key={p.id} style={{
+                  display:"flex",alignItems:"center",borderRadius:999,
+                  background: active?"var(--brass)":"var(--card2)",
+                  border:"1px solid "+(active?"var(--brass)":"var(--line)"),
+                  boxShadow: active?"var(--shadow)":"none",
+                  padding: active?"3px 5px 3px 4px":"0",
+                  transition:"background 0.15s",
+                }}>
+                  <button onClick={()=>switchPort(p.id,p.name)} title={active?p.name:"สลับไปพอร์ตนี้"}
+                    style={{background:"none",border:"none",cursor:"pointer",fontSize:12.5,fontWeight: active?700:600,
+                      color: active?"var(--on-brass)":"var(--mut)", padding: active?"3px 6px 3px 10px":"6px 14px"}}>
                     {p.name}
                   </button>
-                  <button onClick={()=>{setRenamePortId(p.id);setRenameText(p.name);}} title="เปลี่ยนชื่อ" style={{background:"none",border:"none",color:"var(--faint)",cursor:"pointer",fontSize:12}}>✎</button>
-                  {portfolios.length > 1 && <button onClick={()=>deletePort(p.id,p.name)} title="ลบ" style={{background:"none",border:"none",color:"var(--faint)",cursor:"pointer",fontSize:12}}>✕</button>}
-                </>
-              )}
-            </div>
-          ))}
-          {showNewPort ? (
-            <div style={{display:"flex",gap:6,alignItems:"center"}}>
-              <input value={newPortName} onChange={e=>setNewPortName(e.target.value)} placeholder="ชื่อ port" onKeyDown={e=>e.key==="Enter"&&createPort()}
-                style={{background:"var(--bg)",border:"1px solid var(--line)",borderRadius:4,color:"var(--ink)",fontSize:12,padding:"4px 8px",width:120}}/>
-              <button onClick={createPort} style={btn("var(--brass)","var(--on-brass)",{fontSize:12,padding:"4px 10px"})}>สร้าง</button>
-              <button onClick={()=>setShowNewPort(false)} style={btn("var(--line)","var(--mut)",{fontSize:12,padding:"4px 8px"})}>ยกเลิก</button>
-            </div>
-          ) : (
-            <button onClick={()=>setShowNewPort(true)} style={btn("var(--card2)","var(--faint)",{fontSize:12,padding:"4px 10px"})}>+ สร้าง Port ใหม่</button>
-          )}
+                  {active && (
+                    <>
+                      <button onClick={()=>{setRenamePortId(p.id);setRenameText(p.name);}} title="เปลี่ยนชื่อ"
+                        style={roundBtn({background:"rgba(0,0,0,0.16)",color:"var(--on-brass)"})}>✎</button>
+                      {portfolios.length>1 && (
+                        <button onClick={()=>deletePort(p.id,p.name)} title="ลบพอร์ต"
+                          style={roundBtn({background:"rgba(0,0,0,0.16)",color:"var(--on-brass)",marginLeft:3})}>✕</button>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+
+            {showNewPort ? (
+              <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                <input autoFocus value={newPortName} onChange={e=>setNewPortName(e.target.value)} placeholder="ชื่อพอร์ต" onKeyDown={e=>{ if(e.key==="Enter") createPort(); if(e.key==="Escape") setShowNewPort(false); }}
+                  style={{background:"var(--bg)",border:"1px solid var(--line)",borderRadius:999,color:"var(--ink)",fontSize:12.5,padding:"6px 12px",width:130,outline:"none"}}/>
+                <button onClick={createPort} title="สร้าง" style={roundBtn({background:"var(--brass)",color:"var(--on-brass)",width:28,height:28,fontSize:13})}>✓</button>
+                <button onClick={()=>setShowNewPort(false)} title="ยกเลิก" style={roundBtn({background:"var(--card2)",color:"var(--mut)",width:28,height:28})}>✕</button>
+              </div>
+            ) : (
+              <button onClick={()=>setShowNewPort(true)}
+                style={{display:"flex",alignItems:"center",gap:5,background:"none",border:"1px dashed var(--line)",borderRadius:999,color:"var(--faint)",cursor:"pointer",fontSize:12.5,fontWeight:600,padding:"6px 14px"}}>
+                <span style={{fontSize:14,lineHeight:1}}>+</span> พอร์ตใหม่
+              </button>
+            )}
+          </div>
+
           <button onClick={()=>{ if(token){ msg("กำลังรีเฟรช...",0); listPortfolios(token).then(ps=>{setPortfolios(ps);msg("รีเฟรชแล้ว ✓");}).catch((e:any)=>msg("รีเฟรชไม่ได้: "+e.message)); } }}
-            style={{background:"none",border:"none",cursor:"pointer",fontSize:13,color:"var(--faint)",padding:"4px 6px"}} title="รีเฟรชรายการ Port">🔄</button>
+            style={roundBtn({background:"var(--card2)",color:"var(--faint)",width:30,height:30,fontSize:14,marginLeft:"auto"})} title="รีเฟรชรายการพอร์ต">↻</button>
         </div>
-      )}
+        );
+      })()}
 
       <div className="app-body" style={{maxWidth:1320,margin:"0 auto"}}>
 
