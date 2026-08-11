@@ -47,12 +47,17 @@ async function nasdaqTry(symbol: string, assetclass: string, from: string, to: s
 
 async function fromNasdaq(symbol: string, p1: number, p2: number): Promise<SymResult> {
   const from = iso(p1), to = iso(p2);
+  // Class shares: Nasdaq writes BRK-B as BRK.B in its API path. Try the app's dash form
+  // first, then the dotted form. ETFs need assetclass=etf, so try stocks then etf.
+  const symVariants = symbol.includes("-") ? [symbol, symbol.replace(/-/g, ".")] : [symbol];
   let lastErr = "nasdaq no data";
-  for (const ac of ["stocks", "etf"]) {
-    try {
-      const days = await nasdaqTry(symbol, ac, from, to);
-      if (days) return { symbol, days };
-    } catch (e: any) { lastErr = e?.message || "nasdaq failed"; }
+  for (const sym of symVariants) {
+    for (const ac of ["stocks", "etf"]) {
+      try {
+        const days = await nasdaqTry(sym, ac, from, to);
+        if (days) return { symbol, days };
+      } catch (e: any) { lastErr = e?.message || "nasdaq failed"; }
+    }
   }
   return { symbol, error: lastErr };
 }
