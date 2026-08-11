@@ -1303,7 +1303,7 @@ export default function App() {
                             {target>0&&<div style={{background:"var(--line)",borderRadius:3,height:4,overflow:"hidden"}}><div style={{width:`${Math.min(barPct,100)}%`,height:"100%",background:barColor,borderRadius:3}}/></div>}
                             {over>0&&<div style={{fontSize:10,color:"var(--loss)",marginTop:1}}>เกิน +${overAmt.toFixed(2)}</div>}
                             {/* Same helper the cards, the detail sheet and the แนะนำขาย filter use */}
-                            {(()=>{const t=trimSuggestion(h,tv);return t.amount>0?<div style={{fontSize:10,color:"var(--loss)",marginTop:1,fontWeight:600}}>ขายได้ ${t.amount.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})} <span style={{color:"var(--faint)",fontWeight:400}}>({t.shares.toFixed(4)})</span></div>:null;})()}
+                            {(()=>{const t=trimSuggestion(h,tv);return t.amount>0?<div style={{fontSize:10,color:"var(--loss)",marginTop:1,fontWeight:600}}>ขาย {t.shares.toFixed(4)} หุ้น <span style={{color:"var(--faint)",fontWeight:400}}>· เก็บกำไร +${t.amount.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>:null;})()}
                             {underNeed>0&&<div style={{fontSize:10,color:"var(--gain)",marginTop:1}}>ซื้อเพิ่ม ~${underNeed.toLocaleString("en",{maximumFractionDigits:2})} ถึงเป้า</div>}
                           </td>
                           <td style={{padding:"8px 4px",textAlign:"center",whiteSpace:"nowrap"}}>

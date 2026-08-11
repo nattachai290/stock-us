@@ -24,7 +24,7 @@ export default function HoldingsList({ holdings, tv, pc, onSelect }: {
         // table, so a position reads the same wherever it's shown. The bar caps at 100%,
         // so "full + red" = over target and "full + green" = exactly at target.
         const barColor = target > 0 && w > target ? "var(--loss)" : "var(--gain)";
-        const { amount: trimAmt } = trimSuggestion(h, tv);
+        const trim = trimSuggestion(h, tv);
 
         return (
           <div key={h.id} onClick={() => onSelect(h.id)}
@@ -52,9 +52,9 @@ export default function HoldingsList({ holdings, tv, pc, onSelect }: {
               </div>
             </div>
 
-            {trimAmt > 0 && (
+            {trim.amount > 0 && (
               <div style={{ fontSize: 10.5, color: "var(--loss)", marginTop: 4 }}>
-                ขายได้ ${trimAmt.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                ขาย {trim.shares.toFixed(4)} หุ้น · เก็บกำไร +${trim.amount.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </div>
             )}
 
