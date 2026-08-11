@@ -105,10 +105,19 @@ function closeOnOrBefore(days: DayMap | undefined, date: string): number | null 
   return best ? days[best] : null;
 }
 
-export const BENCHMARK_SYMBOL = "SPY";  // S&P 500 proxy (ETF)
-export const NASDAQ_SYMBOL = "QQQ";     // Nasdaq-100 proxy (ETF)
-export const BENCHMARKS = [BENCHMARK_SYMBOL, NASDAQ_SYMBOL];
+export const BENCHMARK_SYMBOL = "SPY";  // default index for benchmarkSeries()
 export const todayStr = () => dayStr(Date.now());
+
+// Selectable index benchmarks (each an ETF Nasdaq's historical API serves). `color`
+// is the chart line + chip colour; `dash` its stroke pattern.
+export type BenchDef = { sym: string; label: string; color: string; dash: string };
+export const BENCHMARK_DEFS: BenchDef[] = [
+  { sym: "SPY", label: "S&P 500", color: "#8b93a7", dash: "4 3" },
+  { sym: "QQQ", label: "Nasdaq", color: "#6ea8ff", dash: "2 3" },
+  { sym: "DIA", label: "Dow Jones", color: "#c79cff", dash: "6 3" },
+  { sym: "IWM", label: "Russell 2000", color: "#5fd08a", dash: "1 3" },
+];
+export const BENCHMARKS = BENCHMARK_DEFS.map(b => b.sym);
 
 // "Same money into S&P 500 over the visible window" counterfactual.
 //
