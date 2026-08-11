@@ -12,6 +12,7 @@ import AppShell from "./components/AppShell";
 import AiTab from "./components/AiTab";
 import ToolsMenu from "./components/ToolsMenu";
 import InvestedChart from "./components/InvestedChart";
+import PortfolioValueChart from "./components/PortfolioValueChart";
 import ChartsTab from "./components/ChartsTab";
 import HistoryTab from "./components/HistoryTab";
 
@@ -1111,6 +1112,8 @@ export default function App() {
             </div>
 
             <InvestedChart holdings={holdings}/>
+
+            <PortfolioValueChart holdings={holdings} token={token} onMsg={(m:string)=>msg(m)}/>
 
             {!userEmail&&(
               <div style={{background:"var(--card)",border:"1px solid var(--brass)",borderRadius:8,padding:"10px 14px",marginBottom:12,fontSize:12,color:"var(--brass)"}}>
