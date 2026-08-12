@@ -1,18 +1,20 @@
 "use client";
-import { IconClipboard, IconZap, IconPencil, IconLightbulb, IconPaste, IconGrid } from "./icons";
+import { IconClipboard, IconZap, IconTarget, IconPencil, IconLightbulb, IconPaste, IconGrid } from "./icons";
 import { btn } from "../lib/ui";
 
-// AI hub tab (§5.8) — five prompt-generator cards. Every card just calls the
+// AI hub tab (§5.8) — six prompt-generator cards. Every card just calls the
 // same copy*() functions the old sidebar buttons called; no prompt text here.
 export default function AiTab({
-  hasHoldings, moversCount,
-  onAnalyze, onMovers, onAllocation, onNewIdeas,
+  hasHoldings, moversCount, underCount,
+  onAnalyze, onMovers, onBuyDecision, onAllocation, onNewIdeas,
   showAllocImport, onTogglePasteTarget, allocText, setAllocText, onApplyAllocation, onCancelPasteTarget,
 }: {
   hasHoldings: boolean;
   moversCount: number;
+  underCount: number;
   onAnalyze: () => void;
   onMovers: () => void;
+  onBuyDecision: () => void;
   onAllocation: () => void;
   onNewIdeas: () => void;
   showAllocImport: boolean;
@@ -25,6 +27,7 @@ export default function AiTab({
   const cards = [
     { Icon: IconClipboard, title: "วิเคราะห์พอร์ต", desc: "ภาพรวม + หาตัวที่ควรขายจริงๆ ตามพื้นฐาน", onClick: onAnalyze, disabled: !hasHoldings },
     { Icon: IconZap, title: "ตัวผิดปกติวันนี้", desc: "หุ้นขยับ ±3% — ค้นข่าวแล้ววิเคราะห์ว่าพื้นฐานเปลี่ยนไหม", onClick: onMovers, disabled: moversCount === 0, badge: moversCount },
+    { Icon: IconTarget, title: "ยังไม่ถึงเป้า — ซื้อตอนนี้ไหม", desc: "ตัวที่น้ำหนักต่ำกว่าเป้า → ให้ Claude ตัดสินว่าซื้อเลย/ทยอย/รอ + ลำดับก่อนหลัง", onClick: onBuyDecision, disabled: underCount === 0, badge: underCount },
     { Icon: IconPencil, title: "จัดทัพพอร์ต", desc: "แม่ทัพ / รองแม่ทัพ / ทหารเสริม → ได้ตาราง % พร้อมวางกลับ", onClick: onAllocation, disabled: !hasHoldings, highlight: true },
     { Icon: IconLightbulb, title: "แนะนำหุ้นใหม่", desc: "หาหุ้นพื้นฐานดีที่ยังไม่มีในพอร์ต 3–5 ตัว", onClick: onNewIdeas, disabled: !hasHoldings },
     { Icon: IconPaste, title: "วางผลจัดทัพ (Target %)", desc: "แปะตารางจาก Claude — ระบบตรวจรวม 100% ให้อัตโนมัติ", onClick: onTogglePasteTarget, disabled: !hasHoldings },

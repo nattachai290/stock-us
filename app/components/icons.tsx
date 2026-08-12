@@ -59,6 +59,10 @@ export const IconClipboard = ({ size = 16 }: { size?: number }) => (
   <svg {...base} width={size} height={size}><rect x="6" y="4" width="12" height="17" rx="1.5"/><path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/><path d="M9 11h6M9 15h6"/></svg>
 );
 
+export const IconTarget = ({ size = 16 }: { size?: number }) => (
+  <svg {...base} width={size} height={size}><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12h.01"/></svg>
+);
+
 export const IconArrowDown = ({ size = 16 }: { size?: number }) => (
   <svg {...base} width={size} height={size}><path d="M12 5v14m0 0-5-5m5 5 5-5"/></svg>
 );
