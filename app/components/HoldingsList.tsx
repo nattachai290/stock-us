@@ -1,5 +1,5 @@
 "use client";
-import { trimSuggestion } from "../lib/portfolio";
+import { trimSuggestion, addSuggestion } from "../lib/portfolio";
 
 // Mobile card list for the portfolio tab (§5.3). Presentational only — all the
 // numbers here are the same per-row math the old table already computed; this
@@ -10,6 +10,12 @@ export default function HoldingsList({ holdings, tv, pc, onSelect }: {
   pc: (v: number) => string;
   onSelect: (id: number) => void;
 }) {
+  // The largest top-up in the visible list gets a "furthest from target" badge, so the
+  // next buy is obvious without re-sorting. Only meaningful with more than one candidate.
+  const adds = holdings.map((h: any) => addSuggestion(h, tv).amount);
+  const maxAdd = Math.max(0, ...adds);
+  const addCount = adds.filter(a => a > 0).length;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       {holdings.map((h: any) => {
@@ -25,6 +31,7 @@ export default function HoldingsList({ holdings, tv, pc, onSelect }: {
         // so "full + red" = over target and "full + green" = exactly at target.
         const barColor = target > 0 && w > target ? "var(--loss)" : "var(--gain)";
         const trim = trimSuggestion(h, tv);
+        const add = addSuggestion(h, tv);
 
         return (
           <div key={h.id} onClick={() => onSelect(h.id)}
@@ -55,6 +62,22 @@ export default function HoldingsList({ holdings, tv, pc, onSelect }: {
             {trim.amount > 0 && (
               <div style={{ fontSize: 10.5, color: "var(--loss)", marginTop: 4 }}>
                 ขาย {trim.shares.toFixed(4)} หุ้น · เก็บกำไร +${trim.amount.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+            )}
+
+            {add.amount > 0 && (
+              <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 5, fontSize: 10.5, color: "var(--gain)", marginTop: 4 }}>
+                <span>ซื้อ {add.shares.toFixed(4)} หุ้น (~${add.amount.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) ถึงเป้า</span>
+                {add.belowCostPct < 0 && (
+                  <span style={{ background: "var(--card2)", color: "var(--gain)", borderRadius: 999, padding: "1px 6px", fontWeight: 600 }}>
+                    ต่ำกว่าทุน {add.belowCostPct.toFixed(1)}%
+                  </span>
+                )}
+                {addCount > 1 && add.amount === maxAdd && (
+                  <span style={{ background: "var(--card2)", color: "var(--brass)", borderRadius: 999, padding: "1px 6px", fontWeight: 600 }}>
+                    ห่างเป้ามากสุด
+                  </span>
+                )}
               </div>
             )}
 

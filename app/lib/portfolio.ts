@@ -108,6 +108,29 @@ export function formatDDMMYYYY(iso: string): string {
 // Zero when there is no target, no drift above it, or the position is at a loss — there is
 // no profit to take then. Shared by the holdings cards, the detail sheet and the filter so
 // all three agree on what "แนะนำขาย" means.
+// Top an under-target position up to its target weight — the mirror of trimSuggestion.
+// Buying adds to BOTH the position and the portfolio total, so the amount solves
+// (value + x) / (tv + x) = target%, i.e. x = (target%·tv − value) / (1 − target%).
+// `belowCostPct` flags a position trading under its average cost, where topping up also
+// pulls the cost basis down — the DCA case worth doing first.
+export function addSuggestion(h: any, totalValue: number): { amount: number; shares: number; belowCostPct: number } {
+  const target = h.targetPct || 0;
+  const value = h.shares * h.currentPrice;
+  const weight = totalValue > 0 ? value / totalValue * 100 : 0;
+  const belowCostPct = h.avgCost > 0 && h.currentPrice < h.avgCost
+    ? (h.currentPrice - h.avgCost) / h.avgCost * 100 : 0;
+  if (!(target > 0 && target < 100 && weight < target) || h.currentPrice <= 0) {
+    return { amount: 0, shares: 0, belowCostPct };
+  }
+  const amount = Math.max(0, (target / 100 * totalValue - value) / (1 - target / 100));
+  return { amount, shares: amount / h.currentPrice, belowCostPct };
+}
+
+// Cash needed to bring every under-target position up to its target.
+export function totalToTarget(holdings: any[], totalValue: number): number {
+  return (holdings || []).reduce((s: number, h: any) => s + addSuggestion(h, totalValue).amount, 0);
+}
+
 // Trim an over-target position down to its target weight. `shares` is how many to sell,
 // `proceeds` the cash that returns, and `amount` the profit LOCKED IN by that sale — which
 // is exactly how much the position's unrealized gain drops. Only suggested when the
