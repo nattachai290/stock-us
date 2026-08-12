@@ -1,8 +1,8 @@
 name: Dependency audit
 
-# Watches the dependency tree for newly published advisories. The weekly run is the
-# point of this workflow: vulnerabilities appear in dependencies nobody touched, so a
-# check that only ran on PRs would miss almost all of them.
+# Watches the dependency tree for newly published advisories. Runs on every PR, and
+# weekly on top of that: advisories appear against dependencies nobody touched, so the
+# schedule catches what no PR would.
 #
 # Findings are reported, not blocked: a tracking issue is opened (and kept up to date,
 # and closed again when the tree is clean), and PRs that change dependencies get a
@@ -12,9 +12,6 @@ on:
   schedule:
     - cron: "0 2 * * 1" # ทุกวันจันทร์ 09:00 ตามเวลาไทย (02:00 UTC)
   pull_request:
-    paths:
-      - package.json
-      - package-lock.json
   workflow_dispatch:
 
 concurrency:

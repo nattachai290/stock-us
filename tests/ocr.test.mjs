@@ -11,7 +11,7 @@
 // carries a review flag. Exact-match counts are baselines from the tesseract
 // version pinned in package-lock — if an upgrade drops them, investigate.
 
-import Jimp from "jimp";
+import { Jimp, JimpMime } from "jimp";
 import fs from "fs";
 import { createWorker } from "tesseract.js";
 import { execSync } from "child_process";
@@ -779,8 +779,8 @@ async function ocrText(w, imgs, scale) {
     const { data: view, width, height } = decodeImage(new Uint8Array(fs.readFileSync(p)));
     grayscaleNormalize(view);
     const r = resizeBilinear(view, width, height, scale);
-    const out = new Jimp({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height });
-    const { data } = await w.recognize(await out.getBufferAsync(Jimp.MIME_PNG));
+    const out = Jimp.fromBitmap({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height });
+    const { data } = await w.recognize(await out.getBuffer(JimpMime.png));
     text += data.text + "\n";
   }
   return text;

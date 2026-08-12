@@ -16,7 +16,7 @@
   "dependencies": {
     "@vercel/blob": "^2.8.0",
     "jpeg-js": "^0.4.4",
-    "next": "16.2.9",
+    "next": "16.3.0",
     "pako": "^1.0.11",
     "react": "19.2.4",
     "react-dom": "19.2.4",
@@ -30,8 +30,8 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.2.9",
-    "jimp": "^0.22.12",
+    "eslint-config-next": "16.3.0",
+    "jimp": "^1.6.1",
     "playwright-core": "^1.61.1",
     "tailwindcss": "^4",
     "typescript": "^5"
