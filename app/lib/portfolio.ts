@@ -112,7 +112,7 @@ export function formatDDMMYYYY(iso: string): string {
 // Buying adds to BOTH the position and the portfolio total, so the amount solves
 // (value + x) / (tv + x) = target%, i.e. x = (target%·tv − value) / (1 − target%).
 // `belowCostPct` flags a position trading under its average cost, where topping up also
-// pulls the cost basis down — the DCA case worth doing first.
+// pulls the average cost down.
 export function addSuggestion(h: any, totalValue: number): { amount: number; shares: number; belowCostPct: number } {
   const target = h.targetPct || 0;
   const value = h.shares * h.currentPrice;
