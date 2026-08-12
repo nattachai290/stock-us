@@ -11,7 +11,7 @@
 // Run: npm run test:parity   (CI installs Chromium; CHROME_PATH overrides the browser)
 import { chromium } from 'playwright-core';
 import { execSync } from 'child_process';
-import Jimp from 'jimp';
+import { Jimp, JimpMime } from 'jimp';
 import fs from 'fs';
 
 const FNV = "(u8)=>{let h=0x811c9dc5;for(let i=0;i<u8.length;i++){h^=u8[i];h=Math.imul(h,0x01000193)>>>0;}return h.toString(16);}";
@@ -30,7 +30,7 @@ const { grayscaleNormalize, resizeBilinear } = await import('data:text/javascrip
 // build the PNG sample (a real PNG encoder, so this is not our own bytes round-tripping)
 fs.mkdirSync('.ci', { recursive: true });
 const asPng = await Jimp.read(jpgPath);
-fs.writeFileSync(pngPath, await asPng.getBufferAsync(Jimp.MIME_PNG));
+fs.writeFileSync(pngPath, await asPng.getBuffer(JimpMime.png));
 
 // the PNG decoder must agree with an independent reference before parity means anything
 {
@@ -62,9 +62,9 @@ for (const file of [jpgPath, pngPath]) {
   grayscaleNormalize(dec.data);
   const r = resizeBilinear(dec.data, dec.width, dec.height, SCALE);
   const ciBefore = fnv(r.data);
-  const png = await new Jimp({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height })
-    .getBufferAsync(Jimp.MIME_PNG);
-  const back = await Jimp.read(png);
+  const png = await Jimp.fromBitmap({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height })
+    .getBuffer(JimpMime.png);
+  const back = await Jimp.fromBuffer(png);
   const ciAfter = fnv(new Uint8ClampedArray(back.bitmap.data.buffer, back.bitmap.data.byteOffset, back.bitmap.data.length));
 
   // ---- App path (what OcrImport.preprocess does in a real browser) ----

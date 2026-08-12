@@ -879,6 +879,38 @@ export default function App() {
     copyToClipboard(p); msg(`Copy ${movers.length} ตัว ⚡ + TOP LOSERS แล้ว ✓`);
   };
 
+  // "ยังไม่ถึงเป้า → ควรซื้อตอนนี้ไหม" — the buy-side mirror of copyForAnalysis. The gap to
+  // target is only permission to buy, never the reason, so the prompt spends most of its rules
+  // making Claude decide on fundamentals + valuation and rank the names against a limited budget.
+  const copyBuyDecision = () => {
+    const tv=activeHoldings.reduce((s:number,h:any)=>s+h.shares*h.currentPrice,0);
+    const unders=activeHoldings.map((h:any)=>({h,a:addSuggestion(h,tv)})).filter((x:any)=>x.a.amount>0).sort((a:any,b:any)=>b.a.amount-a.a.amount);
+    if (!unders.length) { msg("ทุกตัวถึงเป้าแล้ว — ไม่มีตัวที่ต้องซื้อเพิ่ม ✓"); return; }
+    const need=totalToTarget(activeHoldings, tv); // joint solve — deliberately > the sum of the per-row amounts
+    const lastUpdate=new Date().toLocaleDateString("th-TH",{year:"numeric",month:"long",day:"numeric"});
+    const rows=unders.map(({h,a}:any)=>{
+      const val=h.shares*h.currentPrice; const w=tv>0?(val/tv*100).toFixed(2):"0";
+      const pp=h.avgCost>0&&h.currentPrice>0?((h.currentPrice-h.avgCost)/h.avgCost*100).toFixed(2):"N/A";
+      const below=a.belowCostPct<0?" ⬇ ต่ำกว่าทุน":"";
+      const ch=h.changePct!=null?` | วันนี้ ${h.changePct>0?"+":""}${h.changePct}%${Math.abs(h.changePct)>=3?" ⚡":""}`:"";
+      return `• ${h.symbol.padEnd(6)} | ตอนนี้ ${w}% → เป้า ${h.targetPct}% | ซื้อเพิ่ม ~$${a.amount.toFixed(2)} (${a.shares.toFixed(4)} หุ้น) | ราคา $${h.currentPrice} | ทุน $${h.avgCost} | P&L ${pp}%${below}${ch} | ถืออยู่ $${val.toFixed(0)}${h.sector?` | ${h.sector}`:""}${h.note?` | ${h.note}`:""}`;
+    }).join("\n");
+    // Whole-portfolio context. Judging the candidates in isolation hides concentration: three
+    // under-target semis look fine one at a time and awful together, so Claude gets every
+    // holding's weight — including the ones already at target, as background only.
+    // The sector field is optional and usually blank, so the grouping is Claude's job (see the
+    // concentration rules); these weights are only ever passed as a hint when they exist.
+    const secVal:Record<string,number>={};
+    activeHoldings.forEach((h:any)=>{ if(h.sector) secVal[h.sector]=(secVal[h.sector]||0)+h.shares*h.currentPrice; });
+    const sectorLine=Object.entries(secVal).sort((a,b)=>b[1]-a[1]).map(([s,v])=>`${s} ${tv>0?(v/tv*100).toFixed(1):"0"}%`).join(", ");
+    const underSyms=new Set(unders.map((x:any)=>x.h.symbol));
+    const rest=[...activeHoldings].filter((h:any)=>!underSyms.has(h.symbol)).sort((a,b)=>(b.shares*b.currentPrice)-(a.shares*a.currentPrice))
+      .map((h:any)=>`${h.symbol} ${tv>0?(h.shares*h.currentPrice/tv*100).toFixed(1):"0"}%${h.targetPct>0?`(เป้า ${h.targetPct}%)`:""}`).join(", ");
+    const contextBlock=`\n\nภาพรวมทั้งพอร์ต — ใช้เป็นบริบทเท่านั้น ห้ามแนะนำซื้อตัวในบรรทัด "ถึงเป้าแล้ว"\nถึงเป้าแล้ว/เกินเป้า (${activeHoldings.length-unders.length} ตัว): ${rest||"ไม่มี"}${sectorLine?`\nsector ที่ระบุไว้เอง (บางตัวอาจว่าง ใช้เป็นแค่ตัวช่วย): ${sectorLine}`:""}`;
+    const p=`คุณคือ Senior Portfolio Manager และ CFA Charterholder วันนี้คือ ${lastUpdate}\n\n## ภารกิจ\nพอร์ตนี้มี ${unders.length} ตัวที่น้ำหนักยังต่ำกว่าเป้าที่ตั้งไว้ ตัดสินทีละตัวว่า "ควรซื้อเพิ่มตอนนี้เลย หรือรอ"\nคำถามที่ต้องตอบคือ **ราคาตอนนี้เป็นจังหวะที่ดีไหม** ไม่ใช่ "เป้ายังไม่เต็มใช่ไหม"\n\n## ขั้นตอนที่ 1 — ค้นข้อมูลก่อนตอบ (ห้ามข้าม)\nค้นของทุกตัวก่อนสรุป: ผลประกอบการไตรมาสล่าสุด, guidance, ข่าว 1-3 เดือนล่าสุด, valuation ปัจจุบัน (P/E, P/S, FCF yield) เทียบค่าเฉลี่ยของตัวเองย้อนหลังและเทียบ peers\n- ถ้าค้นไม่ได้หรือข้อมูลเก่า ให้บอกตรงๆ ว่าข้อมูลถึงแค่ช่วงไหน ห้ามเดาแล้วเขียนเหมือนรู้จริง\n\n## กฎเหล็ก (สำคัญที่สุด)\n- "ยังไม่ถึงเป้า" ไม่ใช่เหตุผลให้ซื้อ — เป็นแค่ช่องว่างที่อนุญาตให้ซื้อได้ ตัวตัดสินจริงคือ พื้นฐานยังดี + ราคายังสมเหตุสมผล\n- "ต่ำกว่าทุน" ไม่ใช่เหตุผลให้ซื้อ — ถัวขาลงในตัวที่ thesis พังคือกับดักที่แพงที่สุด\n- "กำไรอยู่แล้ว/ราคาขึ้นมาเยอะ" ก็ไม่ใช่เหตุผลห้ามซื้อ ถ้าพื้นฐานโตตามราคา\n- ราคาลงเพราะ sentiment/ตลาด/sector rotation = โอกาสเติม | ราคาลงเพราะพื้นฐานเปลี่ยน = อย่าเติม\n- ห้ามตอบ "ซื้อเลย" ให้ทุกตัว ถ้าออกมาดีหมดทุกตัว แปลว่ายังตรวจไม่ละเอียดพอ — กลับไปดู valuation อีกรอบ\n- ใช้พื้นฐาน + valuation เป็นเหตุผลหลัก ห้ามใช้กราฟ/เทคนิคอลเป็นเหตุผลหลัก\n- ตัวเลข "ซื้อเพิ่ม ~$X" ต่อตัว คือจำนวนที่ทำให้ถึงเป้าถ้าซื้อตัวนั้นตัวเดียว เป็นเพดาน ไม่ใช่คำสั่ง — แนะนำน้อยกว่านั้นได้\n- ยอดรวมท้ายพรอมป์มากกว่าผลบวกของทุกบรรทัด เพราะซื้อพร้อมกันทำให้พอร์ตโตขึ้น เป้า % จึงคิดจากฐานที่ใหญ่กว่า — ตัวเลขนี้ถูกแล้ว ห้ามทักว่าบวกผิด\n\n## ตรวจการกระจุกตัวก่อนสรุป (ห้ามข้าม)\nดู "ภาพรวมทั้งพอร์ต" ท้ายพรอมป์ก่อนตัดสิน — ห้ามมองแต่ละตัวแยกกันแล้วสรุปรวม\n1. จัดกลุ่มเอง: เอาทุกตัวในพอร์ต (ทั้งตัวที่จะเติมและตัวที่ถึงเป้าแล้ว) จัดเข้ากลุ่มตามธีมธุรกิจจริงด้วยความรู้ของคุณ — จัดตาม "อะไรที่ทำให้ราคาขึ้นลงพร้อมกัน" ไม่ใช่ป้าย sector กว้างๆ เช่น AI semiconductor / GLP-1 / mega-cap software / น้ำมันต้นน้ำ / ETF ตลาดรวม\n2. รวม % ของแต่ละกลุ่มจากตัวเลขน้ำหนักที่ให้มา แล้วบอกว่ากลุ่มไหนหนักสุดตอนนี้ (แสดงการรวมให้เห็น)\n3. ถ้าซื้อตามที่แนะนำทั้งหมด แล้วกลุ่มไหนหนักขึ้นจนกระจุก ให้บอกตรงๆ พร้อมตัวเลขกลุ่มนั้น "ก่อนซื้อ → หลังซื้อ" และปรับจำนวน/ลำดับให้ ไม่ใช่ปล่อยผ่าน\n4. ถ้าตัวที่จะเติมอยู่กลุ่มเดียวกับตัวที่ถึงเป้าแล้ว ให้ระบุความเสี่ยงร่วมนี้ และเลือกเติมตัวที่ conviction สูงสุดแทนการเติมทุกตัว\n- ตัวที่ถึงเป้าแล้วใช้ดูว่าพอร์ตหนักไปทางไหน ห้ามแนะนำให้ซื้อเพิ่ม\n- ETF ตลาดรวมให้มองทะลุเข้าไปด้วยว่าข้างในหนักอะไร (เช่น VOO/QQQ หนัก mega-cap tech) เพราะมันซ้อนทับกับหุ้นรายตัวที่ถืออยู่\n\n## ตัดสินทุกตัวลงใน 4 กลุ่มนี้เท่านั้น\n🟢 ซื้อเลยเต็มจำนวน — พื้นฐานแข็ง + ราคายังน่าสนใจ (ต้องระบุว่า "ถูก/แพงเทียบกับอะไร" ด้วยตัวเลข)\n🟡 ทยอยซื้อ — ของดีแต่ราคาไม่ได้ถูก แบ่งเป็น 2-3 ไม้ ระบุจำนวนต่อไม้และเว้นระยะยังไง\n🔵 รอก่อน — ต้องระบุ "รออะไร" เป็นเงื่อนไขที่เช็คได้จริง (ราคาต่ำกว่า $X / งบไตรมาสหน้า / ตัวเลขอะไรที่ต้องเห็น) ห้ามเขียนลอยๆ ว่า "รอดูสถานการณ์"\n🔴 ไม่เติมแล้ว — พื้นฐานเปลี่ยนจริง ต้องระบุ "จากอะไร → เป็นอะไร" พร้อมหลักฐาน/ตัวเลข และเสนอเป้า % ใหม่ที่ควรเป็น\n\n## จัดลำดับความสำคัญ (ทำหลังตัดสินรายตัวเสร็จ)\nเงินมีจำกัดเสมอ — เรียงลำดับ 1..${unders.length} ว่าถ้ามีเงินก้อนเดียวควรลงตัวไหนก่อน พร้อมเหตุผลสั้น 1 บรรทัดต่อตัว\nแล้วสรุปแผนตามงบ 3 ระดับของยอดเต็ม $${need.toFixed(0)}: ใช้ 25% / 50% / 100% — ตัวไหนได้เงินเท่าไหร่ในแต่ละกรณี\n\n## รูปแบบต่อ 1 ตัว (กระชับ ไม่ต้องยาว)\nSYMBOL — 🟢/🟡/🔵/🔴\n📊 พื้นฐานล่าสุด: ตัวเลขจริง + วันที่/ไตรมาสอ้างอิง\n💰 Valuation ตอนนี้: แพงหรือถูก เทียบกับอะไร\n🎯 คำตัดสิน: ซื้อตอนนี้เท่าไหร่ ($ และจำนวนหุ้น) หรือรออะไร\n⚠️ ความเสี่ยงข้อที่สำคัญที่สุดข้อเดียว\n\nครอบคลุมให้ครบทั้ง ${unders.length} ตัว ห้ามข้ามตัวไหน\n\n---\nPORTFOLIO "${currentPortName}" | มูลค่ารวม $${tv.toFixed(0)} | ยังไม่ถึงเป้า ${unders.length} ตัว | ซื้อพร้อมกันทุกตัวถึงเป้าใช้เงิน ~$${need.toFixed(2)}\n\n${rows}${contextBlock}\n\n---\nราคาอัพเดท ${lastUpdate} | วิเคราะห์เป็นภาษาไทย`;
+    copyToClipboard(p); msg(`Copy prompt ${unders.length} ตัวที่ยังไม่ถึงเป้าแล้ว — เปิด Web Search แล้ววางใน Claude ✓`);
+  };
+
   const copyAllocationAnalysis = () => {
     const tv=activeHoldings.reduce((s:number,h:any)=>s+h.shares*h.currentPrice,0); const tc=activeHoldings.reduce((s:number,h:any)=>s+h.shares*h.avgCost,0); const lastUpdate=new Date().toLocaleDateString("th-TH",{year:"numeric",month:"long",day:"numeric"});
     const rows=[...activeHoldings].sort((a,b)=>(b.shares*b.currentPrice)-(a.shares*a.currentPrice)).map((h:any)=>{const val=h.shares*h.currentPrice;const w=tv>0?(val/tv*100).toFixed(1):"0";const pp=h.avgCost>0&&h.currentPrice>0?((h.currentPrice-h.avgCost)/h.avgCost*100).toFixed(1):"N/A";const target=h.targetPct>0?` | เป้าปัจจุบัน ${h.targetPct}%`:"";return `• ${h.symbol.padEnd(6)} | ${w}% ของ port | P&L ${pp}% | $${val.toFixed(0)}${h.sector?` | ${h.sector}`:""}${target}`}).join("\n");
@@ -1157,7 +1189,7 @@ export default function App() {
                 return need > 0 ? (
                   <button onClick={()=>setSortBy("under")}
                     style={{width:"100%",marginTop:10,padding:"8px 12px",background:"var(--card2)",border:"1px solid var(--line)",borderRadius:8,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
-                    <span style={{fontSize:11,color:"var(--faint)"}}>ซื้อครบทุกตัวถึงเป้า ({cnt} ตัว)</span>
+                    <span style={{fontSize:11,color:"var(--faint)"}}>ซื้อพร้อมกันทุกตัวถึงเป้า ({cnt} ตัว)</span>
                     <span style={{fontSize:13,fontWeight:700,color:"var(--gain)"}}>~${need.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
                   </button>
                 ) : null;
@@ -1373,8 +1405,10 @@ export default function App() {
           <AiTab
             hasHoldings={holdings.length>0}
             moversCount={moversCount}
+            underCount={activeHoldings.filter((h:any)=>addSuggestion(h,tv).amount>0).length}
             onAnalyze={copyForAnalysis}
             onMovers={copyMoversAnalysis}
+            onBuyDecision={copyBuyDecision}
             onAllocation={copyAllocationAnalysis}
             onNewIdeas={copyNewIdeas}
             showAllocImport={showAllocImport}
