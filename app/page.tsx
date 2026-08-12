@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback, useRef } from "react";
 import DateTimePicker24h from "./components/DateTimePicker24h";
-import { parseCSV, toCSV, copyToClipboard, fifoBasisForSale, computeFromHistory , trimSuggestion } from "./lib/portfolio";
+import { parseCSV, toCSV, copyToClipboard, fifoBasisForSale, computeFromHistory , trimSuggestion, addSuggestion, totalToTarget } from "./lib/portfolio";
 import { setOnDriveAuthExpired, listPortfolios, loadPortfolio, savePortfolio, deletePortfolio, renamePortfolio } from "./lib/drive";
 import { btn, btnPrimary, btnGhost, inp } from "./lib/ui";
 import Snackbar from "./components/Snackbar";
@@ -1149,6 +1149,19 @@ export default function App() {
                   <div style={{fontSize:13,fontWeight:700,color:"var(--ink)"}}>{activeHoldings.length} ตัว{effectiveHoldings.length>activeHoldings.length?` · ขายหมด ${effectiveHoldings.length-activeHoldings.length}`:""}</div>
                 </div>
               </div>
+              {/* Cash needed to bring every under-target position up to its target — the
+                  sum of the per-row "ซื้อ … ถึงเป้า" figures. */}
+              {(()=>{
+                const need = totalToTarget(activeHoldings, tv);
+                const cnt = activeHoldings.filter((h:any)=>addSuggestion(h,tv).amount>0).length;
+                return need > 0 ? (
+                  <button onClick={()=>setSortBy("under")}
+                    style={{width:"100%",marginTop:10,padding:"8px 12px",background:"var(--card2)",border:"1px solid var(--line)",borderRadius:8,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
+                    <span style={{fontSize:11,color:"var(--faint)"}}>ซื้อครบทุกตัวถึงเป้า ({cnt} ตัว)</span>
+                    <span style={{fontSize:13,fontWeight:700,color:"var(--gain)"}}>~${need.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+                  </button>
+                ) : null;
+              })()}
               <button onClick={refreshPrices} disabled={refreshing||!holdings.length}
                 style={{...btnPrimary({width:"100%",marginTop:14}),opacity:(refreshing||!holdings.length)?0.6:1}}>
                 {refreshing ? (status||"กำลังดึงราคา...") : "อัพเดทราคา"}
@@ -1248,8 +1261,6 @@ export default function App() {
                       const unrealized=h.shares>0?(h.currentPrice-h.avgCost)*h.shares:0;
                       const w=tv>0?(val/tv*100):0; const target=h.targetPct||0;
                       const over=target>0?w-target:0; const overAmt=over>0?(over/100*tv):0;
-                      // $ to buy so this position reaches target weight (buying also grows total value)
-                      const underNeed=(target>0&&target<100&&w<target)?((target/100*tv-val)/(1-target/100)):0;
                       const barPct=target>0?Math.min(w/target*100,150):0;
                       const barColor=over>0?"var(--loss)":w>0?"var(--gain)":"var(--line)";
                       const isAlert=h.changePct!=null&&Math.abs(h.changePct)>=3;
@@ -1304,7 +1315,7 @@ export default function App() {
                             {over>0&&<div style={{fontSize:10,color:"var(--loss)",marginTop:1}}>เกิน +${overAmt.toFixed(2)}</div>}
                             {/* Same helper the cards, the detail sheet and the แนะนำขาย filter use */}
                             {(()=>{const t=trimSuggestion(h,tv);return t.amount>0?<div style={{fontSize:10,color:"var(--loss)",marginTop:1,fontWeight:600}}>ขาย {t.shares.toFixed(4)} หุ้น <span style={{color:"var(--faint)",fontWeight:400}}>· เก็บกำไร +${t.amount.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</span></div>:null;})()}
-                            {underNeed>0&&<div style={{fontSize:10,color:"var(--gain)",marginTop:1}}>ซื้อเพิ่ม ~${underNeed.toLocaleString("en",{maximumFractionDigits:2})} ถึงเป้า</div>}
+                            {(()=>{const a=addSuggestion(h,tv);return a.amount>0?<div style={{fontSize:10,color:"var(--gain)",marginTop:1}}>ซื้อ {a.shares.toFixed(4)} หุ้น <span style={{color:"var(--faint)"}}>(~${a.amount.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}) ถึงเป้า{a.belowCostPct<0?` · ต่ำกว่าทุน ${a.belowCostPct.toFixed(1)}%`:""}</span></div>:null;})()}
                           </td>
                           <td style={{padding:"8px 4px",textAlign:"center",whiteSpace:"nowrap"}}>
                             {editId===h.id?(

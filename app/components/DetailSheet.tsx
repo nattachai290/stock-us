@@ -1,11 +1,11 @@
 "use client";
-import { trimSuggestion } from "../lib/portfolio";
+import { trimSuggestion, addSuggestion } from "../lib/portfolio";
 import Sheet from "./Sheet";
 import { btnPrimary, btnGhost } from "../lib/ui";
 
 // Detail view for a single holding, opened by tapping a card in the mobile list
 // (§5.4). Pure presentation + the same handlers the old table/action-menu used —
-// no new business logic, "underNeed"/"overAmt" mirror the existing table row math.
+// no new business logic — the buy/sell suggestions and "overAmt" mirror the table row math.
 export default function DetailSheet({
   holding, onClose, tv, pc, editId, onEditIdChange, updateH, confirmEdit,
   onBuy, onSell, onSplit, onHistory, onRemove,
@@ -33,9 +33,9 @@ export default function DetailSheet({
         const target = h.targetPct || 0;
         const unrealized = h.shares > 0 ? (h.currentPrice - h.avgCost) * h.shares : 0;
         const realized = (h.realizedHistory || []).reduce((s: number, r: any) => s + (r.gain || 0), 0);
-        const underNeed = (target > 0 && target < 100 && w < target) ? ((target / 100 * tv - val) / (1 - target / 100)) : 0;
         const overAmt = (target > 0 && w > target) ? ((w - target) / 100 * tv) : 0;
         const trim = trimSuggestion(holding, tv);
+        const add = addSuggestion(holding, tv);
         const isEditing = editId === h.id;
 
         if (isEditing) {
@@ -95,7 +95,14 @@ export default function DetailSheet({
           <div style={{ marginTop: 14 }}>
             <div style={{ fontSize: 12, color: "var(--faint)", marginBottom: 4 }}>น้ำหนัก {w.toFixed(1)}%{target > 0 ? ` / เป้า ${target}%` : ""}</div>
             {target > 0 && <div style={{ background: "var(--line)", borderRadius: 3, height: 4, overflow: "hidden" }}><div style={{ width: `${Math.min(w / target * 100, 100)}%`, height: "100%", background: w > target ? "var(--loss)" : "var(--gain)", borderRadius: 3 }} /></div>}
-            {underNeed > 0 && <div style={{ fontSize: 12, color: "var(--gain)", marginTop: 4 }}>ซื้อเพิ่ม ~${underNeed.toLocaleString("en", { maximumFractionDigits: 2 })} ถึงเป้า</div>}
+            {add.amount > 0 && (
+              <div style={{ fontSize: 12, color: "var(--gain)", marginTop: 4 }}>
+                ซื้อ {add.shares.toFixed(4)} หุ้น (~${add.amount.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) ถึงเป้า
+                {add.belowCostPct < 0 && (
+                  <span style={{ color: "var(--faint)" }}> · ต่ำกว่าทุน {add.belowCostPct.toFixed(1)}% (ลดต้นทุนเฉลี่ย)</span>
+                )}
+              </div>
+            )}
             {overAmt > 0 && <div style={{ fontSize: 12, color: "var(--loss)", marginTop: 4 }}>เกิน +${overAmt.toFixed(2)}</div>}
             {/* Trim to target weight; the amount shown is the profit locked in — exactly how
                 much unrealized drops. Same helper the cards and แนะนำขาย filter use. */}
