@@ -10,6 +10,7 @@
     "test:ocr": "node tests/ocr.test.mjs",
     "test:gold": "node tests/goldprice.test.mjs",
     "test:invested": "node tests/invested.test.mjs",
+    "test:portfolio": "node tests/portfolio.test.mjs",
     "test:parity": "node tests/parity-browser.mjs"
   },
   "dependencies": {

@@ -126,9 +126,23 @@ export function addSuggestion(h: any, totalValue: number): { amount: number; sha
   return { amount, shares: amount / h.currentPrice, belowCostPct };
 }
 
-// Cash needed to bring every under-target position up to its target.
+// Cash needed to bring every under-target position up to its target AT THE SAME TIME.
+// This is deliberately NOT the sum of the per-row addSuggestion() amounts: each of those
+// solves for its position alone, against today's total. Buying them all together grows the
+// total, so every target% is then taken of a bigger base and costs more — summing the rows
+// undershoots (~15-20% on a typical portfolio, worse the more weight is under target).
+// Solving them jointly for spend S over the under-target set U, with T = Σ target% and
+// V = Σ value: each xᵢ = tᵢ·(tv + S) − valueᵢ, and summing gives S = (T·tv − V) / (1 − T).
 export function totalToTarget(holdings: any[], totalValue: number): number {
-  return (holdings || []).reduce((s: number, h: any) => s + addSuggestion(h, totalValue).amount, 0);
+  const unders = (holdings || []).filter((h: any) => addSuggestion(h, totalValue).amount > 0);
+  if (!unders.length) return 0;
+  const T = unders.reduce((s: number, h: any) => s + h.targetPct / 100, 0);
+  const V = unders.reduce((s: number, h: any) => s + h.shares * h.currentPrice, 0);
+  // T ≥ 100% has no finite solution (the under-target positions alone would have to be the
+  // whole portfolio and then some) — only reachable from an over-allocated target set, so
+  // fall back to the independent per-row sum rather than returning a negative number.
+  if (T >= 1) return unders.reduce((s: number, h: any) => s + addSuggestion(h, totalValue).amount, 0);
+  return Math.max(0, (T * totalValue - V) / (1 - T));
 }
 
 // Trim an over-target position down to its target weight. `shares` is how many to sell,
