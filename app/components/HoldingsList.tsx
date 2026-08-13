@@ -23,7 +23,12 @@ export default function HoldingsList({ holdings, tv, pc, onSelect }: {
         const w = tv > 0 ? val / tv * 100 : 0;
         const target = h.targetPct || 0;
         const pp = h.avgCost > 0 ? (h.currentPrice - h.avgCost) / h.avgCost * 100 : 0;
-        const isAlert = h.changePct != null && Math.abs(h.changePct) >= 3;
+        // Today's move is shown whenever there IS one; the ±3% threshold only decides
+        // whether it's called out as unusual (orange rule + ⚡), the way the desktop
+        // table and the AI prompts already mark movers. DetailSheet never gated the
+        // number on the threshold, so the card was the odd one out.
+        const hasToday = h.changePct != null;
+        const isAlert = hasToday && Math.abs(h.changePct) >= 3;
         const isStale = h.priceTime && (Date.now() - h.priceTime > 24 * 3600 * 1000);
         const barPct = target > 0 ? Math.min(w / target * 100, 100) : 0;
         // Over target → red, otherwise green. Same rule as DetailSheet and the desktop
@@ -53,8 +58,8 @@ export default function HoldingsList({ holdings, tv, pc, onSelect }: {
                   </span>
                 )}
               </div>
-              <div style={{ textAlign: "right", fontSize: 11, fontWeight: 600 }}>
-                {isAlert && <span style={{ color: pc(h.changePct), marginRight: 6 }}>วันนี้ {h.changePct > 0 ? "+" : ""}{h.changePct}%</span>}
+              <div style={{ textAlign: "right", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>
+                {hasToday && <span style={{ color: pc(h.changePct), marginRight: 6 }}>วันนี้ {h.changePct > 0 ? "+" : ""}{h.changePct}%{isAlert ? " ⚡" : ""}</span>}
                 <span style={{ color: pc(pp) }}>P&L {pp >= 0 ? "+" : ""}{pp.toFixed(1)}%</span>
               </div>
             </div>
