@@ -74,3 +74,7 @@ export const IconArrowUp = ({ size = 16 }: { size?: number }) => (
 export const IconSplit = ({ size = 16 }: { size?: number }) => (
   <svg {...base} width={size} height={size}><path d="M8 3H5v18h3M16 3h3v18h-3"/></svg>
 );
+
+export const IconLock = ({ size = 16 }: { size?: number }) => (
+  <svg {...base} width={size} height={size}><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+);
