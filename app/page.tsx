@@ -11,6 +11,7 @@ import HoldingsList from "./components/HoldingsList";
 import DetailSheet from "./components/DetailSheet";
 import AppShell from "./components/AppShell";
 import AiTab from "./components/AiTab";
+import LoginGate from "./components/LoginGate";
 import ToolsMenu from "./components/ToolsMenu";
 import PortfolioValueChart from "./components/PortfolioValueChart";
 import ChartsTab from "./components/ChartsTab";
@@ -1069,9 +1070,10 @@ export default function App() {
   return (
     <div style={{background:"var(--bg)",minHeight:"100vh"}}>
       <Snackbar status={status} onClose={()=>setStatus("")}/>
-      {/* App bar */}
+      {/* App bar — signed in only; LoginGate is a full-page screen that owns its own header */}
+      {userEmail && (
       <div style={{background:"var(--card)",borderBottom:"1px solid var(--line)",padding:"10px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-        <div className="appbar-wordmark" style={{fontSize:17,fontWeight:800,letterSpacing:"0.14em",fontFamily:'"Avenir Next",Futura,"Segoe UI",system-ui,sans-serif'}}>
+        <div className={userEmail ? "appbar-wordmark" : ""} style={{fontSize:17,fontWeight:800,letterSpacing:"0.14em",fontFamily:'"Avenir Next",Futura,"Segoe UI",system-ui,sans-serif'}}>
           <span style={{color:"var(--brass)"}}>SA</span><span style={{color:"var(--ink)"}}>SOM</span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",position:"relative"}}>
@@ -1107,6 +1109,7 @@ export default function App() {
           )}
         </div>
       </div>
+      )}
 
       {/* Portfolio Selector */}
       {userEmail && (() => {
@@ -1179,17 +1182,7 @@ export default function App() {
       <div className="app-body" style={{maxWidth:1320,margin:"0 auto"}}>
 
         {!userEmail ? (
-          <div style={{maxWidth:420,margin:"48px auto",textAlign:"center",background:"var(--card)",border:"1px solid var(--line)",borderRadius:"var(--r-lg)",padding:"32px 24px"}}>
-            <div style={{fontSize:40,marginBottom:12}}>🔒</div>
-            <div style={{fontSize:16,fontWeight:800,color:"var(--ink)",marginBottom:6}}>เชื่อมต่อ Google Drive</div>
-            <div style={{fontSize:12.5,color:"var(--mut)",lineHeight:1.6,marginBottom:20}}>
-              ข้อมูลพอร์ตเก็บบน Google Drive ของคุณ<br/>กรุณาเชื่อมต่อเพื่อดูมูลค่าและรายการต่างๆ
-            </div>
-            <button onClick={handleGoogleLogin} disabled={googleLoading}
-              style={{...btn("var(--brass)","var(--on-brass)",{fontSize:13,padding:"10px 20px",opacity:googleLoading?0.6:1})}}>
-              {googleLoading?"กำลังเชื่อมต่อ...":"เชื่อมต่อ Google Drive"}
-            </button>
-          </div>
+          <LoginGate onLogin={handleGoogleLogin} loading={googleLoading}/>
         ) : (<>
 
         <AppShell tab={tab} onTabChange={setTab}/>
