@@ -11,7 +11,9 @@
     "test:gold": "node tests/goldprice.test.mjs",
     "test:invested": "node tests/invested.test.mjs",
     "test:portfolio": "node tests/portfolio.test.mjs",
-    "test:parity": "node tests/parity-browser.mjs"
+    "test:parity": "node tests/parity-browser.mjs",
+    "test:market": "node tests/market.test.mjs",
+    "test:pricecache": "node tests/pricecache.test.mjs"
   },
   "dependencies": {
     "@vercel/blob": "^2.8.0",

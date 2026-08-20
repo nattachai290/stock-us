@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import DateTimePicker24h from "./components/DateTimePicker24h";
 import { parseCSV, toCSV, copyToClipboard, fifoBasisForSale, computeFromHistory , trimSuggestion, addSuggestion, totalToTarget } from "./lib/portfolio";
+import { isMarketOpen } from "./lib/market";
 import { setOnDriveAuthExpired, listPortfolios, loadPortfolio, savePortfolio, deletePortfolio, renamePortfolio } from "./lib/drive";
 import { btn, btnPrimary, btnGhost, inp } from "./lib/ui";
 import Snackbar from "./components/Snackbar";
@@ -81,6 +82,11 @@ export default function App() {
   const [status, setStatus] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date|null>(null);
+  // Auto-refresh is opt-out and remembered — it costs mobile data, so the choice sticks.
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [marketOpen, setMarketOpen] = useState(false);
+  const autoFailsRef = useRef(0);   // consecutive failed polls → back off instead of hammering
+  const pollingRef = useRef(false); // one poll at a time, however long a slow one runs
   const [priceErrors, setPriceErrors] = useState<string[]>([]);
   const [usdThb, setUsdThb] = useState<number|null>(null); // USD→THB, display only
   const tokenRef = useRef<string|null>(null);
@@ -207,6 +213,7 @@ export default function App() {
     const savedPortId = localStorage.getItem("currentPortId");
     const savedPortName = localStorage.getItem("currentPortName");
     const savedHoldings = localStorage.getItem(`holdings-${savedPortId||"local"}`);
+    if (localStorage.getItem("autoRefresh") === "0") setAutoRefresh(false);
 
     if (savedToken) {
       setToken(savedToken); tokenRef.current = savedToken;
@@ -389,9 +396,12 @@ export default function App() {
     } catch { msg("backup เสียหาย กู้คืนไม่ได้"); }
   };
 
-  const refreshPrices = async () => {
+  // `silent` is the auto-refresh path: same fetching, none of the interruption. A poll
+  // every 60s must not flash the snackbar, disable the button, or spam Drive — it just
+  // swaps the numbers in place. Manual presses keep the full progress reporting.
+  const refreshPrices = async (silent = false) => {
     if (!holdings.length) return;
-    setRefreshing(true); setPriceErrors([]); msg("กำลังดึงราคา...", 0);
+    if (!silent) { setRefreshing(true); setPriceErrors([]); msg("กำลังดึงราคา...", 0); }
     try {
       const BATCH = 20; const errors: string[] = []; let updated = [...holdings];
       const fetchList = holdings.filter((h:any)=>!h.hidden); // skip deleted-but-archived entries
@@ -399,7 +409,7 @@ export default function App() {
       for (let i = 0; i < fetchList.length; i += BATCH) {
         const batchNo = Math.floor(i / BATCH) + 1;
         const batchSymbols = fetchList.slice(i, i+BATCH).map((h:any)=>h.symbol);
-        msg(`กำลังดึงราคา... (${batchNo}/${totalBatches}) ${batchSymbols.join(", ")}`, 0);
+        if (!silent) msg(`กำลังดึงราคา... (${batchNo}/${totalBatches}) ${batchSymbols.join(", ")}`, 0);
         if (i > 0) await new Promise(r => setTimeout(r, 300)); // space out requests to avoid tripping Yahoo's rate limit
         const syms = batchSymbols.join(",");
         try {
@@ -422,14 +432,60 @@ export default function App() {
         // Show prices filling in as each batch lands, instead of waiting for all.
         setHoldings(updated); localStorage.setItem(`holdings-${currentPortId||"local"}`, JSON.stringify(updated));
       }
-      setLastUpdated(new Date()); setPriceErrors(errors);
-      msg(errors.length ? `⚠️ มี ${errors.length} ตัวพลาด — ดูด้านล่าง` : "อัพเดทราคาแล้ว ✓");
-      // Fresh prices go to Drive right away (saveData no-ops the Drive part when not
-      // logged in), so other devices pick them up without waiting for the next edit.
-      await saveData(updated);
-    } catch (e:any) { msg("ดึงราคาไม่ได้: " + e.message); setPriceErrors([e.message]); }
-    setRefreshing(false);
+      setLastUpdated(new Date());
+      if (!silent) {
+        setPriceErrors(errors);
+        msg(errors.length ? `⚠️ มี ${errors.length} ตัวพลาด — ดูด้านล่าง` : "อัพเดทราคาแล้ว ✓");
+        // Fresh prices go to Drive right away (saveData no-ops the Drive part when not
+        // logged in), so other devices pick them up without waiting for the next edit.
+        await saveData(updated);
+      }
+      // A silent poll deliberately skips the Drive write: prices are already in
+      // localStorage and the shared price cache, and one upload a minute for numbers
+      // that change again a minute later is not worth the quota.
+      autoFailsRef.current = errors.length >= fetchList.length ? autoFailsRef.current + 1 : 0;
+    } catch (e:any) {
+      if (!silent) { msg("ดึงราคาไม่ได้: " + e.message); setPriceErrors([e.message]); }
+      autoFailsRef.current += 1;
+    }
+    if (!silent) setRefreshing(false);
   };
+
+  // ── Auto-refresh while the market is open ────────────────────────────────────
+  // Polling, not streaming: the quote sources are delayed feeds (Cboe's endpoint is
+  // literally /delayed_quotes/), so asking more often than once a minute returns the
+  // same numbers and only burns rate limit. Three gates must all hold — the tab is
+  // actually being looked at, the US market is open, and the user hasn't opted out.
+  const refreshRef = useRef(refreshPrices);
+  refreshRef.current = refreshPrices; // always call the latest closure, never a stale `holdings`
+  const lastPollRef = useRef(0);
+
+  useEffect(() => {
+    const POLL_MS = 60_000;
+    const TICK_MS = 15_000; // tick faster than we poll so the open/closed dot stays honest
+
+    const tick = (force = false) => {
+      const open = isMarketOpen();
+      setMarketOpen(open);
+      if (!autoRefresh || document.hidden || !open || pollingRef.current) return;
+      // After three straight all-failed polls, back off to 5 minutes rather than keep
+      // hammering a source that is rate-limiting or down.
+      const wait = autoFailsRef.current >= 3 ? POLL_MS * 5 : POLL_MS;
+      if (!force && Date.now() - lastPollRef.current < wait) return;
+      pollingRef.current = true;
+      lastPollRef.current = Date.now();
+      Promise.resolve(refreshRef.current(true)).finally(() => { pollingRef.current = false; });
+    };
+
+    // Coming back to the tab should show current prices immediately, not after a
+    // full interval — the numbers on screen are as old as the time spent away.
+    const onVisible = () => { if (!document.hidden) tick(Date.now() - lastPollRef.current >= POLL_MS); };
+
+    tick();
+    const id = setInterval(() => tick(), TICK_MS);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(id); document.removeEventListener("visibilitychange", onVisible); };
+  }, [autoRefresh]);
 
   const addHolding = () => {
     if (!newStock.symbol) return;
@@ -1194,12 +1250,25 @@ export default function App() {
                   </button>
                 ) : null;
               })()}
-              <button onClick={refreshPrices} disabled={refreshing||!holdings.length}
+              {/* Wrapped, not passed by reference: the click event would land in `silent`
+                  and a manual press would run with no feedback at all. */}
+              <button onClick={()=>refreshPrices()} disabled={refreshing||!holdings.length}
                 style={{...btnPrimary({width:"100%",marginTop:14}),opacity:(refreshing||!holdings.length)?0.6:1}}>
                 {refreshing ? (status||"กำลังดึงราคา...") : "อัพเดทราคา"}
               </button>
-              <div style={{fontSize:11,color:"var(--faint)",marginTop:8,textAlign:"center"}}>
-                {priceAsOf ? `ราคาเมื่อ ${priceAsOf.toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}` : "ยังไม่เคยอัพเดทราคา — กดปุ่มด้านบน"}
+              <div style={{fontSize:11,color:"var(--faint)",marginTop:8,display:"flex",alignItems:"center",justifyContent:"center",gap:6,flexWrap:"wrap"}}>
+                <span>{priceAsOf ? `ราคาเมื่อ ${priceAsOf.toLocaleString("th-TH",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}` : "ยังไม่เคยอัพเดทราคา — กดปุ่มด้านบน"}</span>
+                {/* Says what the app is actually doing right now: updating by itself,
+                    waiting for the opening bell, or switched off. */}
+                <button
+                  onClick={()=>{ const v=!autoRefresh; setAutoRefresh(v); localStorage.setItem("autoRefresh", v?"1":"0"); }}
+                  title={autoRefresh ? "ปิดอัพเดทอัตโนมัติ" : "เปิดอัพเดทอัตโนมัติ"}
+                  style={{display:"inline-flex",alignItems:"center",gap:5,background:"var(--card2)",border:"1px solid var(--line)",
+                    borderRadius:999,padding:"2px 9px",cursor:"pointer",fontSize:10.5,color:autoRefresh&&marketOpen?"var(--gain)":"var(--faint)"}}>
+                  <span style={{width:6,height:6,borderRadius:999,flexShrink:0,
+                    background:autoRefresh&&marketOpen?"var(--gain)":"var(--faint)"}}/>
+                  {!autoRefresh ? "อัพเดทเอง" : marketOpen ? "อัพเดทอัตโนมัติ" : "ตลาดปิด"}
+                </button>
               </div>
             </div>
 
