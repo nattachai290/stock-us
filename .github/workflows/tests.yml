@@ -62,6 +62,9 @@ jobs:
           run build   "Production build (next build)"  npm run build
           run gold    "Gold-price tests (test:gold)"   npm run test:gold
           run invest  "Invested-series tests (test:invested)" npm run test:invested
+          run port    "Target-weight tests (test:portfolio)" npm run test:portfolio
+          run market  "Market-hours tests (test:market)" npm run test:market
+          run pcache  "Price-cache tests (test:pricecache)" npm run test:pricecache
           run ocr     "OCR pipeline tests (test:ocr)"  npm run test:ocr
           run parity  "Browser/CI pixel parity (test:parity)" npm run test:parity
 

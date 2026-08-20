@@ -98,6 +98,34 @@ async function fetchCnbcBatch(symbols: string[]): Promise<Map<string, QuoteResul
   return out;
 }
 
+// ── short-lived quote cache ───────────────────────────────────────────────────
+// The client polls once a minute per open tab while the market is open. Without this,
+// two tabs and a phone mean three upstream fetches per symbol per minute, and Cboe
+// starts returning 429s. A few seconds of staleness costs nothing here — the sources
+// are delayed feeds to begin with — so serve any quote younger than TTL from memory.
+//
+// Per-instance and in-memory on purpose: no external store to run, and a cold start
+// just means a cache miss. It reduces load, it is not relied on for correctness.
+const QUOTE_TTL_MS = 45_000;
+const quoteCache = new Map<string, { at: number; quote: QuoteResult }>();
+
+function cachedQuote(symbol: string): QuoteResult | null {
+  const hit = quoteCache.get(symbol);
+  if (!hit || Date.now() - hit.at > QUOTE_TTL_MS) return null;
+  return hit.quote;
+}
+
+// Only successful quotes are cached — caching an error would keep a symbol broken for
+// the whole TTL even after the source recovers.
+function cacheQuotes(results: QuoteResult[]) {
+  const now = Date.now();
+  for (const r of results) if (!r.error && r.price != null) quoteCache.set(r.symbol, { at: now, quote: r });
+  // Bound the map so a long-lived instance cannot grow without limit.
+  if (quoteCache.size > 500) {
+    for (const [k, v] of quoteCache) if (now - v.at > QUOTE_TTL_MS) quoteCache.delete(k);
+  }
+}
+
 // ── concurrency helper ────────────────────────────────────────────────────────
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
@@ -124,8 +152,16 @@ export async function GET(request: NextRequest) {
 
   const symList = symbols.split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
 
+  // 0) Serve anything still fresh from the last few seconds without touching a provider.
+  const fresh = new Map<string, QuoteResult>();
+  const toFetch: string[] = [];
+  for (const sym of symList) {
+    const hit = cachedQuote(sym);
+    if (hit) fresh.set(sym, hit); else toFetch.push(sym);
+  }
+
   // 1) Primary pass: spot gold (XAUUSD/XAU) → metals providers; everything else → Cboe.
-  const results = await mapLimit(symList, 6, (sym) => isGoldSymbol(sym) ? fetchGold(sym) : fetchCboe(sym));
+  const results = await mapLimit(toFetch, 6, (sym) => isGoldSymbol(sym) ? fetchGold(sym) : fetchCboe(sym));
 
   // 2) Fallback pass: send everything Cboe couldn't resolve to CNBC (batched).
   //    Exclude gold — CNBC's "XAU" is the PHLX Gold/Silver *index* (~150), not spot
@@ -146,5 +182,10 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  return Response.json({ results });
+  cacheQuotes(results);
+  // Re-assemble in the order asked for, so the response shape never depends on what
+  // happened to be cached.
+  const byId = new Map(results.map(r => [r.symbol, r]));
+  const out = symList.map(sym => fresh.get(sym) ?? byId.get(sym) ?? { symbol: sym, error: "not found" });
+  return Response.json({ results: out });
 }

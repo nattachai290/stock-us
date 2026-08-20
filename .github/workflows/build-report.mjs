@@ -8,6 +8,9 @@ const CHECKS = [
   { key: "build", label: "Build", cmd: "next build" },
   { key: "gold", label: "Gold-price tests", cmd: "npm run test:gold" },
   { key: "invest", label: "Invested-series tests", cmd: "npm run test:invested" },
+  { key: "port", label: "Target-weight tests", cmd: "npm run test:portfolio" },
+  { key: "market", label: "Market-hours tests", cmd: "npm run test:market" },
+  { key: "pcache", label: "Price-cache tests", cmd: "npm run test:pricecache" },
   { key: "ocr", label: "OCR pipeline tests", cmd: "npm run test:ocr" },
   { key: "parity", label: "Browser/CI pixel parity", cmd: "npm run test:parity" },
 ];
