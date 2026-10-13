@@ -65,6 +65,7 @@ jobs:
           run port    "Target-weight tests (test:portfolio)" npm run test:portfolio
           run market  "Market-hours tests (test:market)" npm run test:market
           run pcache  "Price-cache tests (test:pricecache)" npm run test:pricecache
+          run sync    "Drive sync tests (test:sync)" npm run test:sync
           run ocr     "OCR pipeline tests (test:ocr)"  npm run test:ocr
           run parity  "Browser/CI pixel parity (test:parity)" npm run test:parity
 
