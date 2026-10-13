@@ -913,6 +913,18 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
     rows.push(...collapsed);
   }
 
+  // The one-letter "O" fix is a guess from a glyph, made only because no pass read a
+  // ticker for that block. When the same minute also has a row at the SAME price whose
+  // share count ends in this row's digits, the guess is that row read a second time with
+  // its ticker AND its leading digit lost ("CELH 0.1036287" → "๐ 0.036287") — a shadow of
+  // a real row, not a second trade, and importing it would buy O that was never bought.
+  const sig = (q: string) => q.replace(/\D/g, "").replace(/^0+/, "");
+  const shadow = (r: MergedRow) => r.symbolCorrected === "๐" && rows.some(o =>
+    o !== r && o.symbolCorrected !== "๐" && o.iso === r.iso && o.priceStr === r.priceStr
+    && sig(r.qtyStr).length > 0 && sig(o.qtyStr).endsWith(sig(r.qtyStr)));
+  const shadows = rows.filter(shadow);
+  if (shadows.length) { const keep = rows.filter(r => !shadows.includes(r)); rows.length = 0; rows.push(...keep); }
+
   rows.sort((x, y) => new Date(x.iso).getTime() - new Date(y.iso).getTime());
   // "incomplete" must count transactions MISSING FROM THE FINAL output, not per-pass
   // parse failures: a block one pass couldn't finish is often recovered by the other,
@@ -979,14 +991,18 @@ export function mergeImages(parts: MergeResult[]): MergeResult & { source: numbe
   // shares a complete row with another one, the two provably overlap — the neighbour
   // starts above the cut, so it holds that row whole. Without a shared row the shots
   // may not meet at all, and the stub stays counted.
-  const qtys = new Set(out.map(x => x.r.qtyStr)), prices = new Set(out.map(x => x.r.priceStr));
+  // Compared as bare digits: a partial's number is by definition a damaged read — a CRWD
+  // split leg came through as "0 0870467" with its point read as a space, and string
+  // equality with the row's "0.0870467" missed it.
+  const digits = (v?: string) => (v ?? "").replace(/\D/g, "");
+  const qtys = new Set(out.map(x => digits(x.r.qtyStr))), prices = new Set(out.map(x => digits(x.r.priceStr)));
   const imgsOf = new Map<string, Set<number>>();
   for (const x of all) { const k = txKey(x.r); (imgsOf.get(k) ?? imgsOf.set(k, new Set()).get(k)!).add(x.i); }
   const overlaps = new Set<number>();
   for (const s of imgsOf.values()) if (s.size > 1) s.forEach(i => overlaps.add(i));
   const explained = (p: PartialBlock, i: number) =>
-    p.qtyStr ? qtys.has(p.qtyStr)
-    : p.priceStr ? prices.has(p.priceStr)
+    p.qtyStr ? qtys.has(digits(p.qtyStr))
+    : p.priceStr ? prices.has(digits(p.priceStr))
     : !!p.edge && overlaps.has(i);
   const incompleteBy = parts.map((p, i) => {
     if (!p.incomplete || parts.length < 2 || !p.partials?.length) return p.incomplete;

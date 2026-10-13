@@ -68,8 +68,26 @@ const check = (name, cond, detail = "") => {
   check("mergeImages: ...but kept when they share no row (may not meet at all)", m.incomplete === 1, `got ${m.incomplete}`);
   m = mergeImages([stub]);
   check("mergeImages: a single cut screenshot keeps its warning", m.incomplete === 1, `got ${m.incomplete}`);
+  m = mergeImages([{ rows: [row(A)], incomplete: 1, partials: [{ qtyStr: "1 0034129", edge: true }] }, { rows: [row(B)], incomplete: 0 }]);
+  check("mergeImages: a seam partial matches on digits, not formatting (\"1 0034129\")", m.incomplete === 0, `got ${m.incomplete}`);
   m = mergeImages([{ rows: [row(A)], incomplete: 0 }, { rows: [row(B)], incomplete: 0 }]);
   check("mergeImages: rows are attributed to their screenshot", m.source.join() === "0,1", m.source.join());
+}
+
+{
+  // The "O" whitelist guess must not survive as a shadow of a real row read in the same
+  // minute at the same price with its leading digit dropped (CELH 0.1036287 → ๐ 0.036287)
+  const mk = (csv, extra = {}) => {
+    const [dt, side, symbol, qtyStr, priceStr] = csv.split(","); const [d, t] = dt.split(" "); const [dd, mm, yy] = d.split("/");
+    return { csv, iso: `${yy}-${mm}-${dd}T${t}:00`, side, symbol, qtyStr, priceStr, qty: +qtyStr, price: +priceStr, check: "unverified", ...extra };
+  };
+  const real = mk("21/07/2026 11:57,B,CELH,0.1036287,28.66");
+  const ghost = mk("21/07/2026 11:57,B,O,0.036287,28.66", { symbolCorrected: "๐" });
+  let m = mergeParses({ rows: [real], incomplete: 0 }, { rows: [ghost], incomplete: 0 });
+  check("O guess that shadows a real row is dropped", m.rows.length === 1 && m.rows[0].symbol === "CELH", m.rows.map(r => r.csv).join("|"));
+  const ownO = mk("21/07/2026 11:57,B,O,0.0494613,61.26", { symbolCorrected: "๐" });
+  m = mergeParses({ rows: [real], incomplete: 0 }, { rows: [ownO], incomplete: 0 });
+  check("an O guess with its own price and count is kept (still flagged)", m.rows.length === 2 && m.rows.find(r => r.symbol === "O").flags.length > 0);
 }
 
 {
@@ -803,23 +821,36 @@ const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":
 
 // eng+tha main passes + an eng-only rescue pass, using the exact self-hosted data
 // the browser ships (public/tesseract) — mirrors OcrImport.tsx
+// OCR_LANG_PATH points the suite at another set of traineddata (e.g. tessdata_best) so a
+// model swap can be measured against the same ground truth before the app ships it.
+const LANG_PATH = process.env.OCR_LANG_PATH || path.join(ROOT, "public", "tesseract");
+if (process.env.OCR_LANG_PATH) console.log(`(traineddata from ${LANG_PATH})`);
 const worker = await createWorker("eng+tha", 1, {
-  langPath: path.join(ROOT, "public", "tesseract"),
+  langPath: LANG_PATH,
   gzip: true, cacheMethod: "none",
 });
 const engWorker = await createWorker("eng", 1, {
-  langPath: path.join(ROOT, "public", "tesseract"),
+  langPath: LANG_PATH,
   gzip: true, cacheMethod: "none",
 });
 const thaWorker = await createWorker("tha", 1, {
-  langPath: path.join(ROOT, "public", "tesseract"),
+  langPath: LANG_PATH,
   gzip: true, cacheMethod: "none",
 });
 // One text PER IMAGE — the app parses each screenshot on its own and merges after
 // (parseImages), so the harness must hand them over the same way.
+// Results are cached per worker+file+scale for the run: the many-file cases below are
+// built from fixtures the single-file cases already read, so they cost no extra OCR and
+// can be as many and as large as needed. Same worker, same pixels → same text, so the
+// cache changes nothing about what is tested.
+const ocrCache = new WeakMap();
 async function ocrText(w, imgs, scale) {
   const texts = [];
+  if (!ocrCache.has(w)) ocrCache.set(w, new Map());
+  const cache = ocrCache.get(w);
   for (const p of imgs) {
+    const ck = `${p}|${scale}`;
+    if (cache.has(ck)) { texts.push(cache.get(ck)); continue; }
     // DECODE and preprocessing are both the shared browser code now (lib/decode +
     // lib/preprocess), so app and CI hand tesseract identical pixels for the same file.
     // jimp is left only to encode the result as PNG, which is lossless.
@@ -828,6 +859,7 @@ async function ocrText(w, imgs, scale) {
     const r = resizeBilinear(view, width, height, scale);
     const out = Jimp.fromBitmap({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height });
     const { data } = await w.recognize(await out.getBuffer(JimpMime.png));
+    cache.set(ck, data.text);
     texts.push(data.text);
   }
   return texts;
@@ -839,6 +871,18 @@ async function ocrText(w, imgs, scale) {
 // fixtures where gluing the images into one text produced an unflagged wrong row, lost
 // a row, or reported overlap as "อ่านไม่ครบ"; each must now read exactly like the page.
 fs.mkdirSync(path.join(ROOT, ".ci"), { recursive: true });
+// one page as three overlapping scrolls: top / middle / bottom, two seams
+async function seamChain(f) {
+  const img = await Jimp.read(FIX(f)); const H = img.bitmap.height, W = img.bitmap.width;
+  const out = [];
+  for (const [tag, a, b] of [["s1", 0, 0.45], ["s2", 0.30, 0.75], ["s3", 0.60, 1]]) {
+    const p = path.join(ROOT, ".ci", f.replace(".jpg", `-${tag}.png`));
+    const y0 = Math.round(H * a), y1 = Math.round(H * b);
+    fs.writeFileSync(p, await img.clone().crop({ x: 0, y: y0, w: W, h: y1 - y0 }).getBuffer(JimpMime.png));
+    out.push(p);
+  }
+  return out;
+}
 async function seamPair(f) {
   const img = await Jimp.read(FIX(f)); const H = img.bitmap.height, W = img.bitmap.width;
   const out = [];
@@ -850,6 +894,8 @@ async function seamPair(f) {
   return out;
 }
 
+const TH_FILES = Object.keys(TH_STOCK_MORE).sort((a, b) => parseInt(a.match(/\d+/)) - parseInt(b.match(/\d+/)));
+const union = (fs_) => [...new Set(fs_.flatMap(f => TH_STOCK_MORE[f]))];
 const CASES = [
   { name: "3-image set", imgs: ["activity-1.jpg", "activity-2.jpg", "activity-3.jpg"].map(FIX), truth: TRUTH_ALL, minExact: 10 },
   { name: "single image", imgs: [FIX("activity-4-single.jpg")], truth: TRUTH_SINGLE, minExact: 2 },
@@ -877,6 +923,26 @@ const CASES = [
   // the same screenshot picked twice: every row read twice must still be ONE row, and
   // none of them may be reported as unread
   { name: "th-stock-19.jpg picked twice", imgs: [FIX("th-stock-19.jpg"), FIX("th-stock-19.jpg")], truth: TH_STOCK_MORE["th-stock-19.jpg"] },
+  // ── many files at once ──
+  // Every Thai stock page in one pick (85 rows): the batch must read exactly like the
+  // pages do one by one.
+  { name: "all 17 Thai stock pages picked at once", imgs: TH_FILES.map(FIX), truth: union(TH_FILES) },
+  // The picker's order is not the list's order — Android returns files in whatever
+  // order it likes. Reversed and shuffled must give the same rows.
+  { name: "6 pages picked in reverse order", imgs: TH_FILES.slice(0, 6).reverse().map(FIX), truth: union(TH_FILES.slice(0, 6)) },
+  { name: "6 pages picked shuffled", imgs: ["th-stock-14.jpg", "th-stock-5.jpg", "th-stock-18.jpg", "th-stock-9.jpg", "th-stock-3.jpg", "th-stock-12.jpg"].map(FIX),
+    truth: union(["th-stock-14.jpg", "th-stock-5.jpg", "th-stock-18.jpg", "th-stock-9.jpg", "th-stock-3.jpg", "th-stock-12.jpg"]) },
+  // One long page scrolled as THREE overlapping screenshots (two seams)
+  ...await Promise.all(["th-stock-12.jpg", "th-stock-19.jpg"].map(async f =>
+    ({ name: `${f} as 3 overlapping scrolls`, imgs: await seamChain(f), truth: TH_STOCK_MORE[f] }))),
+  // Everything a real pick can contain at once: two overlapping scrolls of one page,
+  // unrelated pages, and the same file picked twice
+  { name: "mixed: overlapping scrolls + other pages + a duplicate",
+    imgs: [...await seamPair("th-stock-16.jpg"), FIX("th-stock-7.jpg"), FIX("th-stock-10.jpg"), FIX("th-stock-7.jpg")],
+    truth: union(["th-stock-16.jpg", "th-stock-7.jpg", "th-stock-10.jpg"]) },
+  // Different layouts in one batch: US stock (Thai UI) pages and MTS-GOLD pages together
+  { name: "stock pages + gold pages together", imgs: [FIX("th-stock-4.jpg"), FIX("gold-mts-thai.jpg"), FIX("th-stock-8.jpg"), FIX("gold-mts-thai-4.jpg")],
+    truth: [...union(["th-stock-4.jpg", "th-stock-8.jpg"]), ...TRUTH_GOLD_THAI, ...TRUTH_GOLD_THAI_4] },
   // a seam-cut screenshot WITHOUT its neighbour: the cut row really is missing, and the
   // warning must survive even when another, unrelated screenshot is in the same batch
   { name: "seam-cut page + unrelated page", imgs: [(await seamPair("th-stock-19.jpg"))[0], FIX("th-stock-3.jpg")],
