@@ -1,5 +1,6 @@
 "use client";
 import { trimSuggestion, addSuggestion } from "../lib/portfolio";
+import { moveLabel } from "../lib/market";
 import Sheet from "./Sheet";
 import { btnPrimary, btnGhost } from "../lib/ui";
 
@@ -73,7 +74,7 @@ export default function DetailSheet({
             </div>
             <div style={{ textAlign: "right" }}>
               <div style={{ fontSize: 16, fontWeight: 700, color: "var(--ink)" }}>${h.currentPrice.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-              {h.changePct != null && <div style={{ fontSize: 12, fontWeight: 600, color: pc(h.changePct) }}>{h.changePct > 0 ? "+" : ""}{h.changePct}% วันนี้</div>}
+              {h.changePct != null && <div style={{ fontSize: 12, fontWeight: 600, color: pc(h.changePct) }}>{h.changePct > 0 ? "+" : ""}{h.changePct}% {moveLabel(h.priceTime)}</div>}
             </div>
           </div>
 

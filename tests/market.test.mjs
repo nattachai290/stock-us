@@ -7,7 +7,7 @@ import path from "path";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = execSync("npx esbuild app/lib/market.ts --format=esm", { cwd: ROOT }).toString();
-const { isMarketOpen, marketState, nyClock } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
+const { isMarketOpen, marketState, nyClock, moveLabel } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 
 let pass = 0, fail = 0;
 const t = (name, cond, detail = "") => { cond ? pass++ : fail++; console.log((cond ? "✓ " : "✗ FAIL ") + name + (cond ? "" : "  — " + detail)); };
@@ -70,6 +70,15 @@ const at = (iso) => new Date(iso); // callers pass explicit Z instants
   // midnight must be 0 minutes, not 1440 (hourCycle h23 vs h24)
   t("midnight ET is 0 minutes", nyClock(at("2026-07-08T04:00:00Z")).minutes === 0,
     String(nyClock(at("2026-07-08T04:00:00Z")).minutes));
+}
+
+{
+  // a quote's move is "today's" only while its session is today's in New York
+  const fri = at("2026-07-10T19:55:00Z").getTime(); // Fri 15:55 ET
+  t("same NY day → วันนี้", moveLabel(fri, at("2026-07-10T23:00:00Z")) === "วันนี้");
+  t("Saturday shows Friday's move as ล่าสุด", moveLabel(fri, at("2026-07-11T05:00:00Z")) === "ล่าสุด");
+  t("Bangkok morning after the close is still the NY session day", moveLabel(fri, at("2026-07-11T01:30:00Z")) === "วันนี้");
+  t("no quote time → วันนี้ (unchanged behaviour)", moveLabel(null) === "วันนี้");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

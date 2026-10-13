@@ -12,7 +12,9 @@ const all = read(".ci/audit-all.json");
 const prod = read(".ci/audit-prod.json");
 
 // A failed audit run (registry down, malformed lockfile) must not read as "no vulnerabilities".
-if (!all || !all.vulnerabilities) {
+// That includes the prod-only run: without it every finding would be filed under "dev" and
+// a critical advisory in a shipped dependency would pass the gate.
+if (!all || !all.vulnerabilities || !prod || !prod.vulnerabilities) {
   const body = ["<!-- npm-audit-comment -->", "### ⚠️ npm audit รันไม่สำเร็จ", "",
     "`npm audit --json` ไม่คืน JSON ที่อ่านได้ — ดู log ของ job", ""].join("\n");
   fs.mkdirSync(".ci", { recursive: true });

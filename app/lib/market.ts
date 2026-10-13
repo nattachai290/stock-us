@@ -53,3 +53,11 @@ export function marketState(at: Date = new Date()): MarketState {
 }
 
 export const isMarketOpen = (at: Date = new Date()): boolean => marketState(at).open;
+
+// Label for a quote's daily move. `changePct` is the move of the session the quote came
+// from, so once that session is not today's (a weekend, a holiday, the hours before the
+// next open) calling it "วันนี้" puts Friday's move on Saturday's screen.
+export function moveLabel(priceTime?: number | null, now: Date = new Date()): "วันนี้" | "ล่าสุด" {
+  if (!priceTime) return "วันนี้";
+  return nyClock(new Date(priceTime)).date === nyClock(now).date ? "วันนี้" : "ล่าสุด";
+}

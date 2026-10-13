@@ -1,5 +1,6 @@
 "use client";
 import { trimSuggestion, addSuggestion } from "../lib/portfolio";
+import { moveLabel } from "../lib/market";
 
 // Mobile card list for the portfolio tab (§5.3). Presentational only — all the
 // numbers here are the same per-row math the old table already computed; this
@@ -59,7 +60,7 @@ export default function HoldingsList({ holdings, tv, pc, onSelect }: {
                 )}
               </div>
               <div style={{ textAlign: "right", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>
-                {hasToday && <span style={{ color: pc(h.changePct), marginRight: 6 }}>วันนี้ {h.changePct > 0 ? "+" : ""}{h.changePct}%{isAlert ? " ⚡" : ""}</span>}
+                {hasToday && <span style={{ color: pc(h.changePct), marginRight: 6 }}>{moveLabel(h.priceTime)} {h.changePct > 0 ? "+" : ""}{h.changePct}%{isAlert ? " ⚡" : ""}</span>}
                 <span style={{ color: pc(pp) }}>P&L {pp >= 0 ? "+" : ""}{pp.toFixed(1)}%</span>
               </div>
             </div>
