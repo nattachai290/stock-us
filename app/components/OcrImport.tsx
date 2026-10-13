@@ -1,6 +1,6 @@
 "use client";
 import { useRef, useState } from "react";
-import { parseActivityText, mergeParses, extractTickerHints, mergeTickerHints, extractMonthHints, rowAppearsIn, type MergeResult } from "../lib/ocr";
+import { parseImages, extractTickerHintsByImage, extractMonthHints, type MergeResult } from "../lib/ocr";
 import { grayscaleNormalize, resizeBilinear } from "../lib/preprocess";
 import { decodeImage } from "../lib/decode";
 import { btnGhost, btnPrimary } from "../lib/ui";
@@ -87,15 +87,14 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       // stays meaningful. eng+tha: the broker app can be Thai (ขาย/ซื้อ, Thai months, Buddhist
       // year); Thai data doesn't hurt English screenshots and numbers/oz/USD stay Latin.
       const [w2, w3] = await Promise.all([mkWorker("eng+tha"), mkWorker("eng+tha")]);
-      const texts: Record<number, string> = { 2: "", 3: "" };
-      const perImage: { name: string; t2: string; t3: string; text: string }[] = [];
+      // Kept per image: each screenshot is parsed on its own and merged afterwards (see
+      // parseImages) — glued into one text, overlapping shots corrupted each other.
+      const perImage: { name: string; t2: string; t3: string; extra?: string[] }[] = [];
       for (let i = 0; i < N; i++) {
         setProgress(`กำลังอ่านรูปที่ ${i + 1}/${N}`); setPct(Math.round((i / N) * 100));
         const [b2, b3] = await Promise.all([preprocess(list[i], 2), preprocess(list[i], 3)]);
         const [r2, r3] = await Promise.all([w2.recognize(b2), w3.recognize(b3)]);
-        texts[2] += r2.data.text + "\n";
-        texts[3] += r3.data.text + "\n";
-        perImage.push({ name: list[i].name, t2: r2.data.text, t3: r3.data.text, text: r2.data.text + "\n" + r3.data.text });
+        perImage.push({ name: list[i].name, t2: r2.data.text, t3: r3.data.text });
         setPct(Math.round(((i + 1) / N) * 100));
       }
       await Promise.all([w2.terminate(), w3.terminate()]);
@@ -105,11 +104,7 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       // main passes first and run the specialists ONLY when there's something for them to
       // fix — clean screenshots (English, or Thai that OCR'd well) skip them and finish in
       // two passes instead of four.
-      const parseMain = (h?: Record<string, string>, mh?: Record<string, { mon: string; year: string }>, extra?: string[]) =>
-        mergeParses(parseActivityText(texts[2], h, knownSymbols, mh),
-                    parseActivityText(texts[3], h, knownSymbols, mh), { a: texts[2], b: texts[3], extra });
-      let merged = parseMain();
-      let hints: Record<string, string> | undefined, monthHints: Record<string, { mon: string; year: string }> | undefined;
+      let merged = parseImages(perImage, undefined, knownSymbols);
       // Run the specialist passes when there's something they can fix: an unfinished block
       // (incomplete), an inferred month, OR a row only one main pass saw — the specialists'
       // raw text is a third/fourth reader that can corroborate a single-round row and clear
@@ -134,13 +129,15 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
           setProgress(`กำลังอ่านรูปที่ ${Math.min(slow + 1, N)}/${N}`);
           setPct(Math.round(((done[0] + done[1]) / (2 * N)) * 100));
         };
+        // returns out[image][scale] — per image, for the same reason the main passes are
         const runLang = async (lang: string, k: number, scales: number[]) => {
           const w = await mkWorker(lang);
-          const out: Record<number, string> = {};
+          const out: Record<number, string>[] = [];
           for (let i = 0; i < N; i++) {
+            out[i] = {};
             for (const sc of scales) {
               const { data } = await w.recognize(await preprocess(list[i], sc));
-              out[sc] = (out[sc] ?? "") + data.text + "\n";
+              out[i][sc] = data.text;
             }
             bump(k);
           }
@@ -151,29 +148,19 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
         // and lost at 2x, while 2x catches names 3x misses. 2x takes precedence and 3x only
         // fills gaps, so adding it can never cost a hint the old single-scale pass had.
         const [engOut, thaOut] = await Promise.all([runLang("eng", 0, [2, 3]), runLang("tha", 1, [2])]);
-        const engText = engOut[2] + engOut[3], thaText = thaOut[2];
-        hints = mergeTickerHints(extractTickerHints(engOut[2], knownSymbols), extractTickerHints(engOut[3], knownSymbols), knownSymbols);
-        monthHints = extractMonthHints(thaText);
-        merged = parseMain(hints, monthHints, [engText, thaText]);
+        perImage.forEach((p, i) => { p.extra = [engOut[i][2] + "\n" + engOut[i][3], thaOut[i][2]]; });
+        const hints = extractTickerHintsByImage(engOut.map(o => ({ e2: o[2], e3: o[3] })), knownSymbols);
+        // month hints are line-local (keyed day+time, no state carried between lines), so
+        // reading them off the joined text is safe
+        const monthHints = extractMonthHints(thaOut.map(o => o[2]).join("\n"));
+        merged = parseImages(perImage, hints, knownSymbols, monthHints);
       }
-      // Attribute each row to a screenshot: the passes are parsed as one concatenated
-      // text, so ask which image's own text carries this row's time/price/share count.
+      // Each row knows the screenshot it came from now — no text-matching guesswork.
       const src: Record<string, string> = {};
-      for (const r of merged.rows) {
-        const hit = perImage.find(p => rowAppearsIn(r, p.text));
-        if (hit) src[r.csv] = hit.name;
-      }
-      // Unread rows are only a count, not rows — but "how many did this image lose" is
-      // the same subtraction applied to one image, so re-parse each one on its own (no
-      // extra OCR, just string work) and report which files don't come out whole.
-      const missing: { name: string; n: number }[] = [];
-      if (merged.incomplete > 0 && perImage.length) {
-        for (const p of perImage) {
-          const m = mergeParses(parseActivityText(p.t2, hints, knownSymbols, monthHints),
-                                parseActivityText(p.t3, hints, knownSymbols, monthHints), { a: p.t2, b: p.t3 });
-          if (m.incomplete > 0) missing.push({ name: p.name, n: m.incomplete });
-        }
-      }
+      merged.rows.forEach((r, i) => { src[r.csv] = perImage[merged.source[i]].name; });
+      const missing = merged.incompleteBy
+        .map((n, i) => ({ name: perImage[i].name, n }))
+        .filter(x => x.n > 0);
       setMissingBy(missing);
       setSource(src);
       setResult(merged);
