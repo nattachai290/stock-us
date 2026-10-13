@@ -1,5 +1,6 @@
 "use client";
 import { useState, useRef } from "react";
+import { historyToCSV } from "../lib/portfolio";
 import { IconClock, IconArrowDown, IconArrowUp, IconSplit } from "./icons";
 import { btn, btnGhost } from "../lib/ui";
 import ToolsMenu from "./ToolsMenu";
@@ -183,6 +184,17 @@ export default function HistoryTab({
         <div style={{ fontSize:16, fontWeight:700, color:"var(--ink)" }}>ประวัติ</div>
         <ToolsMenu items={[
           { label:"Import ประวัติ CSV", onClick:()=>setShowTxImport(v=>!v) },
+          // the history backup that doesn't depend on Drive — imports straight back above
+          { label:"Export ประวัติ CSV", onClick:()=>{
+              const csv = historyToCSV(holdings);
+              if (!csv) { msg("ยังไม่มีประวัติให้ export"); return; }
+              const a = document.createElement("a");
+              a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+              // ASCII name: a Thai filename comes out as plain "download" in Chromium
+              a.download = `stock-history-${new Date().toISOString().slice(0, 10)}.csv`;
+              a.click(); URL.revokeObjectURL(a.href);
+              msg(`Export ประวัติ ${csv.split("\n").length} รายการแล้ว ✓`);
+            } },
           { label:"Recalc FIFO", onClick:recalcRealizedFIFO },
           { label:"กู้คืน backup", onClick:restoreBackup },
           { label:"Clear ประวัติ", danger:true, onClick:()=>{

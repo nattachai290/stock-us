@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import DateTimePicker24h from "./components/DateTimePicker24h";
 import { parseCSV, toCSV, copyToClipboard, fifoBasisForSale, computeFromHistory , trimSuggestion, addSuggestion, totalToTarget } from "./lib/portfolio";
 import { isMarketOpen } from "./lib/market";
+import { decide, contentKey, summarize } from "./lib/syncstate";
 import { setOnDriveAuthExpired, listPortfolios, loadPortfolio, savePortfolio, deletePortfolio, renamePortfolio } from "./lib/drive";
 import { btn, btnPrimary, btnGhost, inp } from "./lib/ui";
 import Snackbar from "./components/Snackbar";
@@ -65,6 +66,17 @@ export default function App() {
   const [currentPortId, setCurrentPortId] = useState<string | null>(null);
   const [currentPortName, setCurrentPortName] = useState("Main");
   const [holdings, setHoldings] = useState<any[]>([]);
+  // Latest committed state, readable across awaits. refreshPrices waits on the network
+  // (up to 30s a batch). It used to take a snapshot of `holdings` and `currentPortId` at
+  // the start and write the whole snapshot back after every batch — so anything that
+  // happened meanwhile was undone: an edit reverted, or, after switching portfolio, the
+  // OLD portfolio's holdings put back on screen under the new one's id, to be uploaded
+  // into it on the next save. Rare when a person presses the button; once a minute,
+  // unattended, it isn't.
+  const holdingsRef = useRef(holdings); holdingsRef.current = holdings;
+  const portIdRef = useRef(currentPortId); portIdRef.current = currentPortId;
+  // A portfolio whose device copy and Drive copy both changed — the user picks the side
+  const [syncConflict, setSyncConflict] = useState<null | { portId: string; portName: string; local: any[]; drive: any[] }>(null);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [newPortName, setNewPortName] = useState("");
@@ -244,6 +256,9 @@ export default function App() {
     const refreshOnFocus = () => {
       if (tokenRef.current) {
         listPortfolios(tokenRef.current).then(setPortfolios).catch(() => {});
+        // another device may have saved while this one sat in the background
+        if (Date.now() - lastReconcileRef.current > 30_000)
+          reconcileRef.current(portIdRef.current, localStorage.getItem("currentPortName") || "", tokenRef.current);
       }
     };
     window.addEventListener("focus", refreshOnFocus);
@@ -273,12 +288,11 @@ export default function App() {
           if (ports.length > 0) {
             // On reconnect, reopen the port the user was on (fall back to the first).
             const target = ports.find(p => p.id === localStorage.getItem("currentPortId")) || ports[0];
-            const data = applyPriceCache(await loadPortfolio(t, target.id));
-            setHoldings(data); setCurrentPortId(target.id); setCurrentPortName(target.name);
+            // reconcile, never overwrite: this device may hold work a failed save left here
+            setCurrentPortId(target.id); setCurrentPortName(target.name); portIdRef.current = target.id;
             localStorage.setItem("currentPortId", target.id);
             localStorage.setItem("currentPortName", target.name);
-            localStorage.setItem(`holdings-${target.id}`, JSON.stringify(data));
-            msg(`โหลด "${target.name}" แล้ว ${data.length} รายการ ✓`);
+            await reconcileRef.current(target.id, target.name, t, true);
           } else {
             msg("เชื่อมต่อแล้ว ยังไม่มี port ใน Drive");
           }
@@ -303,12 +317,8 @@ export default function App() {
     if (cached) { try { setHoldings(applyPriceCache(JSON.parse(cached))); } catch {} }
     if (token) {
       msg(`กำลังโหลด "${portName}"...`, 0);
-      try {
-        const data = applyPriceCache(await loadPortfolio(token, portId));
-        setHoldings(data);
-        localStorage.setItem(`holdings-${portId}`, JSON.stringify(data));
-        msg(`โหลด "${portName}" แล้ว ✓`);
-      } catch (e: any) { msg("โหลดไม่ได้: " + e.message); }
+      portIdRef.current = portId;
+      await reconcileRef.current(portId, portName, token, true);
     }
   };
 
@@ -317,6 +327,7 @@ export default function App() {
     if (!token) { msg("กรุณา Login ก่อน"); return; }
     try {
       const id = await savePortfolio(token, null, newPortName.trim(), []);
+      markSynced(id, []);
       const newPort = { id, name: newPortName.trim() };
       setPortfolios([...portfolios, newPort]);
       setCurrentPortId(id); setCurrentPortName(newPortName.trim());
@@ -359,25 +370,108 @@ export default function App() {
     } catch (e: any) { msg("เปลี่ยนชื่อไม่ได้: " + e.message); }
   };
 
+  // ── Device ↔ Drive (see lib/syncstate) ──
+  // `synced-<id>` holds the content hash of the last copy this device knows matched Drive.
+  const markSynced = (id: string, data: any[]) => { try { localStorage.setItem(`synced-${id}`, contentKey(data)); } catch {} };
+
   const saveData = useCallback(async (data: any[], portId = currentPortId, portName = currentPortName) => {
     const key = `holdings-${portId||"local"}`;
     localStorage.setItem(key, JSON.stringify(data));
     if (token && portId) {
       setSaving(true);
       try {
+        // Never overwrite a Drive copy another device changed since this one last synced:
+        // that was a silent lost update — whole-file last-write-wins.
+        const stamp = localStorage.getItem(`synced-${portId}`);
+        if (stamp) {
+          const drive = await loadPortfolio(token, portId);
+          const dk = contentKey(drive);
+          if (dk !== stamp && dk !== contentKey(data)) {
+            setSyncConflict({ portId, portName, local: data, drive });
+            msg("⚠️ ข้อมูลใน Drive ถูกแก้จากอีกเครื่อง — เลือกด้านบนว่าจะใช้ข้อมูลฝั่งไหน", 6000);
+            setSaving(false);
+            return;
+          }
+        }
         const newId = await savePortfolio(token, portId, portName, data);
+        markSynced(newId, data);
         if (newId !== portId) {
           setCurrentPortId(newId);
           localStorage.setItem("currentPortId", newId);
           setPortfolios(prev => prev.map(p => p.id === portId ? {...p, id: newId} : p));
         }
         msg("Sync Drive แล้ว ✓");
-      } catch (e: any) { msg("Sync ไม่ได้: " + e.message); }
+      } catch (e: any) {
+        // The copy stays on this device, and reconcile() sends it up the next time the app
+        // opens, regains focus or renews its Google session — it used to just stay behind.
+        msg("⚠️ Sync ไม่ได้ (" + e.message + ") — ข้อมูลยังอยู่ในเครื่องนี้ จะส่งขึ้น Drive ให้เองเมื่อเชื่อมต่อได้", 6000);
+      }
       setSaving(false);
     }
   }, [token, currentPortId, currentPortName]);
 
   const setAndSave = (data: any[]) => { setHoldings(data); saveData(data); };
+
+  // Bring this device and Drive into agreement for one portfolio. Opening the app used to
+  // show the device's own copy and never ask Drive (a second device kept showing days-old
+  // data until the portfolio was switched), and login / switching wrote Drive over the
+  // device unconditionally (anything a failed save had left only here was destroyed).
+  // decide() says which side is newer; a real divergence is put to the user, never guessed.
+  const reconcilingRef = useRef(false);
+  const lastReconcileRef = useRef(0);
+  const reconcile = async (portId: string | null, portName: string, t: string | null = tokenRef.current, announce = false) => {
+    if (!t || !portId || reconcilingRef.current) return;
+    reconcilingRef.current = true; lastReconcileRef.current = Date.now();
+    try {
+      const drive = await loadPortfolio(t, portId);
+      if (portIdRef.current !== portId) return; // switched away while loading
+      const key = `holdings-${portId}`;
+      let local: any[] | null = null;
+      try { const raw = localStorage.getItem(key); local = raw ? JSON.parse(raw) : null; } catch {}
+      const show = (data: any[]) => {
+        const v = applyPriceCache(data);
+        holdingsRef.current = v; setHoldings(v); localStorage.setItem(key, JSON.stringify(v));
+      };
+      const d = decide(local, drive, localStorage.getItem(`synced-${portId}`));
+      if (d === "same") { show(local!); markSynced(portId, drive); if (announce) msg(`โหลด "${portName}" แล้ว ✓`); }
+      else if (d === "pull") { show(drive); markSynced(portId, drive); msg(`อัปเดต "${portName}" ล่าสุดจาก Drive แล้ว ✓`); }
+      else if (d === "push") {
+        show(local!);
+        await savePortfolio(t, portId, portName, local!);
+        markSynced(portId, local!);
+        msg(`ส่งข้อมูลที่ค้างอยู่ในเครื่องนี้ขึ้น Drive แล้ว ✓`);
+      }
+      else { show(local!); setSyncConflict({ portId, portName, local: local!, drive }); }
+    } catch (e: any) {
+      if (announce) msg("โหลดจาก Drive ไม่ได้: " + e.message);
+    } finally { reconcilingRef.current = false; }
+  };
+  const reconcileRef = useRef(reconcile); reconcileRef.current = reconcile;
+
+  // Pick a side in a conflict. The side not chosen goes to the one-slot backup, so the
+  // existing กู้คืน button can bring it back if the choice was wrong.
+  const resolveConflict = async (use: "local" | "drive") => {
+    const c = syncConflict; if (!c) return;
+    const keep = use === "local" ? c.local : c.drive, drop = use === "local" ? c.drive : c.local;
+    try {
+      localStorage.setItem(`backup-${c.portId}`, JSON.stringify({ ts: Date.now(), label: use === "local" ? "ข้อมูลใน Drive ก่อนเลือก" : "ข้อมูลในเครื่องก่อนเลือก", holdings: drop }));
+    } catch {}
+    const v = applyPriceCache(keep);
+    localStorage.setItem(`holdings-${c.portId}`, JSON.stringify(v));
+    if (portIdRef.current === c.portId) { holdingsRef.current = v; setHoldings(v); }
+    setSyncConflict(null);
+    if (use === "local" && token) {
+      try { await savePortfolio(token, c.portId, c.portName, keep); markSynced(c.portId, keep); msg("ใช้ข้อมูลในเครื่องนี้ และส่งขึ้น Drive แล้ว ✓"); }
+      catch (e: any) { msg("⚠️ ส่งขึ้น Drive ไม่ได้: " + e.message, 6000); }
+    } else { markSynced(c.portId, keep); msg("ใช้ข้อมูลจาก Drive แล้ว ✓ (ของเดิมในเครื่องเก็บไว้ในปุ่มกู้คืน)"); }
+  };
+
+  // Reconcile when the app opens with a session, whenever the session is renewed (a save
+  // that failed on an expired token gets sent then), and when the portfolio changes.
+  useEffect(() => {
+    if (loaded && token && currentPortId) reconcileRef.current(currentPortId, currentPortName, token);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, token, currentPortId]);
 
   // One-slot safety snapshot taken before destructive operations (recalc, clear,
   // import, delete) so a bad rewrite can be undone with the กู้คืน button.
@@ -400,15 +494,6 @@ export default function App() {
   // `silent` is the auto-refresh path: same fetching, none of the interruption. A poll
   // every 60s must not flash the snackbar, disable the button, or spam Drive — it just
   // swaps the numbers in place. Manual presses keep the full progress reporting.
-  // Latest committed state, readable across awaits. refreshPrices waits on the network
-  // (up to 30s a batch). It used to take a snapshot of `holdings` and `currentPortId` at
-  // the start and write the whole snapshot back after every batch — so anything that
-  // happened meanwhile was undone: an edit reverted, or, after switching portfolio, the
-  // OLD portfolio's holdings put back on screen under the new one's id, to be uploaded
-  // into it on the next save. Rare when a person presses the button; once a minute,
-  // unattended, it isn't.
-  const holdingsRef = useRef(holdings); holdingsRef.current = holdings;
-  const portIdRef = useRef(currentPortId); portIdRef.current = currentPortId;
 
   // `silent` is the auto-refresh path: same fetching, none of the interruption. A poll
   // every 60s must not flash the snackbar, disable the button, or spam Drive — it just
@@ -1232,6 +1317,27 @@ export default function App() {
         <AppShell tab={tab} onTabChange={setTab}/>
 
         <div className="content-area">
+        {syncConflict && (()=>{
+          const L = summarize(syncConflict.local), D = summarize(syncConflict.drive);
+          const day = (iso: string|null) => iso ? new Date(iso).toLocaleString("th-TH",{day:"numeric",month:"short",year:"2-digit",hour:"2-digit",minute:"2-digit"}) : "—";
+          const side = (title: string, x: typeof L) => (
+            <div style={{flex:1,minWidth:140,background:"var(--card2)",borderRadius:8,padding:"10px 12px"}}>
+              <div style={{fontSize:12,fontWeight:700,color:"var(--ink)",marginBottom:4}}>{title}</div>
+              <div style={{fontSize:11.5,color:"var(--mut)",lineHeight:1.6}}>{x.transactions} รายการ · {x.positions} หุ้น<br/>ล่าสุด {day(x.latest)}</div>
+            </div>
+          );
+          return (
+            <div style={{background:"var(--card)",border:"1px solid var(--warn)",borderRadius:"var(--r-md)",padding:16,marginBottom:12}}>
+              <div style={{fontSize:13.5,fontWeight:700,color:"var(--warn)",marginBottom:4}}>ข้อมูล "{syncConflict.portName}" ในเครื่องนี้ไม่ตรงกับ Drive</div>
+              <div style={{fontSize:12,color:"var(--mut)",marginBottom:10}}>ทั้งสองฝั่งมีการเปลี่ยนแปลงที่อีกฝั่งไม่มี เลือกฝั่งที่ถูกต้อง — ฝั่งที่ไม่เลือกจะเก็บไว้ในปุ่ม "กู้คืน"</div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>{side("เครื่องนี้",L)}{side("Google Drive",D)}</div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <button onClick={()=>resolveConflict("local")} style={btn("var(--brass)","var(--on-brass)",{fontSize:12.5})}>ใช้ของเครื่องนี้</button>
+                <button onClick={()=>resolveConflict("drive")} style={btn("var(--line)","var(--ink)",{fontSize:12.5})}>ใช้ของ Drive</button>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* PORTFOLIO TAB */}
         {tab==="portfolio"&&(

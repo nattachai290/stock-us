@@ -32,6 +32,8 @@ export default function PortfolioValueChart({
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [days, setDays] = useState<RangeVal>(365);
+  // index into `view` under the pointer (mouse or finger), null when not scrubbing
+  const [hover, setHover] = useState<number | null>(null);
   const [diag, setDiag] = useState<string[]>([]); // per-symbol fetch errors
   const [enabled, setEnabled] = useState<Set<string>>(new Set(["SPY", "QQQ"])); // shown benchmarks
 
@@ -91,6 +93,7 @@ export default function PortfolioValueChart({
 
   const W = 600, H = 160, P = 6;
   let path = "", area = "", minV = 0, maxV = 0, t0 = 0, t1 = 0;
+  let xf = (_t: number) => 0, yf = (_v: number) => 0;
   const benchPaths: { d: string; color: string; dash: string }[] = [];
   if (!empty) {
     t0 = view[0].t; t1 = view.at(-1)!.t;
@@ -99,6 +102,7 @@ export default function PortfolioValueChart({
     minV = Math.min(...all); maxV = Math.max(...all);
     const x = (t: number) => P + ((t - t0) / (t1 - t0 || 1)) * (W - 2 * P);
     const y = (v: number) => H - P - ((v - minV) / (maxV - minV || 1)) * (H - 2 * P);
+    xf = x; yf = y;
     path = `M ${x(view[0].t)} ${y(view[0].v)}`;
     for (let i = 1; i < view.length; i++) path += ` L ${x(view[i].t)} ${y(view[i].v)}`;
     area = `${path} L ${x(view.at(-1)!.t)} ${H - P} L ${x(view[0].t)} ${H - P} Z`;
@@ -133,11 +137,59 @@ export default function PortfolioValueChart({
         </div>
       ) : (
         <>
-          <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} preserveAspectRatio="none" aria-label="กราฟมูลค่าพอตย้อนหลัง">
-            <path d={area} fill="var(--brass)" opacity="0.08" />
-            {benchPaths.map((b, i) => b.d && <path key={i} d={b.d} fill="none" stroke={b.color} strokeWidth="1.5" strokeDasharray={b.dash} vectorEffect="non-scaling-stroke" />)}
-            <path d={path} fill="none" stroke="var(--brass)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
-          </svg>
+          {(() => {
+            // Scrubbing: the pointer's x picks the nearest day; a vertical guide, a dot on each
+            // line and a label show that day's values. Dots and the label are HTML laid over the
+            // SVG by percentage — the SVG stretches non-uniformly (preserveAspectRatio="none"),
+            // which would squash an SVG circle into an ellipse.
+            const hi = hover != null && hover < view.length ? hover : null;
+            const pick = (e: React.PointerEvent<SVGSVGElement>) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              const sx = ((e.clientX - r.left) / r.width) * W;
+              const t = t0 + ((sx - P) / (W - 2 * P)) * (t1 - t0);
+              let best = 0;
+              for (let i = 1; i < view.length; i++) if (Math.abs(view[i].t - t) < Math.abs(view[best].t - t)) best = i;
+              setHover(best);
+            };
+            const pctX = (t: number) => (xf(t) / W) * 100, pctY = (v: number) => (yf(v) / H) * 100;
+            const p = hi != null ? view[hi] : null;
+            const onRight = p ? pctX(p.t) > 55 : false;
+            return (
+              <div style={{ position: "relative" }}>
+                <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block", touchAction: "pan-y", cursor: "crosshair" }}
+                  preserveAspectRatio="none" aria-label="กราฟมูลค่าพอตย้อนหลัง"
+                  onPointerMove={pick} onPointerDown={pick}
+                  // a finger "leaves" the moment it lifts — keep the last value up for touch;
+                  // it clears when the page scrolls (the browser cancels the pointer then)
+                  onPointerLeave={e => { if (e.pointerType !== "touch") setHover(null); }}
+                  onPointerCancel={() => setHover(null)}>
+                  <path d={area} fill="var(--brass)" opacity="0.08" />
+                  {benchPaths.map((b, i) => b.d && <path key={i} d={b.d} fill="none" stroke={b.color} strokeWidth="1.5" strokeDasharray={b.dash} vectorEffect="non-scaling-stroke" />)}
+                  <path d={path} fill="none" stroke="var(--brass)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+                  {p && <line x1={xf(p.t)} x2={xf(p.t)} y1={P} y2={H - P} stroke="var(--mut)" strokeWidth="1" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />}
+                </svg>
+                {p && (
+                  <>
+                    {benches.map(b => b.data[hi!] != null && (
+                      <span key={b.def.sym} style={{ position: "absolute", left: `${pctX(p.t)}%`, top: `${pctY(b.data[hi!]!)}%`, width: 7, height: 7, marginLeft: -3.5, marginTop: -3.5, borderRadius: "50%", background: b.def.color, pointerEvents: "none" }} />
+                    ))}
+                    <span style={{ position: "absolute", left: `${pctX(p.t)}%`, top: `${pctY(p.v)}%`, width: 9, height: 9, marginLeft: -4.5, marginTop: -4.5, borderRadius: "50%", background: "var(--brass)", border: "2px solid var(--card)", pointerEvents: "none" }} />
+                    <div style={{
+                      position: "absolute", top: 4, pointerEvents: "none", whiteSpace: "nowrap",
+                      ...(onRight ? { right: `${100 - pctX(p.t)}%`, marginRight: 10 } : { left: `${pctX(p.t)}%`, marginLeft: 10 }),
+                      background: "var(--card2)", border: "1px solid var(--line)", borderRadius: 8, padding: "6px 9px", boxShadow: "var(--shadow)", fontSize: 11,
+                    }}>
+                      <div style={{ color: "var(--mut)", marginBottom: 2 }}>{new Date(p.t).toLocaleDateString("th-TH", { day: "numeric", month: "short", year: "2-digit" })}</div>
+                      <div style={{ color: "var(--ink)", fontWeight: 700 }}>{fmt$(p.v)}</div>
+                      {benches.map(b => b.data[hi!] != null && (
+                        <div key={b.def.sym} style={{ color: "var(--mut)" }}>{b.def.label} {fmt$(b.data[hi!]!)}</div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })()}
           <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", alignItems: "center", columnGap: 14, rowGap: 3, fontSize: 11, marginTop: 8 }}>
             <span style={{ display: "flex", alignItems: "center", gap: 7, color: "var(--ink)", fontWeight: 700 }}>
               <span style={{ width: 14, height: 3, borderRadius: 2, background: "var(--brass)" }} /> พอต

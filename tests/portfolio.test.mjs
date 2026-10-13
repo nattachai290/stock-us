@@ -7,7 +7,7 @@ import path from "path";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = execSync("npx esbuild app/lib/portfolio.ts --format=esm", { cwd: ROOT }).toString();
-const { addSuggestion, totalToTarget } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
+const { addSuggestion, totalToTarget, historyToCSV } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 
 let pass = 0, fail = 0;
 const t = (name, cond, detail = "") => { cond ? pass++ : fail++; console.log((cond ? "✓ " : "✗ FAIL ") + name + (cond ? "" : "  — " + detail)); };
@@ -84,6 +84,19 @@ const H = (value, targetPct, avgCost = 1) => ({ shares: value, currentPrice: 1, 
   const total = totalToTarget(hs, tv);
   const rowSum = hs.reduce((s, h) => s + addSuggestion(h, tv).amount, 0);
   t("T ≥ 100% falls back to the row sum", near(total, rowSum) && total > 0, `got ${total}`);
+}
+
+{
+  // historyToCSV — the history backup, in the format "Import ประวัติ CSV" reads
+  const csv = historyToCSV([{ symbol: "CRWD", shares: 0, avgCost: 0,
+    buyHistory: [{ date: "2026-06-01T10:05:00", qty: 0.1, price: 300 }, { date: "2026-07-01T09:00:00", qty: 0.0327803, price: 400 }],
+    realizedHistory: [{ date: "2026-08-01T21:30:00", qty: 0.05, sellPrice: 120, avgCostAtSale: 75 }],
+    splitHistory: [{ date: "2026-07-02T15:05:00", ratio: "0.5311212" }] }]).split("\n");
+  t("history export: one line per transaction, split as a -/+ pair", csv.length === 5, csv.join(" | "));
+  t("history export: oldest first", csv[0].startsWith("01/06/2026 10:05,B,CRWD,0.1,300"), csv[0]);
+  t("history export: '-' leg carries the shares held just before the split", csv[2] === "02/07/2026 15:05,-,CRWD,0.1327803", csv[2]);
+  t("history export: '+' leg carries the new total with price 0", csv[3] === "02/07/2026 15:05,+,CRWD,0.5311212,0", csv[3]);
+  t("history export: sells as S at the sell price", csv[4] === "01/08/2026 21:30,S,CRWD,0.05,120", csv[4]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
