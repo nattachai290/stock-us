@@ -1,6 +1,7 @@
 "use client";
 import { useRef, useState } from "react";
-import { parseActivityText, mergeParses, extractTickerHints, mergeTickerHints, extractMonthHints, rowAppearsIn, type MergeResult } from "../lib/ocr";
+import { parseImages, extractTickerHintsByImage, extractMonthHints, type MergeResult } from "../lib/ocr";
+import { repairCounts, wordsOf, isDamagedCount, DIGIT_PARAMS } from "../lib/digitfix";
 import { grayscaleNormalize, resizeBilinear } from "../lib/preprocess";
 import { decodeImage } from "../lib/decode";
 import { btnGhost, btnPrimary } from "../lib/ui";
@@ -34,7 +35,7 @@ const flagColumns = (flags: string[]): number[] => {
 
 export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: string, flaggedFields: { csv: string; cols: number[] }[]) => void; knownSymbols?: string[] }) {
   const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState("");     // "รูปที่ x/y" label (no round numbers shown)
+  const [progress, setProgress] = useState("");     // result/error message only — reading shows the bar alone
   const [pct, setPct] = useState<number | null>(null); // 0..100 for the progress bar; null = no bar
   const [result, setResult] = useState<MergeResult | null>(null);
   // csv line → the screenshot it was read from, so a row that needs checking can be
@@ -51,6 +52,11 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
   // ~6% of bytes, enough to change which rows OCR reads. JPEG and PNG (the two formats the
   // picker accepts) both decode through the shared path; anything else, or a PNG variant
   // the decoder refuses, falls back to the browser decoder. Canvas only encodes the PNG.
+  // Pixel size of each preprocessed image, which the digit re-read needs to clamp its
+  // boxes — known here already, so it never has to decode the PNG again to find out.
+  const dims = useRef(new WeakMap<Blob, { w: number; h: number }>());
+  // Bumped per read, so a finished read's hide timer can't hide the NEXT read's bar.
+  const runId = useRef(0);
   const preprocess = async (file: File, scale: number): Promise<Blob> => {
     const bytes = new Uint8Array(await file.arrayBuffer());
     let src = decodeImage(bytes) as { data: Uint8ClampedArray; width: number; height: number } | null;
@@ -67,12 +73,21 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
     const c2 = document.createElement("canvas");
     c2.width = r.width; c2.height = r.height;
     c2.getContext("2d")!.putImageData(new ImageData(r.data, r.width, r.height), 0, 0);
-    return new Promise((res, rej) => c2.toBlob(b => b ? res(b) : rej(new Error("canvas.toBlob failed")), "image/png"));
+    const blob = await new Promise<Blob>((res, rej) => c2.toBlob(b => b ? res(b) : rej(new Error("canvas.toBlob failed")), "image/png"));
+    dims.current.set(blob, { w: r.width, h: r.height });
+    return blob;
   };
 
   const run = async (files: FileList) => {
     if (!files.length) return;
-    setBusy(true); setResult(null); setSource({}); setMissingBy([]); setPct(0); setProgress("กำลังโหลดตัวอ่าน OCR (ครั้งแรกอาจใช้เวลาสักครู่)...");
+    const myRun = ++runId.current;
+    setBusy(true); setResult(null); setSource({}); setMissingBy([]); setPct(0); setProgress("");
+    // ONE bar for the whole read. The main passes fill the first half and the specialist
+    // passes (when needed) the second; it only ever moves forward. It used to restart
+    // at 0 with "รูปที่ 1/N" when the specialists began, so a 3-image read counted
+    // 1 2 3 1 2 3 and filled the bar twice.
+    const MAIN_SHARE = 50;
+    const advance = (v: number) => setPct(p => Math.max(p ?? 0, Math.round(v)));
     try {
       const { createWorker } = await import("tesseract.js");
       const mkWorker = (lang: string) => createWorker(lang, 1, {
@@ -87,29 +102,38 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       // stays meaningful. eng+tha: the broker app can be Thai (ขาย/ซื้อ, Thai months, Buddhist
       // year); Thai data doesn't hurt English screenshots and numbers/oz/USD stay Latin.
       const [w2, w3] = await Promise.all([mkWorker("eng+tha"), mkWorker("eng+tha")]);
-      const texts: Record<number, string> = { 2: "", 3: "" };
-      const perImage: { name: string; t2: string; t3: string; text: string }[] = [];
+      // Kept per image: each screenshot is parsed on its own and merged afterwards (see
+      // parseImages) — glued into one text, overlapping shots corrupted each other.
+      const perImage: { name: string; t2: string; t3: string; extra?: string[] }[] = [];
+      // Damaged share counts are re-read digit-only (see lib/digitfix). The worker is only
+      // started if some count actually came through damaged — clean screenshots skip it.
+      let digitWorker: Awaited<ReturnType<typeof mkWorker>> | null = null;
+      const repair = async (data: { text: string; blocks?: any[] | null }, blob: Blob) => {
+        const words = wordsOf(data);
+        if (!words.some(x => isDamagedCount(x.text))) return data.text;
+        if (!digitWorker) { digitWorker = await mkWorker("eng"); await digitWorker.setParameters(DIGIT_PARAMS as any); }
+        const d = dims.current.get(blob)!;
+        const dw = digitWorker;
+        const fixed = await repairCounts(data.text, words, d.w, d.h,
+          async rect => (await dw.recognize(blob, { rectangle: rect })).data.text);
+        return fixed.text;
+      };
       for (let i = 0; i < N; i++) {
-        setProgress(`กำลังอ่านรูปที่ ${i + 1}/${N}`); setPct(Math.round((i / N) * 100));
         const [b2, b3] = await Promise.all([preprocess(list[i], 2), preprocess(list[i], 3)]);
-        const [r2, r3] = await Promise.all([w2.recognize(b2), w3.recognize(b3)]);
-        texts[2] += r2.data.text + "\n";
-        texts[3] += r3.data.text + "\n";
-        perImage.push({ name: list[i].name, t2: r2.data.text, t3: r3.data.text, text: r2.data.text + "\n" + r3.data.text });
-        setPct(Math.round(((i + 1) / N) * 100));
+        const [r2, r3] = await Promise.all([w2.recognize(b2, {}, { blocks: true }), w3.recognize(b3, {}, { blocks: true })]);
+        // the repairs share one digit worker, so they run one after the other
+        const t2 = await repair(r2.data, b2), t3 = await repair(r3.data, b3);
+        perImage.push({ name: list[i].name, t2, t3 });
+        advance(((i + 1) / N) * MAIN_SHARE);
       }
-      await Promise.all([w2.terminate(), w3.terminate()]);
+      await Promise.all([w2.terminate(), w3.terminate(), (digitWorker as Awaited<ReturnType<typeof mkWorker>> | null)?.terminate()]);
       // The two eng+tha passes alone often read everything. The specialist single-language
       // passes below only ever help blocks the main passes couldn't finish (a Thai-mangled
       // ticker → dropped → incomplete; a Latin-rendered month → inferred). So parse the
       // main passes first and run the specialists ONLY when there's something for them to
       // fix — clean screenshots (English, or Thai that OCR'd well) skip them and finish in
       // two passes instead of four.
-      const parseMain = (h?: Record<string, string>, mh?: Record<string, { mon: string; year: string }>, extra?: string[]) =>
-        mergeParses(parseActivityText(texts[2], h, knownSymbols, mh),
-                    parseActivityText(texts[3], h, knownSymbols, mh), { a: texts[2], b: texts[3], extra });
-      let merged = parseMain();
-      let hints: Record<string, string> | undefined, monthHints: Record<string, { mon: string; year: string }> | undefined;
+      let merged = parseImages(perImage, undefined, knownSymbols);
       // Run the specialist passes when there's something they can fix: an unfinished block
       // (incomplete), an inferred month, OR a row only one main pass saw — the specialists'
       // raw text is a third/fourth reader that can corroborate a single-round row and clear
@@ -125,22 +149,21 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
         // eng-only reads Latin tickers the Thai model mangles (keyed by share count);
         // tha-only reads Thai month abbreviations eng+tha renders as Latin (keyed by day+time).
         // Both specialist workers run concurrently (still peak 2 workers, since the main pair
-        // was terminated first). Progress tracks the slower of the two over the same images.
-        setProgress(`กำลังอ่านรูปที่ 1/${N}`); setPct(0);
+        // was terminated first). Both workers' images count toward the bar's second half.
         const done = [0, 0];
         const bump = (k: number) => {
           done[k]++;
-          const slow = Math.min(done[0], done[1]);
-          setProgress(`กำลังอ่านรูปที่ ${Math.min(slow + 1, N)}/${N}`);
-          setPct(Math.round(((done[0] + done[1]) / (2 * N)) * 100));
+          advance(MAIN_SHARE + ((done[0] + done[1]) / (2 * N)) * (100 - MAIN_SHARE));
         };
+        // returns out[image][scale] — per image, for the same reason the main passes are
         const runLang = async (lang: string, k: number, scales: number[]) => {
           const w = await mkWorker(lang);
-          const out: Record<number, string> = {};
+          const out: Record<number, string>[] = [];
           for (let i = 0; i < N; i++) {
+            out[i] = {};
             for (const sc of scales) {
               const { data } = await w.recognize(await preprocess(list[i], sc));
-              out[sc] = (out[sc] ?? "") + data.text + "\n";
+              out[i][sc] = data.text;
             }
             bump(k);
           }
@@ -151,33 +174,26 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
         // and lost at 2x, while 2x catches names 3x misses. 2x takes precedence and 3x only
         // fills gaps, so adding it can never cost a hint the old single-scale pass had.
         const [engOut, thaOut] = await Promise.all([runLang("eng", 0, [2, 3]), runLang("tha", 1, [2])]);
-        const engText = engOut[2] + engOut[3], thaText = thaOut[2];
-        hints = mergeTickerHints(extractTickerHints(engOut[2], knownSymbols), extractTickerHints(engOut[3], knownSymbols), knownSymbols);
-        monthHints = extractMonthHints(thaText);
-        merged = parseMain(hints, monthHints, [engText, thaText]);
+        perImage.forEach((p, i) => { p.extra = [engOut[i][2] + "\n" + engOut[i][3], thaOut[i][2]]; });
+        const hints = extractTickerHintsByImage(engOut.map(o => ({ e2: o[2], e3: o[3] })), knownSymbols);
+        // month hints are line-local (keyed day+time, no state carried between lines), so
+        // reading them off the joined text is safe
+        const monthHints = extractMonthHints(thaOut.map(o => o[2]).join("\n"));
+        merged = parseImages(perImage, hints, knownSymbols, monthHints);
       }
-      // Attribute each row to a screenshot: the passes are parsed as one concatenated
-      // text, so ask which image's own text carries this row's time/price/share count.
+      // Each row knows the screenshot it came from now — no text-matching guesswork.
       const src: Record<string, string> = {};
-      for (const r of merged.rows) {
-        const hit = perImage.find(p => rowAppearsIn(r, p.text));
-        if (hit) src[r.csv] = hit.name;
-      }
-      // Unread rows are only a count, not rows — but "how many did this image lose" is
-      // the same subtraction applied to one image, so re-parse each one on its own (no
-      // extra OCR, just string work) and report which files don't come out whole.
-      const missing: { name: string; n: number }[] = [];
-      if (merged.incomplete > 0 && perImage.length) {
-        for (const p of perImage) {
-          const m = mergeParses(parseActivityText(p.t2, hints, knownSymbols, monthHints),
-                                parseActivityText(p.t3, hints, knownSymbols, monthHints), { a: p.t2, b: p.t3 });
-          if (m.incomplete > 0) missing.push({ name: p.name, n: m.incomplete });
-        }
-      }
+      merged.rows.forEach((r, i) => { src[r.csv] = perImage[merged.source[i]].name; });
+      const missing = merged.incompleteBy
+        .map((n, i) => ({ name: perImage[i].name, n }))
+        .filter(x => x.n > 0);
       setMissingBy(missing);
       setSource(src);
       setResult(merged);
-      setPct(null);
+      // A clean read never needs the specialists and stops at the halfway mark — finish
+      // the bar rather than have it vanish from 50%.
+      advance(100);
+      setTimeout(() => { if (runId.current === myRun) setPct(null); }, 350);
       setProgress(merged.rows.length ? "" : "อ่านไม่พบรายการในรูป — ใช้ภาพแคปหน้า Activity ที่เห็นบรรทัดเต็มๆ");
     } catch (e: any) {
       setPct(null);

@@ -23,10 +23,12 @@ const FIX = (f) => path.join(ROOT, "tests", "fixtures", f);
 
 // compile the TS modules on the fly so the test always runs the current source
 const src = execSync("npx esbuild app/lib/ocr.ts --format=esm", { cwd: ROOT }).toString();
-const { parseActivityText, mergeParses, extractTickerHints, mergeTickerHints, extractMonthHints } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
+const { parseActivityText, mergeParses, extractTickerHints, mergeTickerHints, extractMonthHints, parseImages, mergeImages, extractTickerHintsByImage } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 const preSrc = execSync("npx esbuild app/lib/preprocess.ts --format=esm", { cwd: ROOT }).toString();
 const { grayscaleNormalize, resizeBilinear } = await import("data:text/javascript;base64," + Buffer.from(preSrc).toString("base64"));
 // --bundle inlines jpeg-js so this is byte-for-byte the decoder the browser bundle runs
+const dfSrc = execSync("npx esbuild app/lib/digitfix.ts --format=esm", { cwd: ROOT }).toString();
+const { repairCounts, wordsOf, isDamagedCount, DIGIT_PARAMS } = await import("data:text/javascript;base64," + Buffer.from(dfSrc).toString("base64"));
 const decSrc = execSync("npx esbuild app/lib/decode.ts --format=esm --bundle", { cwd: ROOT }).toString();
 const { decodeImage } = await import("data:text/javascript;base64," + Buffer.from(decSrc).toString("base64"));
 
@@ -37,6 +39,130 @@ const check = (name, cond, detail = "") => {
 };
 
 // ── Unit tests (no OCR, synthetic text) ───────────────────────────────────────
+
+{
+  // mergeImages — the rules for combining per-screenshot results
+  const row = (csv, flags = [], extra = {}) => {
+    const [d, t] = csv.split(",")[0].split(" "); const [dd, mm, yy] = d.split("/");
+    const [, side, symbol, qtyStr, priceStr] = csv.split(",");
+    return { csv, iso: `${yy}-${mm}-${dd}T${t}:00`, side, symbol, qtyStr, priceStr, qty: +qtyStr, price: +priceStr, check: "unverified", flags, ...extra };
+  };
+  const A = "23/07/2026 08:29,B,LMT,0.0053551,549.00", B = "23/07/2026 08:30,B,RXRX,1.0034129,2.93";
+  let m = mergeImages([{ rows: [row(A), row(B)], incomplete: 0 }, { rows: [row(B)], incomplete: 0 }]);
+  check("mergeImages: a row on two overlapping screenshots is ONE row", m.rows.length === 2 && m.incomplete === 0, m.rows.map(r => r.csv).join("|"));
+  m = mergeImages([{ rows: [row(B, ["เห็นในรอบ OCR เดียว — ตรวจกับรูป"])], incomplete: 0 }, { rows: [row(B)], incomplete: 0 }]);
+  check("mergeImages: the cleaner copy of a duplicate wins", m.rows.length === 1 && m.rows[0].flags.length === 0);
+  m = mergeImages([{ rows: [row(B)], incomplete: 0 }, { rows: [row("23/07/2026 08:30,B,RXRX,1.0034129,2.98", ["x"])], incomplete: 0 }]);
+  check("mergeImages: a flagged misread defers to a clean reading of the same tx", m.rows.length === 1 && m.rows[0].csv === B);
+  m = mergeImages([{ rows: [row(B)], incomplete: 0 }, { rows: [row("23/07/2026 08:30,B,RXRX,1.0034129,2.98")], incomplete: 0 }]);
+  check("mergeImages: two clean readings that disagree are both kept and flagged",
+    m.rows.length === 2 && m.rows.every(r => r.flags.some(f => f.includes("ไม่ตรงกัน"))));
+  // seam cuts
+  const cutQty = { rows: [row(A)], incomplete: 1, partials: [{ qtyStr: "1.0034129", priceStr: undefined }] };
+  m = mergeImages([cutQty, { rows: [row(B)], incomplete: 0 }]);
+  check("mergeImages: an unfinished block another screenshot read whole is not unread", m.incomplete === 0, `got ${m.incomplete}`);
+  m = mergeImages([{ rows: [row(A)], incomplete: 1, partials: [{ qtyStr: "9.9999999" }] }, { rows: [row(B)], incomplete: 0 }]);
+  check("mergeImages: an unfinished block nobody read stays unread", m.incomplete === 1, `got ${m.incomplete}`);
+  // B (08:30) is newer than A (08:29); the list is newest-first, so B sits ABOVE A
+  const stub = { rows: [row(A)], incomplete: 1, partials: [{ edge: "top" }] };
+  m = mergeImages([stub, { rows: [row(A), row(B)], incomplete: 0 }]);
+  check("mergeImages: an edge-cut header is cleared when the screenshots provably overlap", m.incomplete === 0, `got ${m.incomplete}`);
+  m = mergeImages([stub, { rows: [row(B)], incomplete: 0 }]);
+  check("mergeImages: ...but kept when they share no row (may not meet at all)", m.incomplete === 1, `got ${m.incomplete}`);
+  // review: overlap on ONE side says nothing about the other edge — a header cut at the
+  // BOTTOM of the last screenshot is lost even though that screenshot overlaps the one
+  // above it
+  m = mergeImages([{ rows: [row(A)], incomplete: 1, partials: [{ edge: "bottom" }] }, { rows: [row(A), row(B)], incomplete: 0 }]);
+  check("mergeImages: a bottom-edge stub is NOT cleared by a neighbour that only continues upward", m.incomplete === 1, `got ${m.incomplete}`);
+  // a cut header that read its ticker: the row it came from is the NEXT one past the
+  // edge, even at the same minute as the edge row (AXON and FSLR both 08:28)
+  const FSLR = "23/07/2026 08:28,B,FSLR,0.0141652,207.55", AXON = "23/07/2026 08:28,B,AXON,0.0058848,499.59";
+  m = mergeImages([{ rows: [row(FSLR), row(A)], incomplete: 1, partials: [{ side: "B", symbol: "AXON", edge: "bottom" }] },
+                   { rows: [row(FSLR), row(AXON)], incomplete: 0 }]);
+  check("mergeImages: a cut ticker matched by the next row past the edge, same minute", m.incomplete === 0, `got ${m.incomplete}`);
+  // ...but an AXON bought on another day is not that row (repeat buys of one name)
+  m = mergeImages([{ rows: [row(FSLR), row(A)], incomplete: 1, partials: [{ side: "B", symbol: "AXON", edge: "bottom" }] },
+                   { rows: [row(FSLR), row("20/07/2026 09:00,B,ISRG,0.0086930,338.20"), row("10/07/2026 09:00,B,AXON,0.0060000,480.00")], incomplete: 0 }]);
+  check("mergeImages: a different day's buy of the same ticker does not explain a cut row", m.incomplete === 1, `got ${m.incomplete}`);
+  // a corporate-action leg cut mid-read reads its side unreliably — the count decides
+  m = mergeImages([{ rows: [row(A)], incomplete: 1, partials: [{ qtyStr: "00870467", side: "S", symbol: "CRWD", edge: "bottom" }] },
+                   { rows: [row("02/07/2026 15:05,+,CRWD,0.0870467,0", [], { isSplit: true })], incomplete: 0 }]);
+  check("mergeImages: a cut split leg is matched by its count whatever side it read", m.incomplete === 0, `got ${m.incomplete}`);
+  m = mergeImages([stub]);
+  check("mergeImages: a single cut screenshot keeps its warning", m.incomplete === 1, `got ${m.incomplete}`);
+  m = mergeImages([{ rows: [row(A)], incomplete: 1, partials: [{ qtyStr: "1 0034129", edge: true }] }, { rows: [row(B)], incomplete: 0 }]);
+  check("mergeImages: a seam partial matches on digits, not formatting (\"1 0034129\")", m.incomplete === 0, `got ${m.incomplete}`);
+  // review: two rows of the SAME screenshot are never merged as if they were overlap
+  const R2 = "23/07/2026 08:30,B,RXRX,0.5000000,2.93";
+  m = mergeImages([{ rows: [row(B), row(R2, ["x"])], incomplete: 0 }, { rows: [row(A)], incomplete: 0 }]);
+  check("mergeImages: same-image rows at one minute both survive", m.rows.length === 3, m.rows.map(r => r.csv).join("|"));
+  // review: a lost SELL is not explained by a BUY of the same share count
+  const buy = "20/07/2026 09:00,B,RXRX,0.5000000,2.10";
+  m = mergeImages([{ rows: [row(buy)], incomplete: 1, partials: [{ qtyStr: "0.5000000", side: "S", symbol: "RXRX" }] }, { rows: [row(A)], incomplete: 0 }]);
+  check("mergeImages: a lost sell is not 'explained' by a buy of the same count", m.incomplete === 1, `got ${m.incomplete}`);
+  // review: two different lost blocks that read nothing are two, not one
+  m = mergeImages([{ rows: [row(A)], incomplete: 2, partials: [{ pass: "a" }, { pass: "a" }] }, { rows: [row(B)], incomplete: 0 }]);
+  check("mergeImages: two number-less lost blocks count as two", m.incomplete === 2, `got ${m.incomplete}`);
+  // review: a day misread on one screenshot is one trade, not two clean ones
+  m = mergeImages([{ rows: [row("01/05/2026 08:30,B,ELF,0.1234567,80.00")], incomplete: 0 },
+                   { rows: [row("11/05/2026 08:30,B,ELF,0.1234567,80.00")], incomplete: 0 }]);
+  check("mergeImages: same trade with a misread day on another screenshot → one flagged row",
+    m.rows.length === 1 && m.rows[0].flags.some(f => f.includes("วันที่ไม่ตรงกัน")), m.rows.map(r => r.csv + " " + r.flags.join(";")).join("|"));
+  // review: an O guess whose real reading is on ANOTHER screenshot is still a shadow
+  m = mergeImages([{ rows: [row("21/07/2026 11:57,B,CELH,0.1036287,28.66")], incomplete: 0 },
+                   { rows: [row("21/07/2026 11:57,B,O,0.036287,28.66", ["x"], { symbolCorrected: "๐" })], incomplete: 0 }]);
+  check("mergeImages: an O shadow across screenshots is dropped", m.rows.length === 1 && m.rows[0].symbol === "CELH", m.rows.map(r => r.csv).join("|"));
+  m = mergeImages([{ rows: [row(A)], incomplete: 0 }, { rows: [row(B)], incomplete: 0 }]);
+  check("mergeImages: rows are attributed to their screenshot", m.source.join() === "0,1", m.source.join());
+}
+
+{
+  // digitfix — which tokens are damaged counts, and what a re-read may change
+  check("digitfix: ']' for 1 is damaged", isDamagedCount("0.066800]"));
+  check("digitfix: a dropped digit (6 decimals) is damaged", isDamagedCount("0.208761"));
+  check("digitfix: a 4-decimal price is NOT a damaged count", !isDamagedCount("185.1640") && !isDamagedCount("45.9580"));
+  check("digitfix: a well-formed count is left alone", !isDamagedCount("0.1036287"));
+  check("digitfix: a baht total is left alone", !isDamagedCount("99.80"));
+  const w = (text) => ({ text, bbox: { x0: 10, y0: 10, x1: 90, y1: 30 } });
+  let r = await repairCounts("จำนวนหุ้น 0.066800]\nราคา 45.9580", [w("0.066800]"), w("45.9580")], 200, 100, async () => "0.0668001");
+  check("digitfix: a 7-decimal re-read replaces the damaged token", r.text === "จำนวนหุ้น 0.0668001\nราคา 45.9580" && r.repairs.length === 1, JSON.stringify(r));
+  r = await repairCounts("จำนวนหุ้น 0.208761", [w("0.208761")], 200, 100, async () => "0.20876");
+  check("digitfix: a re-read that is not 7 decimals changes nothing", r.text === "จำนวนหุ้น 0.208761" && r.repairs.length === 0);
+  r = await repairCounts("x 10.2087611 y 0.208761", [w("0.208761")], 200, 100, async () => "0.2087611");
+  check("digitfix: only the whole token is replaced, never inside another number", r.text === "x 10.2087611 y 0.2087611", r.text);
+  // review: two rows read the same damaged count; the first re-read is rejected — the
+  // second's value must land on the SECOND row, not overwrite the first
+  let n = 0;
+  r = await repairCounts("row1 0.208761\nrow2 0.208761", [w("0.208761"), w("0.208761")], 200, 100, async () => (n++ === 0 ? "garbage" : "0.2087615"));
+  check("digitfix: a repair lands on its own occurrence", r.text === "row1 0.208761\nrow2 0.2087615", JSON.stringify(r.text));
+}
+
+{
+  // The "O" whitelist guess must not survive as a shadow of a real row read in the same
+  // minute at the same price with its leading digit dropped (CELH 0.1036287 → ๐ 0.036287)
+  const mk = (csv, extra = {}) => {
+    const [dt, side, symbol, qtyStr, priceStr] = csv.split(","); const [d, t] = dt.split(" "); const [dd, mm, yy] = d.split("/");
+    return { csv, iso: `${yy}-${mm}-${dd}T${t}:00`, side, symbol, qtyStr, priceStr, qty: +qtyStr, price: +priceStr, check: "unverified", ...extra };
+  };
+  const real = mk("21/07/2026 11:57,B,CELH,0.1036287,28.66");
+  const ghost = mk("21/07/2026 11:57,B,O,0.036287,28.66", { symbolCorrected: "๐" });
+  let m = mergeParses({ rows: [real], incomplete: 0 }, { rows: [ghost], incomplete: 0 });
+  check("O guess that shadows a real row is dropped", m.rows.length === 1 && m.rows[0].symbol === "CELH", m.rows.map(r => r.csv).join("|"));
+  const ownO = mk("21/07/2026 11:57,B,O,0.0494613,61.26", { symbolCorrected: "๐" });
+  m = mergeParses({ rows: [real], incomplete: 0 }, { rows: [ownO], incomplete: 0 });
+  check("an O guess with its own price and count is kept (still flagged)", m.rows.length === 2 && m.rows.find(r => r.symbol === "O").flags.length > 0);
+}
+
+{
+  // extractTickerHintsByImage — a header at the bottom of one image must not pair with a
+  // share count at the top of the next (the glued-text failure that deleted a real hint)
+  const img1 = "Buy CELH 99.80\n0.1036287\nBuy FSLR 99.80";
+  const img2 = "0.0141652\nBuy AXON 99.80\n0.0058848";
+  const glued = extractTickerHints(img1 + "\n" + img2);
+  const each = extractTickerHintsByImage([{ e2: img1, e3: "" }, { e2: img2, e3: "" }]);
+  check("ticker hints glued: bottom header steals the next image's count (the bug)", glued["0.0141652"] === "FSLR");
+  check("ticker hints per image: no cross-image pairing", each["0.0141652"] === undefined && each["0.1036287"] === "CELH" && each["0.0058848"] === "AXON", JSON.stringify(each));
+}
 
 {
   // Shared preprocessing must be deterministic and match the documented math.
@@ -758,21 +884,41 @@ const TH_MIN_EXACT = { "th-stock-3.jpg":4, "th-stock-4.jpg":2, "th-stock-5.jpg":
 
 // eng+tha main passes + an eng-only rescue pass, using the exact self-hosted data
 // the browser ships (public/tesseract) — mirrors OcrImport.tsx
+// OCR_LANG_PATH points the suite at another set of traineddata (e.g. tessdata_best) so a
+// model swap can be measured against the same ground truth before the app ships it.
+const LANG_PATH = process.env.OCR_LANG_PATH || path.join(ROOT, "public", "tesseract");
+if (process.env.OCR_LANG_PATH) console.log(`(traineddata from ${LANG_PATH})`);
 const worker = await createWorker("eng+tha", 1, {
-  langPath: path.join(ROOT, "public", "tesseract"),
+  langPath: LANG_PATH,
   gzip: true, cacheMethod: "none",
 });
 const engWorker = await createWorker("eng", 1, {
-  langPath: path.join(ROOT, "public", "tesseract"),
+  langPath: LANG_PATH,
   gzip: true, cacheMethod: "none",
 });
 const thaWorker = await createWorker("tha", 1, {
-  langPath: path.join(ROOT, "public", "tesseract"),
+  langPath: LANG_PATH,
   gzip: true, cacheMethod: "none",
 });
-async function ocrText(w, imgs, scale) {
-  let text = "";
+const digitWorker = await createWorker("eng", 1, { langPath: LANG_PATH, gzip: true, cacheMethod: "none" });
+await digitWorker.setParameters(DIGIT_PARAMS);
+// One text PER IMAGE — the app parses each screenshot on its own and merges after
+// (parseImages), so the harness must hand them over the same way.
+// Results are cached per worker+file+scale for the run: the many-file cases below are
+// built from fixtures the single-file cases already read, so they cost no extra OCR and
+// can be as many and as large as needed. Same worker, same pixels → same text, so the
+// cache changes nothing about what is tested.
+const ocrCache = new WeakMap();
+// `repair` mirrors the app's main passes: damaged share counts are re-read digit-only
+// through lib/digitfix before the text reaches the parser.
+let repairsMade = 0;
+async function ocrText(w, imgs, scale, repair = false) {
+  const texts = [];
+  if (!ocrCache.has(w)) ocrCache.set(w, new Map());
+  const cache = ocrCache.get(w);
   for (const p of imgs) {
+    const ck = `${p}|${scale}`;
+    if (cache.has(ck)) { texts.push(cache.get(ck)); continue; }
     // DECODE and preprocessing are both the shared browser code now (lib/decode +
     // lib/preprocess), so app and CI hand tesseract identical pixels for the same file.
     // jimp is left only to encode the result as PNG, which is lossless.
@@ -780,12 +926,51 @@ async function ocrText(w, imgs, scale) {
     grayscaleNormalize(view);
     const r = resizeBilinear(view, width, height, scale);
     const out = Jimp.fromBitmap({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height });
-    const { data } = await w.recognize(await out.getBuffer(JimpMime.png));
-    text += data.text + "\n";
+    const png = await out.getBuffer(JimpMime.png);
+    const { data } = await w.recognize(png, {}, repair ? { blocks: true } : {});
+    let text = data.text;
+    if (repair && wordsOf(data).some(x => isDamagedCount(x.text))) {
+      const fixed = await repairCounts(text, wordsOf(data), r.width, r.height,
+        async rect => (await digitWorker.recognize(png, { rectangle: rect })).data.text);
+      text = fixed.text; repairsMade += fixed.repairs.length;
+    }
+    cache.set(ck, text);
+    texts.push(text);
   }
-  return text;
+  return texts;
 }
 
+// Overlapping scroll screenshots, built at run time from committed fixtures (no new
+// binaries): the top 62% and bottom 62% of one page share a band in the middle and cut
+// a row at each seam — what a user gets scrolling a long Activity list. These are the
+// fixtures where gluing the images into one text produced an unflagged wrong row, lost
+// a row, or reported overlap as "อ่านไม่ครบ"; each must now read exactly like the page.
+fs.mkdirSync(path.join(ROOT, ".ci"), { recursive: true });
+// one page as three overlapping scrolls: top / middle / bottom, two seams
+async function seamChain(f) {
+  const img = await Jimp.read(FIX(f)); const H = img.bitmap.height, W = img.bitmap.width;
+  const out = [];
+  for (const [tag, a, b] of [["s1", 0, 0.45], ["s2", 0.30, 0.75], ["s3", 0.60, 1]]) {
+    const p = path.join(ROOT, ".ci", f.replace(".jpg", `-${tag}.png`));
+    const y0 = Math.round(H * a), y1 = Math.round(H * b);
+    fs.writeFileSync(p, await img.clone().crop({ x: 0, y: y0, w: W, h: y1 - y0 }).getBuffer(JimpMime.png));
+    out.push(p);
+  }
+  return out;
+}
+async function seamPair(f) {
+  const img = await Jimp.read(FIX(f)); const H = img.bitmap.height, W = img.bitmap.width;
+  const out = [];
+  for (const [tag, y0, y1] of [["top", 0, Math.round(H * 0.62)], ["bot", Math.round(H * 0.38), H]]) {
+    const p = path.join(ROOT, ".ci", f.replace(".jpg", `-${tag}.png`));
+    fs.writeFileSync(p, await img.clone().crop({ x: 0, y: y0, w: W, h: y1 - y0 }).getBuffer(JimpMime.png));
+    out.push(p);
+  }
+  return out;
+}
+
+const TH_FILES = Object.keys(TH_STOCK_MORE).sort((a, b) => parseInt(a.match(/\d+/)) - parseInt(b.match(/\d+/)));
+const union = (fs_) => [...new Set(fs_.flatMap(f => TH_STOCK_MORE[f]))];
 const CASES = [
   { name: "3-image set", imgs: ["activity-1.jpg", "activity-2.jpg", "activity-3.jpg"].map(FIX), truth: TRUTH_ALL, minExact: 10 },
   { name: "single image", imgs: [FIX("activity-4-single.jpg")], truth: TRUTH_SINGLE, minExact: 2 },
@@ -807,6 +992,37 @@ const CASES = [
   { name: "Thai stock sells", imgs: [FIX("th-stock-sells.jpg")], truth: TRUTH_TH_SELLS, minExact: 6 },
   { name: "Thai stock buys + CA split", imgs: [FIX("th-stock-ca.jpg")], truth: TRUTH_TH_CA, minExact: 3 },
   ...Object.entries(TH_STOCK_MORE).map(([f, truth]) => ({ name: f, imgs: [FIX(f)], truth, minExact: TH_MIN_EXACT[f], expIncomplete: TH_EXP_INC[f] ?? 0 })),
+  // ── multi-image: overlap and seams ──
+  ...await Promise.all(["th-stock-11.jpg", "th-stock-16.jpg", "th-stock-19.jpg"].map(async f =>
+    ({ name: `${f} as 2 overlapping scrolls`, imgs: await seamPair(f), truth: TH_STOCK_MORE[f] }))),
+  // the same screenshot picked twice: every row read twice must still be ONE row, and
+  // none of them may be reported as unread
+  { name: "th-stock-19.jpg picked twice", imgs: [FIX("th-stock-19.jpg"), FIX("th-stock-19.jpg")], truth: TH_STOCK_MORE["th-stock-19.jpg"] },
+  // ── many files at once ──
+  // Every Thai stock page in one pick (85 rows): the batch must read exactly like the
+  // pages do one by one.
+  { name: "all 17 Thai stock pages picked at once", imgs: TH_FILES.map(FIX), truth: union(TH_FILES) },
+  // The picker's order is not the list's order — Android returns files in whatever
+  // order it likes. Reversed and shuffled must give the same rows.
+  { name: "6 pages picked in reverse order", imgs: TH_FILES.slice(0, 6).reverse().map(FIX), truth: union(TH_FILES.slice(0, 6)) },
+  { name: "6 pages picked shuffled", imgs: ["th-stock-14.jpg", "th-stock-5.jpg", "th-stock-18.jpg", "th-stock-9.jpg", "th-stock-3.jpg", "th-stock-12.jpg"].map(FIX),
+    truth: union(["th-stock-14.jpg", "th-stock-5.jpg", "th-stock-18.jpg", "th-stock-9.jpg", "th-stock-3.jpg", "th-stock-12.jpg"]) },
+  // One long page scrolled as THREE overlapping screenshots (two seams)
+  ...await Promise.all(["th-stock-12.jpg", "th-stock-19.jpg"].map(async f =>
+    ({ name: `${f} as 3 overlapping scrolls`, imgs: await seamChain(f), truth: TH_STOCK_MORE[f] }))),
+  // Everything a real pick can contain at once: two overlapping scrolls of one page,
+  // unrelated pages, and the same file picked twice
+  { name: "mixed: overlapping scrolls + other pages + a duplicate",
+    imgs: [...await seamPair("th-stock-16.jpg"), FIX("th-stock-7.jpg"), FIX("th-stock-10.jpg"), FIX("th-stock-7.jpg")],
+    truth: union(["th-stock-16.jpg", "th-stock-7.jpg", "th-stock-10.jpg"]) },
+  // Different layouts in one batch: US stock (Thai UI) pages and MTS-GOLD pages together
+  { name: "stock pages + gold pages together", imgs: [FIX("th-stock-4.jpg"), FIX("gold-mts-thai.jpg"), FIX("th-stock-8.jpg"), FIX("gold-mts-thai-4.jpg")],
+    truth: [...union(["th-stock-4.jpg", "th-stock-8.jpg"]), ...TRUTH_GOLD_THAI, ...TRUTH_GOLD_THAI_4] },
+  // a seam-cut screenshot WITHOUT its neighbour: the cut row really is missing, and the
+  // warning must survive even when another, unrelated screenshot is in the same batch
+  { name: "seam-cut page + unrelated page", imgs: [(await seamPair("th-stock-19.jpg"))[0], FIX("th-stock-3.jpg")],
+    truth: [...TH_STOCK_MORE["th-stock-19.jpg"].filter(t => t.slice(0, 16) >= "23/07/2026 08:29"), ...TH_STOCK_MORE["th-stock-3.jpg"]],
+    expIncomplete: 1 },
 ];
 // Pass/fail is decided ONLY by the safety guarantees below — never by the exact-match
 // count. Real-screenshot OCR can't hit 100% exact (even the English fixtures don't), so
@@ -818,20 +1034,21 @@ for (const c of CASES) {
   // The app passes the portfolio's symbols in; screenshots ARE of the user's own
   // portfolio, so the truth symbols are exactly what the app would supply.
   const known = [...new Set(c.truth.map(t => t.split(",")[2]))];
-  const textA = await ocrText(worker, c.imgs, 2), textB = await ocrText(worker, c.imgs, 3);
+  const textA = await ocrText(worker, c.imgs, 2, true), textB = await ocrText(worker, c.imgs, 3, true);
   // MIRROR OcrImport's lazy orchestration exactly: parse the two main passes first, and
   // run the eng/tha specialist passes only when there's something for them to fix.
-  const parseMain = (h, mh, extra) =>
-    mergeParses(parseActivityText(textA, h, known, mh), parseActivityText(textB, h, known, mh), { a: textA, b: textB, extra });
-  let m = parseMain();
+  // Each image is parsed on its own and merged by parseImages, as the app does.
+  const per = c.imgs.map((_, i) => ({ t2: textA[i], t3: textB[i] }));
+  let m = parseImages(per, undefined, known);
   if (m.incomplete > 0 || m.rows.some(r => r.flags.some(f => f.includes("เดาเป็นเดือน") || f.includes("เห็นในรอบ OCR เดียว") || f.includes("ตามหุ้นในพอร์ต")))) {
     // MIRROR the app: eng at both scales, 2x taking precedence and 3x filling gaps only.
     const eng2 = await ocrText(engWorker, c.imgs, 2);
     const eng3 = await ocrText(engWorker, c.imgs, 3);
-    const thaText = await ocrText(thaWorker, c.imgs, 2);
-    const hints = mergeTickerHints(extractTickerHints(eng2, known), extractTickerHints(eng3, known), known);
-    const monthHints = extractMonthHints(thaText);
-    m = parseMain(hints, monthHints, [eng2 + eng3, thaText]);
+    const tha = await ocrText(thaWorker, c.imgs, 2);
+    per.forEach((p, i) => { p.extra = [eng2[i] + "\n" + eng3[i], tha[i]]; });
+    const hints = extractTickerHintsByImage(c.imgs.map((_, i) => ({ e2: eng2[i], e3: eng3[i] })), known);
+    const monthHints = extractMonthHints(tha.join("\n"));
+    m = parseImages(per, hints, known, monthHints);
   }
   const exact = c.truth.filter(t => m.rows.some(r => r.csv === t)).length;
   const silent = m.rows.filter(r => !c.truth.includes(r.csv) && r.flags.length === 0);
@@ -884,6 +1101,8 @@ for (const c of CASES) {
 await worker.terminate();
 await engWorker.terminate();
 await thaWorker.terminate();
+await digitWorker.terminate();
+console.log(`\ndigit-only re-reads applied: ${repairsMade}`);
 
 // Aggregate regression floor (so a code change that tanks recall is caught), reported honestly
 const pct = Math.round(exactTotal / truthTotal * 100);

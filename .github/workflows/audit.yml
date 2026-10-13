@@ -86,8 +86,10 @@ jobs:
               }
             }
 
+      # Fork PRs get a read-only token — commenting would 403 and turn the check red for
+      # nothing; the report is still in the job summary.
       - name: Comment on PR
-        if: github.event_name == 'pull_request' && steps.report.outputs.status != 'error'
+        if: github.event_name == 'pull_request' && steps.report.outputs.status != 'error' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v7
         with:
           script: |

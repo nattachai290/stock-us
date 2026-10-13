@@ -25,7 +25,21 @@ export type OcrTxRow = {
   monthBracketed?: boolean;// inferred month proven by the anchors immediately either side
 };
 
-export type OcrParseResult = { rows: OcrTxRow[]; incomplete: number };
+// `partials` fingerprints each unfinished block by whatever numbers it did get: a block
+// cut at the edge of one screenshot is read whole on the overlapping next one, and the
+// multi-image merge uses these to tell that seam cut from a row that is really lost.
+// `edge` marks a block left open by the screen's top or bottom edge — a header whose
+// number lines are off screen has nothing to match on, but is a seam cut all the same.
+// `side`/`symbol` are whatever the block did read, so a lost SELL is never "explained"
+// by a BUY of the same share count (closing a whole lot sells exactly what was bought).
+// `pass` tells the two upscale passes apart: both report the same block, so unread is
+// counted per pass, never by merging fingerprints (two lost blocks that read nothing
+// would share one).
+export type PartialBlock = {
+  qtyStr?: string; priceStr?: string; side?: string; symbol?: string;
+  edge?: "top" | "bottom"; pass?: "a" | "b";
+};
+export type OcrParseResult = { rows: OcrTxRow[]; incomplete: number; partials?: PartialBlock[] };
 
 const MONTHS: Record<string, string> = { jan:"01", feb:"02", mar:"03", apr:"04", may:"05", jun:"06", jul:"07", aug:"08", sep:"09", oct:"10", nov:"11", dec:"12" };
 
@@ -222,6 +236,31 @@ export function extractTickerHints(text: string, known?: string[]): Record<strin
   return hints;
 }
 
+// Ticker hints for several screenshots, extracted image by image. extractTickerHints
+// carries a pending ticker from a buy header to the share count on the next few lines,
+// so fed glued text, a header at the bottom of one image grabbed a count from the top of
+// the next. That false pairing then clashed with the true one and deleted it — and with
+// no hint left, the block fell through to the one-letter "O" whitelist guess. Within an
+// image the 2x/3x reads are arbitrated as before; across images, readings that agree
+// stand, a held name beats an unheld one, and an unresolvable disagreement is dropped.
+export function extractTickerHintsByImage(texts: { e2: string; e3: string }[], known?: string[]): Record<string, string> {
+  const held = new Set((known ?? []).map(k => k.toUpperCase()));
+  const out: Record<string, string> = {};
+  const clash = new Set<string>();
+  for (const t of texts) {
+    const h = mergeTickerHints(extractTickerHints(t.e2, known), extractTickerHints(t.e3, known), known);
+    for (const [k, v] of Object.entries(h)) {
+      if (clash.has(k)) continue;
+      const prev = out[k];
+      if (!prev || prev === v) { out[k] = v; continue; }
+      if (held.has(v) && !held.has(prev)) { out[k] = v; continue; }
+      if (held.has(prev) && !held.has(v)) continue;
+      delete out[k]; clash.add(k);
+    }
+  }
+  return out;
+}
+
 // Read months from a Thai-ONLY OCR pass. The eng+tha model renders many Thai month
 // abbreviations as Latin ("ต.ค." → "A.A.", "ก.พ." → "n.w."), but a tha-only pass reads
 // them correctly — at the cost of mangling the Latin tickers/numbers, which the main
@@ -262,6 +301,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
   const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
   const rows: OcrTxRow[] = [];
   let incomplete = 0;
+  const partials: PartialBlock[] = [];
 
   // Month glyphs OCR the worst ("ต.ค." → "A.A."), and are sometimes genuinely
   // ambiguous. The broker lists transactions in strict reverse-chronological order, so
@@ -298,7 +338,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
     });
   };
 
-  const flush = () => {
+  const flush = (atEnd = false) => {
     if (!cur) return;
     // Corporate action ("CA - แตกหรือรวมหุ้น"): not a buy/sell — it has no price, only a
     // +/- share adjustment. Park the leg; the two legs are paired after the pass.
@@ -363,6 +403,12 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       pending.push(cur);
     } else if (cur.side || cur.price || cur.qty) {
       incomplete++;
+      // first block on the page, or the one still open when the text ran out
+      const edge = atEnd ? "bottom" as const
+        : rows.length === 0 && pending.length === 0 && partials.length === 0 && caLegs.length === 0 ? "top" as const
+        : undefined;
+      const sym = cur.symbol && TICKER_OK.test(cur.symbol) && !NOT_TICKERS.has(cur.symbol) ? cur.symbol : undefined;
+      partials.push({ qtyStr: cur.qtyStr, priceStr: cur.priceStr, side: cur.side, symbol: sym, edge });
     }
     cur = null;
   };
@@ -572,7 +618,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       if (jm) setQty(jm[1], 7);
     }
   }
-  flush();
+  flush(true);
 
   // Resolve deferred (unreadable-month) blocks from positional anchors. A block is
   // filled ONLY when the nearest readable month before it and the nearest after it
@@ -597,6 +643,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
       emitRow(p);
     } else {
       incomplete++;
+      partials.push({ qtyStr: p.qtyStr, priceStr: p.priceStr, side: p.side, symbol: p.symbol });
     }
   }
 
@@ -625,7 +672,7 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
   // the deduct, then pairs it), which matters when both legs share a timestamp.
   rows.sort((a, b) => (new Date(a.iso).getTime() - new Date(b.iso).getTime())
     || (a.side === "-" ? -1 : b.side === "-" ? 1 : 0));
-  return { rows, incomplete };
+  return { rows, incomplete, partials };
 }
 
 // ── Ensemble merge ─────────────────────────────────────────────────────────────
@@ -634,20 +681,13 @@ export function parseActivityText(text: string, hints?: Record<string, string>, 
 // prefer the reading with 7 decimals; flag when passes disagree or neither has 7.
 
 export type MergedRow = OcrTxRow & { flags: string[] };
-export type MergeResult = { rows: MergedRow[]; incomplete: number };
+export type MergeResult = { rows: MergedRow[]; incomplete: number; partials?: PartialBlock[] };
 
 // A row only ONE pass managed to parse can still be confirmed against the OTHER
 // pass's raw text: if that text has a line carrying the row's price AND its hh:mm
 // (the executed-price line — a misassociated price would sit next to a different
 // time), with the share count on a nearby line, then all three numbers existed in
 // the other pass's view too and its parse merely tripped on layout noise.
-// Also used by the UI to attribute a merged row back to the screenshot it came from:
-// the passes are OCR'd into one concatenated text, so "which image" is answered by
-// asking which image's own text contains this row's time+price+share count.
-export function rowAppearsIn(r: OcrTxRow, text?: string): boolean {
-  return confirmedInText(r, text);
-}
-
 function confirmedInText(r: OcrTxRow, text?: string): boolean {
   if (!text) return false;
   const hhmm = r.csv.slice(11, 16);
@@ -671,6 +711,16 @@ function confirmedInText(r: OcrTxRow, text?: string): boolean {
   return false;
 }
 
+
+// The one-letter "O" fix is a guess from a glyph; `r` is a shadow of `o` when it is that
+// guess and `o` is a real reading at the same minute and price whose share count ends in
+// r's digits — the same block read with its ticker and leading digit lost.
+const qtySig = (q: string) => q.replace(/\D/g, "").replace(/^0+/, "");
+function isShadowOf(r: OcrTxRow, o: OcrTxRow): boolean {
+  return r !== o && r.symbolCorrected === "๐" && o.symbolCorrected !== "๐"
+    && o.iso === r.iso && o.priceStr === r.priceStr
+    && qtySig(r.qtyStr).length > 0 && qtySig(o.qtyStr).endsWith(qtySig(r.qtyStr));
+}
 
 export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: string; b?: string; extra?: string[] }): MergeResult {
   // A row seen in only ONE main pass is flagged unless its time+price+qty can be
@@ -877,6 +927,14 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
     rows.push(...collapsed);
   }
 
+  // The one-letter "O" fix is a guess from a glyph, made only because no pass read a
+  // ticker for that block. When the same minute also has a row at the SAME price whose
+  // share count ends in this row's digits, the guess is that row read a second time with
+  // its ticker AND its leading digit lost ("CELH 0.1036287" → "๐ 0.036287") — a shadow of
+  // a real row, not a second trade, and importing it would buy O that was never bought.
+  const shadows = rows.filter(r => rows.some(o => isShadowOf(r, o)));
+  if (shadows.length) { const keep = rows.filter(r => !shadows.includes(r)); rows.length = 0; rows.push(...keep); }
+
   rows.sort((x, y) => new Date(x.iso).getTime() - new Date(y.iso).getTime());
   // "incomplete" must count transactions MISSING FROM THE FINAL output, not per-pass
   // parse failures: a block one pass couldn't finish is often recovered by the other,
@@ -884,5 +942,148 @@ export function mergeParses(a: OcrParseResult, b: OcrParseResult, texts?: { a?: 
   // starts; the pass that saw the most is the best estimate of the true transaction
   // count, and anything beyond the merged rows is what genuinely didn't come through.
   const starts = Math.max(a.rows.length + a.incomplete, b.rows.length + b.incomplete);
-  return { rows, incomplete: Math.max(0, starts - rows.length) };
+  return { rows, incomplete: Math.max(0, starts - rows.length), partials: [
+    ...(a.partials ?? []).map(x => ({ ...x, pass: "a" as const })),
+    ...(b.partials ?? []).map(x => ({ ...x, pass: "b" as const })),
+  ] };
+}
+
+// ── Multi-image merge ──────────────────────────────────────────────────────────
+// Several screenshots must be parsed ONE IMAGE AT A TIME and merged afterwards, never
+// glued into one text first. The parser is a single linear scan, and consecutive
+// screenshots of a scrolled list overlap and cut a row at the seam: glued together, the
+// block left open at the bottom of image 1 ran straight into the top of image 2 — which
+// is NOT its continuation, the screens overlap — and absorbed another row's numbers into
+// an unflagged wrong row. The overlap also read every shared row twice, and since
+// mergeParses counts unread as (blocks seen − rows emitted), each duplicate was reported
+// as "อ่านไม่ครบ". mergeParses' own "one screenshot is a contiguous slice" window check
+// assumes a single image too. Per image, every one of those assumptions holds again.
+export type ImageText = { t2: string; t3: string; extra?: string[] };
+
+export function parseImages(
+  imgs: ImageText[], hints?: Record<string, string>, known?: string[],
+  monthHints?: Record<string, { mon: string; year: string }>,
+): MergeResult & { source: number[]; incompleteBy: number[] } {
+  const parts = imgs.map(p => mergeParses(
+    parseActivityText(p.t2, hints, known, monthHints),
+    parseActivityText(p.t3, hints, known, monthHints),
+    { a: p.t2, b: p.t3, extra: p.extra }));
+  return mergeImages(parts);
+}
+
+// Union of per-image results. Only readings from DIFFERENT screenshots are ever merged:
+// two rows from the same image are mergeParses' business, and the same image is the one
+// place where two distinct trades can legitimately share a minute. Across images, the same
+// transaction on two overlapping screenshots is ONE row — identical readings collapse (the
+// cleaner copy wins); differing readings defer to a clean one if there is one, otherwise
+// all are kept and flagged, since two images disagreeing is what a human has to look at.
+export function mergeImages(parts: MergeResult[]): MergeResult & { source: number[]; incompleteBy: number[] } {
+  type Tagged = { r: MergedRow; i: number };
+  const all: Tagged[] = parts.flatMap((p, i) => p.rows.map(r => ({ r, i })));
+  const txKey = (r: MergedRow) => r.isSplit ? `${r.iso}|${r.symbol}|${r.side}` : `${r.iso}|${r.symbol}`;
+  const groups = new Map<string, Tagged[]>();
+  for (const x of all) { const k = txKey(x.r); const g = groups.get(k); if (g) g.push(x); else groups.set(k, [x]); }
+  let out: Tagged[] = [];
+  for (const g of groups.values()) {
+    if (new Set(g.map(x => x.i)).size === 1) { out.push(...g); continue; }
+    const byCsv = new Map<string, Tagged>();
+    for (const x of g) { const y = byCsv.get(x.r.csv); if (!y || x.r.flags.length < y.r.flags.length) byCsv.set(x.r.csv, x); }
+    const uniq = [...byCsv.values()];
+    if (uniq.length === 1) { out.push(uniq[0]); continue; }
+    const clean = uniq.filter(x => !x.r.flags.length);
+    if (clean.length === 1) {
+      // the clean reading covers the other screenshots' versions; rows from its OWN
+      // screenshot are separate trades and stay
+      out.push(clean[0], ...uniq.filter(x => x !== clean[0] && x.i === clean[0].i));
+      continue;
+    }
+    const vals = uniq.map(x => x.r.csv.split(",").slice(3).join(" @ ")).join(" / ");
+    for (const x of uniq) out.push({ ...x, r: { ...x.r, flags: [...x.r.flags, `รูปที่ซ้อนกันอ่านได้ไม่ตรงกัน (${vals}) — ตรวจกับรูป`] } });
+  }
+
+  // Same symbol, share count, price and minute on two different DAYS from two different
+  // screenshots is one trade whose day one of them misread ("1 พ.ค." → "11") — the check
+  // mergeParses runs within an image, which per-image parsing no longer gives a chance to
+  // see across images. Collapse to one row and flag: which day is right needs a human.
+  const byTx = new Map<string, Tagged[]>();
+  for (const x of out) {
+    if (x.r.isSplit) continue;
+    const k = `${x.r.symbol}|${x.r.qtyStr}|${x.r.priceStr}|${x.r.csv.slice(11, 16)}`;
+    const g = byTx.get(k); if (g) g.push(x); else byTx.set(k, [x]);
+  }
+  for (const g of byTx.values()) {
+    if (new Set(g.map(x => x.r.iso)).size < 2 || new Set(g.map(x => x.i)).size < 2) continue;
+    g.sort((x, y) => x.r.flags.length - y.r.flags.length);
+    const days = [...new Set(g.map(x => x.r.csv.slice(0, 10)))];
+    const keep = { ...g[0], r: { ...g[0].r, flags: [...g[0].r.flags, `วันที่ไม่ตรงกันระหว่างรูป (${days.join(" / ")}) — ตรวจกับรูป`] } };
+    out = out.filter(x => !g.includes(x)); out.push(keep);
+  }
+
+  // An "O" guess whose real reading came through on another screenshot
+  out = out.filter(x => !out.some(o => isShadowOf(x.r, o.r)));
+  out.sort((x, y) => new Date(x.r.iso).getTime() - new Date(y.r.iso).getTime());
+
+  // ── unread ──
+  // A row cut at the edge of one screenshot is unfinished THERE but read whole on the
+  // overlapping next one, and must not be reported as unread. An unfinished block is
+  // explained by a final row with the same share count — or, lacking one, price — compared
+  // as bare digits (a damaged read: "0 0870467" for 0.0870467), and agreeing on side and
+  // symbol wherever the block read them.
+  const digits = (v?: string) => (v ?? "").replace(/\D/g, "");
+  // A split leg's side is "-"/"+", and a block cut mid-way through a corporate action
+  // reads its "หัก"/"รับ" label as a buy/sell unreliably (one cut CRWD block read "S" with
+  // the "+" leg's count) — so a split row's side is not evidence either way.
+  const sameSide = (p: PartialBlock, r: MergedRow) => r.isSplit || !p.side || !r.side || p.side === r.side;
+  const matches = (p: PartialBlock, r: MergedRow) =>
+    (p.qtyStr ? digits(p.qtyStr) === digits(r.qtyStr) : !!p.priceStr && digits(p.priceStr) === digits(r.priceStr))
+    && sameSide(p, r) && (!p.symbol || p.symbol === r.symbol);
+  // A header cut by the screen edge reads no number at all. It is a seam cut only if
+  // another screenshot provably continues PAST that edge: it shares a complete row with
+  // this one (so they overlap) and holds rows beyond this one's last row on the cut side.
+  // The list is newest-first, so past the bottom edge is older and past the top is newer.
+  const t = (r: MergedRow) => new Date(r.iso).getTime();
+  const imgRows = parts.map((_, i) => all.filter(x => x.i === i).map(x => x.r));
+  const shares = (i: number, j: number) => imgRows[i].some(r => imgRows[j].some(o => txKey(o) === txKey(r)));
+  const continuesPast = (i: number, edge: "top" | "bottom") => {
+    if (!imgRows[i].length) return false;
+    const lo = Math.min(...imgRows[i].map(t)), hi = Math.max(...imgRows[i].map(t));
+    return imgRows.some((rows, j) => j !== i && shares(i, j)
+      && rows.some(r => edge === "bottom" ? t(r) < lo : t(r) > hi));
+  };
+  // A cut header that DID read its ticker is checked more tightly: the row it was cut from
+  // is the very next one past this screenshot's edge in the merged list, so that row must
+  // come from another screenshot and carry the same ticker and side. Not merely "some row
+  // of that ticker" — repeat buys of one name are the norm, and a lost one must not be
+  // explained away by a different day's purchase.
+  // Times only have minute resolution, so the cut row can share its minute with this
+  // screenshot's edge row (AXON and FSLR both at 08:28): the candidates are every row from
+  // another screenshot at or past the edge minute that this screenshot did not itself read,
+  // and of those, the ones nearest the edge.
+  const nextPast = (i: number, edge: "top" | "bottom"): MergedRow[] => {
+    if (!imgRows[i].length) return [];
+    const lo = Math.min(...imgRows[i].map(t)), hi = Math.max(...imgRows[i].map(t));
+    const own = new Set(imgRows[i].map(txKey));
+    const beyond = out.filter(x => x.i !== i && !own.has(txKey(x.r))
+      && (edge === "bottom" ? t(x.r) <= lo : t(x.r) >= hi)).map(x => x.r);
+    if (!beyond.length) return [];
+    const near = edge === "bottom" ? Math.max(...beyond.map(t)) : Math.min(...beyond.map(t));
+    return beyond.filter(r => t(r) === near);
+  };
+  const explained = (p: PartialBlock, i: number) => {
+    if (p.qtyStr || p.priceStr) return out.some(x => matches(p, x.r));
+    if (!p.edge) return false;
+    if (p.symbol) return nextPast(i, p.edge).some(n => n.symbol === p.symbol && sameSide(p, n));
+    return continuesPast(i, p.edge);
+  };
+  const incompleteBy = parts.map((p, i) => {
+    if (!p.incomplete || parts.length < 2 || !p.partials?.length) return p.incomplete;
+    const left = (pass: "a" | "b") => p.partials!.filter(x => (x.pass ?? "a") === pass && !explained(x, i)).length;
+    return Math.min(p.incomplete, Math.max(left("a"), left("b")));
+  });
+  return {
+    rows: out.map(x => x.r),
+    source: out.map(x => x.i),
+    incomplete: incompleteBy.reduce((s, n) => s + n, 0),
+    incompleteBy,
+  };
 }

@@ -400,12 +400,31 @@ export default function App() {
   // `silent` is the auto-refresh path: same fetching, none of the interruption. A poll
   // every 60s must not flash the snackbar, disable the button, or spam Drive — it just
   // swaps the numbers in place. Manual presses keep the full progress reporting.
+  // Latest committed state, readable across awaits. refreshPrices waits on the network
+  // (up to 30s a batch). It used to take a snapshot of `holdings` and `currentPortId` at
+  // the start and write the whole snapshot back after every batch — so anything that
+  // happened meanwhile was undone: an edit reverted, or, after switching portfolio, the
+  // OLD portfolio's holdings put back on screen under the new one's id, to be uploaded
+  // into it on the next save. Rare when a person presses the button; once a minute,
+  // unattended, it isn't.
+  const holdingsRef = useRef(holdings); holdingsRef.current = holdings;
+  const portIdRef = useRef(currentPortId); portIdRef.current = currentPortId;
+
+  // `silent` is the auto-refresh path: same fetching, none of the interruption. A poll
+  // every 60s must not flash the snackbar, disable the button, or spam Drive — it just
+  // swaps the numbers in place. Manual presses keep the full progress reporting.
+  // Quotes are merged by symbol onto whatever the holdings are NOW, never onto the copy
+  // the refresh started from, and the refresh abandons itself if the portfolio changed.
   const refreshPrices = async (silent = false) => {
-    if (!holdings.length) return;
-    if (!silent) { setRefreshing(true); setPriceErrors([]); msg("กำลังดึงราคา...", 0); }
+    const startPort = portIdRef.current;
+    const startList = holdingsRef.current;
+    if (!startList.length) return;
+    if (!silent) { setRefreshing(true); setPriceErrors([]); msg("กำลังดึงราคา...", 0); lastPollRef.current = Date.now(); }
+    const quotes = new Map<string, { currentPrice: number; changePct: number | null; priceTime: number | null }>();
+    let latest = startList;
     try {
-      const BATCH = 20; const errors: string[] = []; let updated = [...holdings];
-      const fetchList = holdings.filter((h:any)=>!h.hidden); // skip deleted-but-archived entries
+      const BATCH = 20; const errors: string[] = [];
+      const fetchList = startList.filter((h:any)=>!h.hidden); // skip deleted-but-archived entries
       const totalBatches = Math.ceil(fetchList.length / BATCH);
       for (let i = 0; i < fetchList.length; i += BATCH) {
         const batchNo = Math.floor(i / BATCH) + 1;
@@ -423,15 +442,20 @@ export default function App() {
           if (data.error) { errors.push(`API Error: ${data.error}`); continue; }
           data.results?.forEach((r:any) => {
             if (r.error) errors.push(`${r.symbol}: ${r.error}`);
-            else updated = updated.map((h:any) => h.symbol===r.symbol ? {...h, currentPrice:r.price, changePct:r.changePct, priceTime:r.marketTime} : h);
+            else quotes.set(r.symbol, { currentPrice: r.price, changePct: r.changePct, priceTime: r.marketTime });
           });
           // Share these quotes with the other portfolios (overlaid by symbol on load)
           writePriceCache(data.results || []);
         } catch (e:any) {
           errors.push(`batch ${batchNo}: ${e.name === "AbortError" ? "timeout" : e.message}`);
         }
+        // switched portfolio while this batch was in flight — these quotes belong to the
+        // one we left; writing them now would land on the wrong portfolio
+        if (portIdRef.current !== startPort) { if (!silent) setStatus(""); return; }
         // Show prices filling in as each batch lands, instead of waiting for all.
-        setHoldings(updated); localStorage.setItem(`holdings-${currentPortId||"local"}`, JSON.stringify(updated));
+        latest = holdingsRef.current.map((h:any) => { const q = quotes.get(h.symbol); return q ? { ...h, ...q } : h; });
+        holdingsRef.current = latest;
+        setHoldings(latest); localStorage.setItem(`holdings-${startPort||"local"}`, JSON.stringify(latest));
       }
       setLastUpdated(new Date());
       if (!silent) {
@@ -439,17 +463,24 @@ export default function App() {
         msg(errors.length ? `⚠️ มี ${errors.length} ตัวพลาด — ดูด้านล่าง` : "อัพเดทราคาแล้ว ✓");
         // Fresh prices go to Drive right away (saveData no-ops the Drive part when not
         // logged in), so other devices pick them up without waiting for the next edit.
-        await saveData(updated);
+        await saveData(latest);
+      } else {
+        // A silent poll doesn't report its own failures (one a minute would be noise), but
+        // it does retire a manual refresh's error banner for symbols it has now fetched.
+        setPriceErrors(prev => prev.filter(e => !quotes.has(e.split(":")[0])));
       }
       // A silent poll deliberately skips the Drive write: prices are already in
       // localStorage and the shared price cache, and one upload a minute for numbers
       // that change again a minute later is not worth the quota.
-      autoFailsRef.current = errors.length >= fetchList.length ? autoFailsRef.current + 1 : 0;
+      // Back-off counts polls that fetched NOTHING. A failed batch reports one error for up
+      // to 20 symbols, so comparing error count to symbol count never saw an outage.
+      autoFailsRef.current = quotes.size === 0 ? autoFailsRef.current + 1 : 0;
     } catch (e:any) {
       if (!silent) { msg("ดึงราคาไม่ได้: " + e.message); setPriceErrors([e.message]); }
       autoFailsRef.current += 1;
+    } finally {
+      if (!silent) setRefreshing(false);
     }
-    if (!silent) setRefreshing(false);
   };
 
   // ── Auto-refresh while the market is open ────────────────────────────────────
@@ -465,22 +496,26 @@ export default function App() {
     const POLL_MS = 60_000;
     const TICK_MS = 15_000; // tick faster than we poll so the open/closed dot stays honest
 
-    const tick = (force = false) => {
+    const tick = () => {
       const open = isMarketOpen();
       setMarketOpen(open);
-      if (!autoRefresh || document.hidden || !open || pollingRef.current) return;
+      // no holdings yet (first render, before the saved portfolio loads) is not a poll —
+      // claiming the slot here delayed the first real refresh by a full minute
+      if (!autoRefresh || document.hidden || !open || pollingRef.current || !holdingsRef.current.length) return;
       // After three straight all-failed polls, back off to 5 minutes rather than keep
       // hammering a source that is rate-limiting or down.
       const wait = autoFailsRef.current >= 3 ? POLL_MS * 5 : POLL_MS;
-      if (!force && Date.now() - lastPollRef.current < wait) return;
+      if (Date.now() - lastPollRef.current < wait) return;
       pollingRef.current = true;
       lastPollRef.current = Date.now();
       Promise.resolve(refreshRef.current(true)).finally(() => { pollingRef.current = false; });
     };
 
-    // Coming back to the tab should show current prices immediately, not after a
-    // full interval — the numbers on screen are as old as the time spent away.
-    const onVisible = () => { if (!document.hidden) tick(Date.now() - lastPollRef.current >= POLL_MS); };
+    // Coming back to the tab should show current prices immediately, not after a full
+    // interval — the numbers on screen are as old as the time spent away. A plain tick
+    // does exactly that once an interval has passed, and still honours the back-off
+    // (forcing here let tab switching undo the 5-minute wait).
+    const onVisible = () => { if (!document.hidden) tick(); };
 
     tick();
     const id = setInterval(() => tick(), TICK_MS);
@@ -944,6 +979,13 @@ export default function App() {
     const unders=activeHoldings.map((h:any)=>({h,a:addSuggestion(h,tv)})).filter((x:any)=>x.a.amount>0).sort((a:any,b:any)=>b.a.amount-a.a.amount);
     if (!unders.length) { msg("ทุกตัวถึงเป้าแล้ว — ไม่มีตัวที่ต้องซื้อเพิ่ม ✓"); return; }
     const need=totalToTarget(activeHoldings, tv); // joint solve — deliberately > the sum of the per-row amounts
+    // ...except when the under-target targets add up to 100%+ and there is no joint
+    // solution: totalToTarget then falls back to the plain row sum, and the prompt must not
+    // tell Claude the total is larger and not to question it
+    const rowSum=unders.reduce((s:number,x:any)=>s+x.a.amount,0);
+    const jointNote=need>rowSum+0.005
+      ? `\n- ยอดรวมท้ายพรอมป์มากกว่าผลบวกของทุกบรรทัด เพราะซื้อพร้อมกันทำให้พอร์ตโตขึ้น เป้า % จึงคิดจากฐานที่ใหญ่กว่า — ตัวเลขนี้ถูกแล้ว ห้ามทักว่าบวกผิด`
+      : `\n- เป้า % ของตัวที่ยังไม่ถึงเป้ารวมกันเกิน 100% ยอดรวมท้ายพรอมป์จึงเป็นแค่ผลบวกของแต่ละบรรทัด (ซื้อครบแล้วจะยังไม่ถึงเป้าทุกตัว) — ควรแนะนำให้ทบทวนเป้า %`;
     const lastUpdate=new Date().toLocaleDateString("th-TH",{year:"numeric",month:"long",day:"numeric"});
     const rows=unders.map(({h,a}:any)=>{
       const val=h.shares*h.currentPrice; const w=tv>0?(val/tv*100).toFixed(2):"0";
@@ -964,7 +1006,7 @@ export default function App() {
     const rest=[...activeHoldings].filter((h:any)=>!underSyms.has(h.symbol)).sort((a,b)=>(b.shares*b.currentPrice)-(a.shares*a.currentPrice))
       .map((h:any)=>`${h.symbol} ${tv>0?(h.shares*h.currentPrice/tv*100).toFixed(1):"0"}%${h.targetPct>0?`(เป้า ${h.targetPct}%)`:""}`).join(", ");
     const contextBlock=`\n\nภาพรวมทั้งพอร์ต — ใช้เป็นบริบทเท่านั้น ห้ามแนะนำซื้อตัวในบรรทัด "ถึงเป้าแล้ว"\nถึงเป้าแล้ว/เกินเป้า (${activeHoldings.length-unders.length} ตัว): ${rest||"ไม่มี"}${sectorLine?`\nsector ที่ระบุไว้เอง (บางตัวอาจว่าง ใช้เป็นแค่ตัวช่วย): ${sectorLine}`:""}`;
-    const p=`คุณคือ Senior Portfolio Manager และ CFA Charterholder วันนี้คือ ${lastUpdate}\n\n## ภารกิจ\nพอร์ตนี้มี ${unders.length} ตัวที่น้ำหนักยังต่ำกว่าเป้าที่ตั้งไว้ ตัดสินทีละตัวว่า "ควรซื้อเพิ่มตอนนี้เลย หรือรอ"\nคำถามที่ต้องตอบคือ **ราคาตอนนี้เป็นจังหวะที่ดีไหม** ไม่ใช่ "เป้ายังไม่เต็มใช่ไหม"\n\n## ขั้นตอนที่ 1 — ค้นข้อมูลก่อนตอบ (ห้ามข้าม)\nค้นของทุกตัวก่อนสรุป: ผลประกอบการไตรมาสล่าสุด, guidance, ข่าว 1-3 เดือนล่าสุด, valuation ปัจจุบัน (P/E, P/S, FCF yield) เทียบค่าเฉลี่ยของตัวเองย้อนหลังและเทียบ peers\n- ถ้าค้นไม่ได้หรือข้อมูลเก่า ให้บอกตรงๆ ว่าข้อมูลถึงแค่ช่วงไหน ห้ามเดาแล้วเขียนเหมือนรู้จริง\n\n## กฎเหล็ก (สำคัญที่สุด)\n- "ยังไม่ถึงเป้า" ไม่ใช่เหตุผลให้ซื้อ — เป็นแค่ช่องว่างที่อนุญาตให้ซื้อได้ ตัวตัดสินจริงคือ พื้นฐานยังดี + ราคายังสมเหตุสมผล\n- "ต่ำกว่าทุน" ไม่ใช่เหตุผลให้ซื้อ — ถัวขาลงในตัวที่ thesis พังคือกับดักที่แพงที่สุด\n- "กำไรอยู่แล้ว/ราคาขึ้นมาเยอะ" ก็ไม่ใช่เหตุผลห้ามซื้อ ถ้าพื้นฐานโตตามราคา\n- ราคาลงเพราะ sentiment/ตลาด/sector rotation = โอกาสเติม | ราคาลงเพราะพื้นฐานเปลี่ยน = อย่าเติม\n- ห้ามตอบ "ซื้อเลย" ให้ทุกตัว ถ้าออกมาดีหมดทุกตัว แปลว่ายังตรวจไม่ละเอียดพอ — กลับไปดู valuation อีกรอบ\n- ใช้พื้นฐาน + valuation เป็นเหตุผลหลัก ห้ามใช้กราฟ/เทคนิคอลเป็นเหตุผลหลัก\n- ตัวเลข "ซื้อเพิ่ม ~$X" ต่อตัว คือจำนวนที่ทำให้ถึงเป้าถ้าซื้อตัวนั้นตัวเดียว เป็นเพดาน ไม่ใช่คำสั่ง — แนะนำน้อยกว่านั้นได้\n- ยอดรวมท้ายพรอมป์มากกว่าผลบวกของทุกบรรทัด เพราะซื้อพร้อมกันทำให้พอร์ตโตขึ้น เป้า % จึงคิดจากฐานที่ใหญ่กว่า — ตัวเลขนี้ถูกแล้ว ห้ามทักว่าบวกผิด\n\n## ตรวจการกระจุกตัวก่อนสรุป (ห้ามข้าม)\nดู "ภาพรวมทั้งพอร์ต" ท้ายพรอมป์ก่อนตัดสิน — ห้ามมองแต่ละตัวแยกกันแล้วสรุปรวม\n1. จัดกลุ่มเอง: เอาทุกตัวในพอร์ต (ทั้งตัวที่จะเติมและตัวที่ถึงเป้าแล้ว) จัดเข้ากลุ่มตามธีมธุรกิจจริงด้วยความรู้ของคุณ — จัดตาม "อะไรที่ทำให้ราคาขึ้นลงพร้อมกัน" ไม่ใช่ป้าย sector กว้างๆ เช่น AI semiconductor / GLP-1 / mega-cap software / น้ำมันต้นน้ำ / ETF ตลาดรวม\n2. รวม % ของแต่ละกลุ่มจากตัวเลขน้ำหนักที่ให้มา แล้วบอกว่ากลุ่มไหนหนักสุดตอนนี้ (แสดงการรวมให้เห็น)\n3. ถ้าซื้อตามที่แนะนำทั้งหมด แล้วกลุ่มไหนหนักขึ้นจนกระจุก ให้บอกตรงๆ พร้อมตัวเลขกลุ่มนั้น "ก่อนซื้อ → หลังซื้อ" และปรับจำนวน/ลำดับให้ ไม่ใช่ปล่อยผ่าน\n4. ถ้าตัวที่จะเติมอยู่กลุ่มเดียวกับตัวที่ถึงเป้าแล้ว ให้ระบุความเสี่ยงร่วมนี้ และเลือกเติมตัวที่ conviction สูงสุดแทนการเติมทุกตัว\n- ตัวที่ถึงเป้าแล้วใช้ดูว่าพอร์ตหนักไปทางไหน ห้ามแนะนำให้ซื้อเพิ่ม\n- ETF ตลาดรวมให้มองทะลุเข้าไปด้วยว่าข้างในหนักอะไร (เช่น VOO/QQQ หนัก mega-cap tech) เพราะมันซ้อนทับกับหุ้นรายตัวที่ถืออยู่\n\n## ตัดสินทุกตัวลงใน 4 กลุ่มนี้เท่านั้น\n🟢 ซื้อเลยเต็มจำนวน — พื้นฐานแข็ง + ราคายังน่าสนใจ (ต้องระบุว่า "ถูก/แพงเทียบกับอะไร" ด้วยตัวเลข)\n🟡 ทยอยซื้อ — ของดีแต่ราคาไม่ได้ถูก แบ่งเป็น 2-3 ไม้ ระบุจำนวนต่อไม้และเว้นระยะยังไง\n🔵 รอก่อน — ต้องระบุ "รออะไร" เป็นเงื่อนไขที่เช็คได้จริง (ราคาต่ำกว่า $X / งบไตรมาสหน้า / ตัวเลขอะไรที่ต้องเห็น) ห้ามเขียนลอยๆ ว่า "รอดูสถานการณ์"\n🔴 ไม่เติมแล้ว — พื้นฐานเปลี่ยนจริง ต้องระบุ "จากอะไร → เป็นอะไร" พร้อมหลักฐาน/ตัวเลข และเสนอเป้า % ใหม่ที่ควรเป็น\n\n## จัดลำดับความสำคัญ (ทำหลังตัดสินรายตัวเสร็จ)\nเงินมีจำกัดเสมอ — เรียงลำดับ 1..${unders.length} ว่าถ้ามีเงินก้อนเดียวควรลงตัวไหนก่อน พร้อมเหตุผลสั้น 1 บรรทัดต่อตัว\nแล้วสรุปแผนตามงบ 3 ระดับของยอดเต็ม $${need.toFixed(0)}: ใช้ 25% / 50% / 100% — ตัวไหนได้เงินเท่าไหร่ในแต่ละกรณี\n\n## รูปแบบต่อ 1 ตัว (กระชับ ไม่ต้องยาว)\nSYMBOL — 🟢/🟡/🔵/🔴\n📊 พื้นฐานล่าสุด: ตัวเลขจริง + วันที่/ไตรมาสอ้างอิง\n💰 Valuation ตอนนี้: แพงหรือถูก เทียบกับอะไร\n🎯 คำตัดสิน: ซื้อตอนนี้เท่าไหร่ ($ และจำนวนหุ้น) หรือรออะไร\n⚠️ ความเสี่ยงข้อที่สำคัญที่สุดข้อเดียว\n\nครอบคลุมให้ครบทั้ง ${unders.length} ตัว ห้ามข้ามตัวไหน\n\n---\nPORTFOLIO "${currentPortName}" | มูลค่ารวม $${tv.toFixed(0)} | ยังไม่ถึงเป้า ${unders.length} ตัว | ซื้อพร้อมกันทุกตัวถึงเป้าใช้เงิน ~$${need.toFixed(2)}\n\n${rows}${contextBlock}\n\n---\nราคาอัพเดท ${lastUpdate} | วิเคราะห์เป็นภาษาไทย`;
+    const p=`คุณคือ Senior Portfolio Manager และ CFA Charterholder วันนี้คือ ${lastUpdate}\n\n## ภารกิจ\nพอร์ตนี้มี ${unders.length} ตัวที่น้ำหนักยังต่ำกว่าเป้าที่ตั้งไว้ ตัดสินทีละตัวว่า "ควรซื้อเพิ่มตอนนี้เลย หรือรอ"\nคำถามที่ต้องตอบคือ **ราคาตอนนี้เป็นจังหวะที่ดีไหม** ไม่ใช่ "เป้ายังไม่เต็มใช่ไหม"\n\n## ขั้นตอนที่ 1 — ค้นข้อมูลก่อนตอบ (ห้ามข้าม)\nค้นของทุกตัวก่อนสรุป: ผลประกอบการไตรมาสล่าสุด, guidance, ข่าว 1-3 เดือนล่าสุด, valuation ปัจจุบัน (P/E, P/S, FCF yield) เทียบค่าเฉลี่ยของตัวเองย้อนหลังและเทียบ peers\n- ถ้าค้นไม่ได้หรือข้อมูลเก่า ให้บอกตรงๆ ว่าข้อมูลถึงแค่ช่วงไหน ห้ามเดาแล้วเขียนเหมือนรู้จริง\n\n## กฎเหล็ก (สำคัญที่สุด)\n- "ยังไม่ถึงเป้า" ไม่ใช่เหตุผลให้ซื้อ — เป็นแค่ช่องว่างที่อนุญาตให้ซื้อได้ ตัวตัดสินจริงคือ พื้นฐานยังดี + ราคายังสมเหตุสมผล\n- "ต่ำกว่าทุน" ไม่ใช่เหตุผลให้ซื้อ — ถัวขาลงในตัวที่ thesis พังคือกับดักที่แพงที่สุด\n- "กำไรอยู่แล้ว/ราคาขึ้นมาเยอะ" ก็ไม่ใช่เหตุผลห้ามซื้อ ถ้าพื้นฐานโตตามราคา\n- ราคาลงเพราะ sentiment/ตลาด/sector rotation = โอกาสเติม | ราคาลงเพราะพื้นฐานเปลี่ยน = อย่าเติม\n- ห้ามตอบ "ซื้อเลย" ให้ทุกตัว ถ้าออกมาดีหมดทุกตัว แปลว่ายังตรวจไม่ละเอียดพอ — กลับไปดู valuation อีกรอบ\n- ใช้พื้นฐาน + valuation เป็นเหตุผลหลัก ห้ามใช้กราฟ/เทคนิคอลเป็นเหตุผลหลัก\n- ตัวเลข "ซื้อเพิ่ม ~$X" ต่อตัว คือจำนวนที่ทำให้ถึงเป้าถ้าซื้อตัวนั้นตัวเดียว เป็นเพดาน ไม่ใช่คำสั่ง — แนะนำน้อยกว่านั้นได้${jointNote}\n\n## ตรวจการกระจุกตัวก่อนสรุป (ห้ามข้าม)\nดู "ภาพรวมทั้งพอร์ต" ท้ายพรอมป์ก่อนตัดสิน — ห้ามมองแต่ละตัวแยกกันแล้วสรุปรวม\n1. จัดกลุ่มเอง: เอาทุกตัวในพอร์ต (ทั้งตัวที่จะเติมและตัวที่ถึงเป้าแล้ว) จัดเข้ากลุ่มตามธีมธุรกิจจริงด้วยความรู้ของคุณ — จัดตาม "อะไรที่ทำให้ราคาขึ้นลงพร้อมกัน" ไม่ใช่ป้าย sector กว้างๆ เช่น AI semiconductor / GLP-1 / mega-cap software / น้ำมันต้นน้ำ / ETF ตลาดรวม\n2. รวม % ของแต่ละกลุ่มจากตัวเลขน้ำหนักที่ให้มา แล้วบอกว่ากลุ่มไหนหนักสุดตอนนี้ (แสดงการรวมให้เห็น)\n3. ถ้าซื้อตามที่แนะนำทั้งหมด แล้วกลุ่มไหนหนักขึ้นจนกระจุก ให้บอกตรงๆ พร้อมตัวเลขกลุ่มนั้น "ก่อนซื้อ → หลังซื้อ" และปรับจำนวน/ลำดับให้ ไม่ใช่ปล่อยผ่าน\n4. ถ้าตัวที่จะเติมอยู่กลุ่มเดียวกับตัวที่ถึงเป้าแล้ว ให้ระบุความเสี่ยงร่วมนี้ และเลือกเติมตัวที่ conviction สูงสุดแทนการเติมทุกตัว\n- ตัวที่ถึงเป้าแล้วใช้ดูว่าพอร์ตหนักไปทางไหน ห้ามแนะนำให้ซื้อเพิ่ม\n- ETF ตลาดรวมให้มองทะลุเข้าไปด้วยว่าข้างในหนักอะไร (เช่น VOO/QQQ หนัก mega-cap tech) เพราะมันซ้อนทับกับหุ้นรายตัวที่ถืออยู่\n\n## ตัดสินทุกตัวลงใน 4 กลุ่มนี้เท่านั้น\n🟢 ซื้อเลยเต็มจำนวน — พื้นฐานแข็ง + ราคายังน่าสนใจ (ต้องระบุว่า "ถูก/แพงเทียบกับอะไร" ด้วยตัวเลข)\n🟡 ทยอยซื้อ — ของดีแต่ราคาไม่ได้ถูก แบ่งเป็น 2-3 ไม้ ระบุจำนวนต่อไม้และเว้นระยะยังไง\n🔵 รอก่อน — ต้องระบุ "รออะไร" เป็นเงื่อนไขที่เช็คได้จริง (ราคาต่ำกว่า $X / งบไตรมาสหน้า / ตัวเลขอะไรที่ต้องเห็น) ห้ามเขียนลอยๆ ว่า "รอดูสถานการณ์"\n🔴 ไม่เติมแล้ว — พื้นฐานเปลี่ยนจริง ต้องระบุ "จากอะไร → เป็นอะไร" พร้อมหลักฐาน/ตัวเลข และเสนอเป้า % ใหม่ที่ควรเป็น\n\n## จัดลำดับความสำคัญ (ทำหลังตัดสินรายตัวเสร็จ)\nเงินมีจำกัดเสมอ — เรียงลำดับ 1..${unders.length} ว่าถ้ามีเงินก้อนเดียวควรลงตัวไหนก่อน พร้อมเหตุผลสั้น 1 บรรทัดต่อตัว\nแล้วสรุปแผนตามงบ 3 ระดับของยอดเต็ม $${need.toFixed(0)}: ใช้ 25% / 50% / 100% — ตัวไหนได้เงินเท่าไหร่ในแต่ละกรณี\n\n## รูปแบบต่อ 1 ตัว (กระชับ ไม่ต้องยาว)\nSYMBOL — 🟢/🟡/🔵/🔴\n📊 พื้นฐานล่าสุด: ตัวเลขจริง + วันที่/ไตรมาสอ้างอิง\n💰 Valuation ตอนนี้: แพงหรือถูก เทียบกับอะไร\n🎯 คำตัดสิน: ซื้อตอนนี้เท่าไหร่ ($ และจำนวนหุ้น) หรือรออะไร\n⚠️ ความเสี่ยงข้อที่สำคัญที่สุดข้อเดียว\n\nครอบคลุมให้ครบทั้ง ${unders.length} ตัว ห้ามข้ามตัวไหน\n\n---\nPORTFOLIO "${currentPortName}" | มูลค่ารวม $${tv.toFixed(0)} | ยังไม่ถึงเป้า ${unders.length} ตัว | ซื้อพร้อมกันทุกตัวถึงเป้าใช้เงิน ~$${need.toFixed(2)}\n\n${rows}${contextBlock}\n\n---\nราคาอัพเดท ${lastUpdate} | วิเคราะห์เป็นภาษาไทย`;
     copyToClipboard(p); msg(`Copy prompt ${unders.length} ตัวที่ยังไม่ถึงเป้าแล้ว — เปิด Web Search แล้ววางใน Claude ✓`);
   };
 
@@ -1002,6 +1044,8 @@ export default function App() {
   // the per-row unrealized in the table. Raw holdings.shares/avgCost go stale after
   // sells/splits and include hidden (deleted) positions.
   const tv=effectiveHoldings.reduce((s:number,h:any)=>s+h.shares*h.currentPrice,0);
+  // positions below their target weight — the summary bar and the AI card both show it
+  const underCount=activeHoldings.filter((h:any)=>addSuggestion(h,tv).amount>0).length;
   const tc=effectiveHoldings.reduce((s:number,h:any)=>s+h.shares*h.avgCost,0);
   const pnl=tv-tc; const pnlPct=tc>0?pnl/tc*100:0;
   const pc=(v:number)=>v>=0?"var(--gain)":"var(--loss)";
@@ -1073,7 +1117,7 @@ export default function App() {
       {/* App bar — signed in only; LoginGate is a full-page screen that owns its own header */}
       {userEmail && (
       <div style={{background:"var(--card)",borderBottom:"1px solid var(--line)",padding:"10px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-        <div className={userEmail ? "appbar-wordmark" : ""} style={{fontSize:17,fontWeight:800,letterSpacing:"0.14em",fontFamily:'"Avenir Next",Futura,"Segoe UI",system-ui,sans-serif'}}>
+        <div className="appbar-wordmark" style={{fontSize:17,fontWeight:800,letterSpacing:"0.14em",fontFamily:'"Avenir Next",Futura,"Segoe UI",system-ui,sans-serif'}}>
           <span style={{color:"var(--brass)"}}>SA</span><span style={{color:"var(--ink)"}}>SOM</span>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",position:"relative"}}>
@@ -1230,11 +1274,12 @@ export default function App() {
                   <div style={{fontSize:13,fontWeight:700,color:"var(--ink)"}}>{activeHoldings.length} ตัว{effectiveHoldings.length>activeHoldings.length?` · ขายหมด ${effectiveHoldings.length-activeHoldings.length}`:""}</div>
                 </div>
               </div>
-              {/* Cash needed to bring every under-target position up to its target — the
-                  sum of the per-row "ซื้อ … ถึงเป้า" figures. */}
+              {/* Cash needed to bring every under-target position up to its target at the
+                  same time — a joint solve (totalToTarget), deliberately MORE than the sum
+                  of the per-row "ซื้อ … ถึงเป้า" figures, which each assume buying alone. */}
               {(()=>{
                 const need = totalToTarget(activeHoldings, tv);
-                const cnt = activeHoldings.filter((h:any)=>addSuggestion(h,tv).amount>0).length;
+                const cnt = underCount;
                 return need > 0 ? (
                   <button onClick={()=>setSortBy("under")}
                     style={{width:"100%",marginTop:10,padding:"8px 12px",background:"var(--card2)",border:"1px solid var(--line)",borderRadius:8,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",gap:8}}>
@@ -1467,7 +1512,7 @@ export default function App() {
           <AiTab
             hasHoldings={holdings.length>0}
             moversCount={moversCount}
-            underCount={activeHoldings.filter((h:any)=>addSuggestion(h,tv).amount>0).length}
+            underCount={underCount}
             onAnalyze={copyForAnalysis}
             onMovers={copyMoversAnalysis}
             onBuyDecision={copyBuyDecision}
