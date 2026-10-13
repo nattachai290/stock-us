@@ -52,6 +52,11 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
   // ~6% of bytes, enough to change which rows OCR reads. JPEG and PNG (the two formats the
   // picker accepts) both decode through the shared path; anything else, or a PNG variant
   // the decoder refuses, falls back to the browser decoder. Canvas only encodes the PNG.
+  // Pixel size of each preprocessed image, which the digit re-read needs to clamp its
+  // boxes — known here already, so it never has to decode the PNG again to find out.
+  const dims = useRef(new WeakMap<Blob, { w: number; h: number }>());
+  // Bumped per read, so a finished read's hide timer can't hide the NEXT read's bar.
+  const runId = useRef(0);
   const preprocess = async (file: File, scale: number): Promise<Blob> => {
     const bytes = new Uint8Array(await file.arrayBuffer());
     let src = decodeImage(bytes) as { data: Uint8ClampedArray; width: number; height: number } | null;
@@ -68,11 +73,14 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
     const c2 = document.createElement("canvas");
     c2.width = r.width; c2.height = r.height;
     c2.getContext("2d")!.putImageData(new ImageData(r.data, r.width, r.height), 0, 0);
-    return new Promise((res, rej) => c2.toBlob(b => b ? res(b) : rej(new Error("canvas.toBlob failed")), "image/png"));
+    const blob = await new Promise<Blob>((res, rej) => c2.toBlob(b => b ? res(b) : rej(new Error("canvas.toBlob failed")), "image/png"));
+    dims.current.set(blob, { w: r.width, h: r.height });
+    return blob;
   };
 
   const run = async (files: FileList) => {
     if (!files.length) return;
+    const myRun = ++runId.current;
     setBusy(true); setResult(null); setSource({}); setMissingBy([]); setPct(0); setProgress("");
     // ONE bar for the whole read. The main passes fill the first half and the specialist
     // passes (when needed) the second; it only ever moves forward. It used to restart
@@ -104,11 +112,10 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
         const words = wordsOf(data);
         if (!words.some(x => isDamagedCount(x.text))) return data.text;
         if (!digitWorker) { digitWorker = await mkWorker("eng"); await digitWorker.setParameters(DIGIT_PARAMS as any); }
-        const bmp = await createImageBitmap(blob);
+        const d = dims.current.get(blob)!;
         const dw = digitWorker;
-        const fixed = await repairCounts(data.text, words, bmp.width, bmp.height,
+        const fixed = await repairCounts(data.text, words, d.w, d.h,
           async rect => (await dw.recognize(blob, { rectangle: rect })).data.text);
-        bmp.close();
         return fixed.text;
       };
       for (let i = 0; i < N; i++) {
@@ -186,7 +193,7 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       // A clean read never needs the specialists and stops at the halfway mark — finish
       // the bar rather than have it vanish from 50%.
       advance(100);
-      setTimeout(() => setPct(null), 350);
+      setTimeout(() => { if (runId.current === myRun) setPct(null); }, 350);
       setProgress(merged.rows.length ? "" : "อ่านไม่พบรายการในรูป — ใช้ภาพแคปหน้า Activity ที่เห็นบรรทัดเต็มๆ");
     } catch (e: any) {
       setPct(null);

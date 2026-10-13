@@ -63,15 +63,55 @@ const check = (name, cond, detail = "") => {
   check("mergeImages: an unfinished block another screenshot read whole is not unread", m.incomplete === 0, `got ${m.incomplete}`);
   m = mergeImages([{ rows: [row(A)], incomplete: 1, partials: [{ qtyStr: "9.9999999" }] }, { rows: [row(B)], incomplete: 0 }]);
   check("mergeImages: an unfinished block nobody read stays unread", m.incomplete === 1, `got ${m.incomplete}`);
-  const stub = { rows: [row(A)], incomplete: 1, partials: [{ edge: true }] };
+  // B (08:30) is newer than A (08:29); the list is newest-first, so B sits ABOVE A
+  const stub = { rows: [row(A)], incomplete: 1, partials: [{ edge: "top" }] };
   m = mergeImages([stub, { rows: [row(A), row(B)], incomplete: 0 }]);
   check("mergeImages: an edge-cut header is cleared when the screenshots provably overlap", m.incomplete === 0, `got ${m.incomplete}`);
   m = mergeImages([stub, { rows: [row(B)], incomplete: 0 }]);
   check("mergeImages: ...but kept when they share no row (may not meet at all)", m.incomplete === 1, `got ${m.incomplete}`);
+  // review: overlap on ONE side says nothing about the other edge — a header cut at the
+  // BOTTOM of the last screenshot is lost even though that screenshot overlaps the one
+  // above it
+  m = mergeImages([{ rows: [row(A)], incomplete: 1, partials: [{ edge: "bottom" }] }, { rows: [row(A), row(B)], incomplete: 0 }]);
+  check("mergeImages: a bottom-edge stub is NOT cleared by a neighbour that only continues upward", m.incomplete === 1, `got ${m.incomplete}`);
+  // a cut header that read its ticker: the row it came from is the NEXT one past the
+  // edge, even at the same minute as the edge row (AXON and FSLR both 08:28)
+  const FSLR = "23/07/2026 08:28,B,FSLR,0.0141652,207.55", AXON = "23/07/2026 08:28,B,AXON,0.0058848,499.59";
+  m = mergeImages([{ rows: [row(FSLR), row(A)], incomplete: 1, partials: [{ side: "B", symbol: "AXON", edge: "bottom" }] },
+                   { rows: [row(FSLR), row(AXON)], incomplete: 0 }]);
+  check("mergeImages: a cut ticker matched by the next row past the edge, same minute", m.incomplete === 0, `got ${m.incomplete}`);
+  // ...but an AXON bought on another day is not that row (repeat buys of one name)
+  m = mergeImages([{ rows: [row(FSLR), row(A)], incomplete: 1, partials: [{ side: "B", symbol: "AXON", edge: "bottom" }] },
+                   { rows: [row(FSLR), row("20/07/2026 09:00,B,ISRG,0.0086930,338.20"), row("10/07/2026 09:00,B,AXON,0.0060000,480.00")], incomplete: 0 }]);
+  check("mergeImages: a different day's buy of the same ticker does not explain a cut row", m.incomplete === 1, `got ${m.incomplete}`);
+  // a corporate-action leg cut mid-read reads its side unreliably — the count decides
+  m = mergeImages([{ rows: [row(A)], incomplete: 1, partials: [{ qtyStr: "00870467", side: "S", symbol: "CRWD", edge: "bottom" }] },
+                   { rows: [row("02/07/2026 15:05,+,CRWD,0.0870467,0", [], { isSplit: true })], incomplete: 0 }]);
+  check("mergeImages: a cut split leg is matched by its count whatever side it read", m.incomplete === 0, `got ${m.incomplete}`);
   m = mergeImages([stub]);
   check("mergeImages: a single cut screenshot keeps its warning", m.incomplete === 1, `got ${m.incomplete}`);
   m = mergeImages([{ rows: [row(A)], incomplete: 1, partials: [{ qtyStr: "1 0034129", edge: true }] }, { rows: [row(B)], incomplete: 0 }]);
   check("mergeImages: a seam partial matches on digits, not formatting (\"1 0034129\")", m.incomplete === 0, `got ${m.incomplete}`);
+  // review: two rows of the SAME screenshot are never merged as if they were overlap
+  const R2 = "23/07/2026 08:30,B,RXRX,0.5000000,2.93";
+  m = mergeImages([{ rows: [row(B), row(R2, ["x"])], incomplete: 0 }, { rows: [row(A)], incomplete: 0 }]);
+  check("mergeImages: same-image rows at one minute both survive", m.rows.length === 3, m.rows.map(r => r.csv).join("|"));
+  // review: a lost SELL is not explained by a BUY of the same share count
+  const buy = "20/07/2026 09:00,B,RXRX,0.5000000,2.10";
+  m = mergeImages([{ rows: [row(buy)], incomplete: 1, partials: [{ qtyStr: "0.5000000", side: "S", symbol: "RXRX" }] }, { rows: [row(A)], incomplete: 0 }]);
+  check("mergeImages: a lost sell is not 'explained' by a buy of the same count", m.incomplete === 1, `got ${m.incomplete}`);
+  // review: two different lost blocks that read nothing are two, not one
+  m = mergeImages([{ rows: [row(A)], incomplete: 2, partials: [{ pass: "a" }, { pass: "a" }] }, { rows: [row(B)], incomplete: 0 }]);
+  check("mergeImages: two number-less lost blocks count as two", m.incomplete === 2, `got ${m.incomplete}`);
+  // review: a day misread on one screenshot is one trade, not two clean ones
+  m = mergeImages([{ rows: [row("01/05/2026 08:30,B,ELF,0.1234567,80.00")], incomplete: 0 },
+                   { rows: [row("11/05/2026 08:30,B,ELF,0.1234567,80.00")], incomplete: 0 }]);
+  check("mergeImages: same trade with a misread day on another screenshot → one flagged row",
+    m.rows.length === 1 && m.rows[0].flags.some(f => f.includes("วันที่ไม่ตรงกัน")), m.rows.map(r => r.csv + " " + r.flags.join(";")).join("|"));
+  // review: an O guess whose real reading is on ANOTHER screenshot is still a shadow
+  m = mergeImages([{ rows: [row("21/07/2026 11:57,B,CELH,0.1036287,28.66")], incomplete: 0 },
+                   { rows: [row("21/07/2026 11:57,B,O,0.036287,28.66", ["x"], { symbolCorrected: "๐" })], incomplete: 0 }]);
+  check("mergeImages: an O shadow across screenshots is dropped", m.rows.length === 1 && m.rows[0].symbol === "CELH", m.rows.map(r => r.csv).join("|"));
   m = mergeImages([{ rows: [row(A)], incomplete: 0 }, { rows: [row(B)], incomplete: 0 }]);
   check("mergeImages: rows are attributed to their screenshot", m.source.join() === "0,1", m.source.join());
 }
@@ -90,6 +130,11 @@ const check = (name, cond, detail = "") => {
   check("digitfix: a re-read that is not 7 decimals changes nothing", r.text === "จำนวนหุ้น 0.208761" && r.repairs.length === 0);
   r = await repairCounts("x 10.2087611 y 0.208761", [w("0.208761")], 200, 100, async () => "0.2087611");
   check("digitfix: only the whole token is replaced, never inside another number", r.text === "x 10.2087611 y 0.2087611", r.text);
+  // review: two rows read the same damaged count; the first re-read is rejected — the
+  // second's value must land on the SECOND row, not overwrite the first
+  let n = 0;
+  r = await repairCounts("row1 0.208761\nrow2 0.208761", [w("0.208761"), w("0.208761")], 200, 100, async () => (n++ === 0 ? "garbage" : "0.2087615"));
+  check("digitfix: a repair lands on its own occurrence", r.text === "row1 0.208761\nrow2 0.2087615", JSON.stringify(r.text));
 }
 
 {

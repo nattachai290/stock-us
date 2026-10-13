@@ -51,18 +51,28 @@ export async function repairCounts(
   readRect: (r: Rect) => Promise<string>,
 ): Promise<{ text: string; repairs: { from: string; to: string }[] }> {
   const repairs: { from: string; to: string }[] = [];
-  let out = text;
+  // A repair must land on THIS word's occurrence, not the first matching token: two rows
+  // can carry the same damaged reading, and if the first one's re-read is rejected, the
+  // second's value must not be written onto the first row. Words come in reading order,
+  // as the text does, so the k-th word with a given text is the k-th occurrence of it.
+  const seen = new Map<string, number>();
+  const edits: { at: number; len: number; to: string }[] = [];
   for (const w of words) {
     if (!isDamagedCount(w.text)) continue;
+    const k = seen.get(w.text) ?? 0;
+    seen.set(w.text, k + 1);
     const re = (await readRect(rectFor(w.bbox, imgW, imgH))).replace(/\s/g, "");
     if (!isWellFormedCount(re)) continue;
-    // replace this token where it stands as a whole word, first occurrence still unpatched
+    // whole-token occurrences only — never inside a longer number
     const esc = w.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const rx = new RegExp(`(^|[^\\d.])${esc}(?![\\d.])`, "m");
-    if (!rx.test(out)) continue;
-    out = out.replace(rx, (_, pre) => pre + re);
+    const at = [...text.matchAll(new RegExp(`(^|[^\\d.])${esc}(?![\\d.])`, "gm"))].map(m => m.index! + m[1].length)[k];
+    if (at === undefined) continue;
+    edits.push({ at, len: w.text.length, to: re });
     repairs.push({ from: w.text, to: re });
   }
+  // apply back to front so earlier offsets stay valid
+  let out = text;
+  for (const e of edits.sort((x, y) => y.at - x.at)) out = out.slice(0, e.at) + e.to + out.slice(e.at + e.len);
   return { text: out, repairs };
 }
 
