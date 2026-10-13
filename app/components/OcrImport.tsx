@@ -1,6 +1,7 @@
 "use client";
 import { useRef, useState } from "react";
 import { parseImages, extractTickerHintsByImage, extractMonthHints, type MergeResult } from "../lib/ocr";
+import { repairCounts, wordsOf, isDamagedCount, DIGIT_PARAMS } from "../lib/digitfix";
 import { grayscaleNormalize, resizeBilinear } from "../lib/preprocess";
 import { decodeImage } from "../lib/decode";
 import { btnGhost, btnPrimary } from "../lib/ui";
@@ -90,14 +91,30 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       // Kept per image: each screenshot is parsed on its own and merged afterwards (see
       // parseImages) — glued into one text, overlapping shots corrupted each other.
       const perImage: { name: string; t2: string; t3: string; extra?: string[] }[] = [];
+      // Damaged share counts are re-read digit-only (see lib/digitfix). The worker is only
+      // started if some count actually came through damaged — clean screenshots skip it.
+      let digitWorker: Awaited<ReturnType<typeof mkWorker>> | null = null;
+      const repair = async (data: { text: string; blocks?: any[] | null }, blob: Blob) => {
+        const words = wordsOf(data);
+        if (!words.some(x => isDamagedCount(x.text))) return data.text;
+        if (!digitWorker) { digitWorker = await mkWorker("eng"); await digitWorker.setParameters(DIGIT_PARAMS as any); }
+        const bmp = await createImageBitmap(blob);
+        const dw = digitWorker;
+        const fixed = await repairCounts(data.text, words, bmp.width, bmp.height,
+          async rect => (await dw.recognize(blob, { rectangle: rect })).data.text);
+        bmp.close();
+        return fixed.text;
+      };
       for (let i = 0; i < N; i++) {
         setProgress(`กำลังอ่านรูปที่ ${i + 1}/${N}`); setPct(Math.round((i / N) * 100));
         const [b2, b3] = await Promise.all([preprocess(list[i], 2), preprocess(list[i], 3)]);
-        const [r2, r3] = await Promise.all([w2.recognize(b2), w3.recognize(b3)]);
-        perImage.push({ name: list[i].name, t2: r2.data.text, t3: r3.data.text });
+        const [r2, r3] = await Promise.all([w2.recognize(b2, {}, { blocks: true }), w3.recognize(b3, {}, { blocks: true })]);
+        // the repairs share one digit worker, so they run one after the other
+        const t2 = await repair(r2.data, b2), t3 = await repair(r3.data, b3);
+        perImage.push({ name: list[i].name, t2, t3 });
         setPct(Math.round(((i + 1) / N) * 100));
       }
-      await Promise.all([w2.terminate(), w3.terminate()]);
+      await Promise.all([w2.terminate(), w3.terminate(), (digitWorker as Awaited<ReturnType<typeof mkWorker>> | null)?.terminate()]);
       // The two eng+tha passes alone often read everything. The specialist single-language
       // passes below only ever help blocks the main passes couldn't finish (a Thai-mangled
       // ticker → dropped → incomplete; a Latin-rendered month → inferred). So parse the

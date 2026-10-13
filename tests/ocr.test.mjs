@@ -27,6 +27,8 @@ const { parseActivityText, mergeParses, extractTickerHints, mergeTickerHints, ex
 const preSrc = execSync("npx esbuild app/lib/preprocess.ts --format=esm", { cwd: ROOT }).toString();
 const { grayscaleNormalize, resizeBilinear } = await import("data:text/javascript;base64," + Buffer.from(preSrc).toString("base64"));
 // --bundle inlines jpeg-js so this is byte-for-byte the decoder the browser bundle runs
+const dfSrc = execSync("npx esbuild app/lib/digitfix.ts --format=esm", { cwd: ROOT }).toString();
+const { repairCounts, wordsOf, isDamagedCount, DIGIT_PARAMS } = await import("data:text/javascript;base64," + Buffer.from(dfSrc).toString("base64"));
 const decSrc = execSync("npx esbuild app/lib/decode.ts --format=esm --bundle", { cwd: ROOT }).toString();
 const { decodeImage } = await import("data:text/javascript;base64," + Buffer.from(decSrc).toString("base64"));
 
@@ -72,6 +74,22 @@ const check = (name, cond, detail = "") => {
   check("mergeImages: a seam partial matches on digits, not formatting (\"1 0034129\")", m.incomplete === 0, `got ${m.incomplete}`);
   m = mergeImages([{ rows: [row(A)], incomplete: 0 }, { rows: [row(B)], incomplete: 0 }]);
   check("mergeImages: rows are attributed to their screenshot", m.source.join() === "0,1", m.source.join());
+}
+
+{
+  // digitfix — which tokens are damaged counts, and what a re-read may change
+  check("digitfix: ']' for 1 is damaged", isDamagedCount("0.066800]"));
+  check("digitfix: a dropped digit (6 decimals) is damaged", isDamagedCount("0.208761"));
+  check("digitfix: a 4-decimal price is NOT a damaged count", !isDamagedCount("185.1640") && !isDamagedCount("45.9580"));
+  check("digitfix: a well-formed count is left alone", !isDamagedCount("0.1036287"));
+  check("digitfix: a baht total is left alone", !isDamagedCount("99.80"));
+  const w = (text) => ({ text, bbox: { x0: 10, y0: 10, x1: 90, y1: 30 } });
+  let r = await repairCounts("จำนวนหุ้น 0.066800]\nราคา 45.9580", [w("0.066800]"), w("45.9580")], 200, 100, async () => "0.0668001");
+  check("digitfix: a 7-decimal re-read replaces the damaged token", r.text === "จำนวนหุ้น 0.0668001\nราคา 45.9580" && r.repairs.length === 1, JSON.stringify(r));
+  r = await repairCounts("จำนวนหุ้น 0.208761", [w("0.208761")], 200, 100, async () => "0.20876");
+  check("digitfix: a re-read that is not 7 decimals changes nothing", r.text === "จำนวนหุ้น 0.208761" && r.repairs.length === 0);
+  r = await repairCounts("x 10.2087611 y 0.208761", [w("0.208761")], 200, 100, async () => "0.2087611");
+  check("digitfix: only the whole token is replaced, never inside another number", r.text === "x 10.2087611 y 0.2087611", r.text);
 }
 
 {
@@ -837,6 +855,8 @@ const thaWorker = await createWorker("tha", 1, {
   langPath: LANG_PATH,
   gzip: true, cacheMethod: "none",
 });
+const digitWorker = await createWorker("eng", 1, { langPath: LANG_PATH, gzip: true, cacheMethod: "none" });
+await digitWorker.setParameters(DIGIT_PARAMS);
 // One text PER IMAGE — the app parses each screenshot on its own and merges after
 // (parseImages), so the harness must hand them over the same way.
 // Results are cached per worker+file+scale for the run: the many-file cases below are
@@ -844,7 +864,10 @@ const thaWorker = await createWorker("tha", 1, {
 // can be as many and as large as needed. Same worker, same pixels → same text, so the
 // cache changes nothing about what is tested.
 const ocrCache = new WeakMap();
-async function ocrText(w, imgs, scale) {
+// `repair` mirrors the app's main passes: damaged share counts are re-read digit-only
+// through lib/digitfix before the text reaches the parser.
+let repairsMade = 0;
+async function ocrText(w, imgs, scale, repair = false) {
   const texts = [];
   if (!ocrCache.has(w)) ocrCache.set(w, new Map());
   const cache = ocrCache.get(w);
@@ -858,9 +881,16 @@ async function ocrText(w, imgs, scale) {
     grayscaleNormalize(view);
     const r = resizeBilinear(view, width, height, scale);
     const out = Jimp.fromBitmap({ data: Buffer.from(r.data.buffer, r.data.byteOffset, r.data.length), width: r.width, height: r.height });
-    const { data } = await w.recognize(await out.getBuffer(JimpMime.png));
-    cache.set(ck, data.text);
-    texts.push(data.text);
+    const png = await out.getBuffer(JimpMime.png);
+    const { data } = await w.recognize(png, {}, repair ? { blocks: true } : {});
+    let text = data.text;
+    if (repair && wordsOf(data).some(x => isDamagedCount(x.text))) {
+      const fixed = await repairCounts(text, wordsOf(data), r.width, r.height,
+        async rect => (await digitWorker.recognize(png, { rectangle: rect })).data.text);
+      text = fixed.text; repairsMade += fixed.repairs.length;
+    }
+    cache.set(ck, text);
+    texts.push(text);
   }
   return texts;
 }
@@ -959,7 +989,7 @@ for (const c of CASES) {
   // The app passes the portfolio's symbols in; screenshots ARE of the user's own
   // portfolio, so the truth symbols are exactly what the app would supply.
   const known = [...new Set(c.truth.map(t => t.split(",")[2]))];
-  const textA = await ocrText(worker, c.imgs, 2), textB = await ocrText(worker, c.imgs, 3);
+  const textA = await ocrText(worker, c.imgs, 2, true), textB = await ocrText(worker, c.imgs, 3, true);
   // MIRROR OcrImport's lazy orchestration exactly: parse the two main passes first, and
   // run the eng/tha specialist passes only when there's something for them to fix.
   // Each image is parsed on its own and merged by parseImages, as the app does.
@@ -1026,6 +1056,8 @@ for (const c of CASES) {
 await worker.terminate();
 await engWorker.terminate();
 await thaWorker.terminate();
+await digitWorker.terminate();
+console.log(`\ndigit-only re-reads applied: ${repairsMade}`);
 
 // Aggregate regression floor (so a code change that tanks recall is caught), reported honestly
 const pct = Math.round(exactTotal / truthTotal * 100);
