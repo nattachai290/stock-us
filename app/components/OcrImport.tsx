@@ -35,7 +35,7 @@ const flagColumns = (flags: string[]): number[] => {
 
 export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: string, flaggedFields: { csv: string; cols: number[] }[]) => void; knownSymbols?: string[] }) {
   const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState("");     // "รูปที่ x/y" label (no round numbers shown)
+  const [progress, setProgress] = useState("");     // result/error message only — reading shows the bar alone
   const [pct, setPct] = useState<number | null>(null); // 0..100 for the progress bar; null = no bar
   const [result, setResult] = useState<MergeResult | null>(null);
   // csv line → the screenshot it was read from, so a row that needs checking can be
@@ -73,7 +73,13 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
 
   const run = async (files: FileList) => {
     if (!files.length) return;
-    setBusy(true); setResult(null); setSource({}); setMissingBy([]); setPct(0); setProgress("กำลังโหลดตัวอ่าน OCR (ครั้งแรกอาจใช้เวลาสักครู่)...");
+    setBusy(true); setResult(null); setSource({}); setMissingBy([]); setPct(0); setProgress("");
+    // ONE bar for the whole read. The main passes fill the first half and the specialist
+    // passes (when needed) the second; it only ever moves forward. It used to restart
+    // at 0 with "รูปที่ 1/N" when the specialists began, so a 3-image read counted
+    // 1 2 3 1 2 3 and filled the bar twice.
+    const MAIN_SHARE = 50;
+    const advance = (v: number) => setPct(p => Math.max(p ?? 0, Math.round(v)));
     try {
       const { createWorker } = await import("tesseract.js");
       const mkWorker = (lang: string) => createWorker(lang, 1, {
@@ -106,13 +112,12 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
         return fixed.text;
       };
       for (let i = 0; i < N; i++) {
-        setProgress(`กำลังอ่านรูปที่ ${i + 1}/${N}`); setPct(Math.round((i / N) * 100));
         const [b2, b3] = await Promise.all([preprocess(list[i], 2), preprocess(list[i], 3)]);
         const [r2, r3] = await Promise.all([w2.recognize(b2, {}, { blocks: true }), w3.recognize(b3, {}, { blocks: true })]);
         // the repairs share one digit worker, so they run one after the other
         const t2 = await repair(r2.data, b2), t3 = await repair(r3.data, b3);
         perImage.push({ name: list[i].name, t2, t3 });
-        setPct(Math.round(((i + 1) / N) * 100));
+        advance(((i + 1) / N) * MAIN_SHARE);
       }
       await Promise.all([w2.terminate(), w3.terminate(), (digitWorker as Awaited<ReturnType<typeof mkWorker>> | null)?.terminate()]);
       // The two eng+tha passes alone often read everything. The specialist single-language
@@ -137,14 +142,11 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
         // eng-only reads Latin tickers the Thai model mangles (keyed by share count);
         // tha-only reads Thai month abbreviations eng+tha renders as Latin (keyed by day+time).
         // Both specialist workers run concurrently (still peak 2 workers, since the main pair
-        // was terminated first). Progress tracks the slower of the two over the same images.
-        setProgress(`กำลังอ่านรูปที่ 1/${N}`); setPct(0);
+        // was terminated first). Both workers' images count toward the bar's second half.
         const done = [0, 0];
         const bump = (k: number) => {
           done[k]++;
-          const slow = Math.min(done[0], done[1]);
-          setProgress(`กำลังอ่านรูปที่ ${Math.min(slow + 1, N)}/${N}`);
-          setPct(Math.round(((done[0] + done[1]) / (2 * N)) * 100));
+          advance(MAIN_SHARE + ((done[0] + done[1]) / (2 * N)) * (100 - MAIN_SHARE));
         };
         // returns out[image][scale] — per image, for the same reason the main passes are
         const runLang = async (lang: string, k: number, scales: number[]) => {
@@ -181,7 +183,10 @@ export default function OcrImport({ onAppend, knownSymbols }: { onAppend: (csv: 
       setMissingBy(missing);
       setSource(src);
       setResult(merged);
-      setPct(null);
+      // A clean read never needs the specialists and stops at the halfway mark — finish
+      // the bar rather than have it vanish from 50%.
+      advance(100);
+      setTimeout(() => setPct(null), 350);
       setProgress(merged.rows.length ? "" : "อ่านไม่พบรายการในรูป — ใช้ภาพแคปหน้า Activity ที่เห็นบรรทัดเต็มๆ");
     } catch (e: any) {
       setPct(null);
