@@ -161,3 +161,27 @@ export function trimSuggestion(h: any, totalValue: number): { amount: number; sh
   const amount = shares * gainPerShare;                            // realised gain = unrealized reduction
   return { amount, shares, proceeds, overAmount };
 }
+
+// Every transaction of every position as the CSV that "Import ประวัติ CSV" reads, so an
+// export can be imported straight back — the only backup of the buy/sell history that
+// does not depend on Drive (Export CSV writes the holdings summary, not the history).
+// Splits go out as the "-"/"+" leg pair the importer pairs into splitHistory: "+" carries
+// the new share total (what splitHistory stores), "-" the count held just before.
+export function historyToCSV(holdings: any[]): string {
+  const when = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)} ${iso.slice(11, 16)}`;
+  const rows: { iso: string; line: string }[] = [];
+  for (const h of holdings || []) {
+    for (const b of h.buyHistory || []) rows.push({ iso: b.date, line: `${when(b.date)},B,${h.symbol},${b.qty},${b.price}` });
+    for (const s of h.realizedHistory || []) rows.push({ iso: s.date, line: `${when(s.date)},S,${h.symbol},${s.qty},${s.sellPrice}` });
+    for (const sp of h.splitHistory || []) {
+      const before = (d: any) => new Date(d.date).getTime() < new Date(sp.date).getTime();
+      const held = computeFromHistory({ ...h, buyHistory: (h.buyHistory || []).filter(before),
+        realizedHistory: (h.realizedHistory || []).filter(before), splitHistory: (h.splitHistory || []).filter(before) }).shares;
+      rows.push({ iso: sp.date, line: `${when(sp.date)},-,${h.symbol},${+held.toFixed(7)}` });
+      rows.push({ iso: sp.date, line: `${when(sp.date)},+,${h.symbol},${sp.ratio},0` });
+    }
+  }
+  // oldest first, the order the importer replays them; a split's "-" stays before its "+"
+  rows.sort((a, b) => a.iso < b.iso ? -1 : a.iso > b.iso ? 1 : 0);
+  return rows.map(r => r.line).join("\n");
+}
