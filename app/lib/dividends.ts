@@ -8,7 +8,9 @@
 
 import { sharesAtDate } from "./pricehistory";
 
-export type DivEvent = { ex: string; pay: string | null; amount: number }; // dates "YYYY-MM-DD", amount $/share as paid
+// dates "YYYY-MM-DD"; amount $/share as paid — unless `adj`, when it's restated for every
+// split since (stockanalysis), and dividendRows undoes that from the holding's own splits
+export type DivEvent = { ex: string; pay: string | null; amount: number; adj?: boolean };
 export type DivMap = Record<string, DivEvent[]>;                             // symbol -> events, oldest first
 
 // US tax withheld at source on dividends paid to a Thai resident who has filed a W-8BEN
@@ -63,6 +65,38 @@ export function parseYahooDividends(json: any): DivEvent[] | null {
   return out.sort((a, b) => a.ex.localeCompare(b.ex));
 }
 
+// stockanalysis.com /api/symbol/{s|e}/{sym}/dividend → data.history[] of { dt, amt:"$0.2747", pay }.
+// Answers from datacenter IPs where Yahoo returns 429, and has payment dates, but covers the
+// last ~5 years only and its amounts are split-ADJUSTED with no split list alongside — so
+// the events are flagged `adj` and converted per holding in dividendRows.
+export function parseStockAnalysisDividends(json: any): DivEvent[] | null {
+  const rows = json?.data?.history;
+  if (json?.status !== 200 || !Array.isArray(rows)) return null;
+  const out: DivEvent[] = [];
+  for (const r of rows) {
+    const ex = /^\d{4}-\d{2}-\d{2}$/.test(r?.dt) ? r.dt : null;
+    const amount = parseFloat(String(r?.amt || "").replace(/[$,]/g, ""));
+    if (!ex || !(amount > 0)) continue;
+    out.push({ ex, pay: /^\d{4}-\d{2}-\d{2}$/.test(r?.pay) ? r.pay : null, amount: r6(amount), adj: true });
+  }
+  return out.sort((a, b) => a.ex.localeCompare(b.ex));
+}
+
+// Undo split adjustment for one holding: each split it went through after `t` multiplied
+// the share count by (new total ÷ shares just before), and divided a restated dividend by
+// the same. Splits after the position was sold out aren't in its history — but then the
+// adjusted figure is as good as anything the app could know.
+function splitFactorAfter(h: any, t: number): number {
+  let f = 1;
+  for (const sp of h.splitHistory || []) {
+    const st = Date.parse(sp.date), target = parseFloat(sp.ratio) || 0;
+    if (!Number.isFinite(st) || st <= t || !(target > 0)) continue;
+    const before = sharesAtDate(h, st - 1);
+    if (before > 1e-9) f *= target / before;
+  }
+  return f;
+}
+
 // Buying ON the ex-date doesn't earn the dividend; holding at the open does. Counting
 // shares at 08:00 UTC on the ex-date (4:00 New York time in summer, 3:00 in winter, before
 // pre-market) takes everything traded up to the previous US session — which is the day
@@ -88,9 +122,10 @@ export function dividendRows(holdings: any[], divs: DivMap, now = Date.now()): D
       // announced but not yet ex: what the CURRENT holding would collect
       const shares = upcoming ? sharesAtDate(h, now) : sharesAtDate(h, exCutoff(e.ex) - 1);
       if (!(shares > 1e-9)) continue;
-      const gross = shares * e.amount;
+      const perShare = e.adj && !upcoming ? r6(e.amount * splitFactorAfter(h, exCutoff(e.ex))) : e.amount;
+      const gross = shares * perShare;
       out.push({
-        symbol: h.symbol, ex: e.ex, pay: e.pay, perShare: e.amount, shares, gross, net: gross * (1 - WITHHOLDING),
+        symbol: h.symbol, ex: e.ex, pay: e.pay, perShare, shares, gross, net: gross * (1 - WITHHOLDING),
         status: upcoming ? "upcoming" : e.pay && e.pay > today ? "pending" : "paid",
       });
     }
@@ -142,7 +177,7 @@ export function dividendSummary(rows: DivRow[], holdings: any[], divs: DivMap, n
 
 // Client cache: dividend histories change at most a few times a year, so each symbol is
 // kept for 12 hours in localStorage and only stale/new symbols hit /api/dividends.
-const CACHE_KEY = "div-cache-v1";
+const CACHE_KEY = "div-cache-v2"; // v2: events may carry `adj`
 const TTL = 12 * 3600 * 1000;
 
 export async function ensureDividends(symbols: string[], force = false): Promise<{ divs: DivMap; errors: Record<string, string> }> {

@@ -11,7 +11,7 @@ const load = async (file, extra = "") => {
   const src = execSync(`npx esbuild ${file} --format=esm --bundle ${extra}`, { cwd: ROOT }).toString();
   return import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 };
-const { parseNasdaqDividends, parseYahooDividends, dividendRows, dividendSummary, exCutoff, WITHHOLDING } = await load("app/lib/dividends.ts");
+const { parseNasdaqDividends, parseStockAnalysisDividends, parseYahooDividends, dividendRows, dividendSummary, exCutoff, WITHHOLDING } = await load("app/lib/dividends.ts");
 
 let pass = 0, fail = 0;
 const t = (name, cond, detail = "") => { cond ? pass++ : fail++; console.log((cond ? "✓ " : "✗ FAIL ") + name + (cond ? "" : "  — " + detail)); };
@@ -43,6 +43,19 @@ const sec = (iso) => Date.parse(iso) / 1000;
   t("yahoo: ex-date from the event timestamp, no payment date", e[0].ex === "2024-03-05" && e[0].pay === null);
   t("yahoo: chart with no dividends → []", JSON.stringify(parseYahooDividends({ chart: { result: [{}] } })) === "[]");
   t("yahoo: no chart → null", parseYahooDividends({ chart: { result: null } }) === null);
+}
+
+{
+  // stockanalysis: payment dates, but amounts restated for later splits → flagged adj
+  const sa = { status: 200, data: { history: [
+    { dt: "2024-06-26", amt: "$0.2747", record: "2024-06-26", pay: "2024-07-01" },
+    { dt: "2024-12-11", amt: "$0.2645", pay: "2024-12-16" },
+    { dt: "n/a", amt: "$1" },
+  ] } };
+  const e = parseStockAnalysisDividends(sa);
+  t("stockanalysis: rows parsed oldest first, flagged split-adjusted", e.length === 2 && e[0].ex === "2024-06-26" && e[0].pay === "2024-07-01" && e.every(x => x.adj), JSON.stringify(e));
+  t("stockanalysis: listed, pays nothing → []", JSON.stringify(parseStockAnalysisDividends({ status: 200, data: { history: [] } })) === "[]");
+  t("stockanalysis: 404 → null", parseStockAnalysisDividends({ status: 404 }) === null);
 }
 
 // ── what the portfolio earned ─────────────────────────────────────────────────────────
@@ -112,13 +125,28 @@ const NOW = Date.parse("2026-10-14T05:00:00Z");
   t("by year, newest first", s.byYear.map(y => y.year).join() === "2026,2025");
 }
 {
+  // split-adjusted source converted back through the holding's own split: SCHD 3:1 in Oct 2024.
+  // stockanalysis says $0.2747 for June 2024 — SCHD actually paid $0.8241 on the pre-split shares.
+  const h = { symbol: "SCHD", buyHistory: [{ date: "2024-05-01T22:00:00", qty: 20, price: 80 }], realizedHistory: [],
+    splitHistory: [{ date: "2024-10-11T08:00:00", ratio: "60" }] };
+  const divs = { SCHD: [
+    { ex: "2024-06-26", pay: "2024-07-01", amount: 0.2747, adj: true },
+    { ex: "2024-12-11", pay: "2024-12-16", amount: 0.2645, adj: true },
+  ] };
+  const rows = dividendRows([h], divs, NOW);
+  const jun = rows.find(r => r.ex === "2024-06-26"), dec = rows.find(r => r.ex === "2024-12-11");
+  t("adjusted amount before a split → as paid (×3) on pre-split shares", near(jun.perShare, 0.8241) && jun.shares === 20, JSON.stringify(jun));
+  t("same money either way: 20 × $0.8241 = 60 × $0.2747", near(jun.gross, 60 * 0.2747));
+  t("after the split → unchanged", near(dec.perShare, 0.2645) && dec.shares === 60);
+}
+{
   t("no dividend data → no rows", dividendRows([{ symbol: "CRWD", buyHistory: [{ date: "2026-01-01T22:00:00", qty: 1, price: 1 }] }], {}, NOW).length === 0);
   t("hidden (deleted) positions still count", dividendRows([{ symbol: "KO", hidden: true,
     buyHistory: [{ date: "2025-01-02T22:00:00", qty: 1, price: 60 }], realizedHistory: [{ date: "2025-06-01T22:00:00", qty: 1, sellPrice: 70 }] }],
     { KO: [{ ex: "2025-03-14", pay: "2025-04-01", amount: 0.51 }] }, NOW).length === 1);
 }
 
-// ── /api/dividends: Nasdaq first, Yahoo for everything Nasdaq doesn't list ─────────────
+// ── /api/dividends: Nasdaq first, then stockanalysis, then Yahoo ──────────────────────────
 {
   const calls = [];
   globalThis.fetch = async (url) => {
@@ -128,19 +156,25 @@ const NOW = Date.parse("2026-10-14T05:00:00Z");
     if (url.includes("getcrumb")) return json({});
     if (url.includes("api.nasdaq.com/api/quote/MSFT/")) return json({ data: { dividends: { rows: [{ exOrEffDate: "08/20/2026", type: "Cash", amount: "$0.91", paymentDate: "09/10/2026" }] } } });
     if (url.includes("api.nasdaq.com")) return json({ data: { dividends: { rows: null } } });
-    if (url.includes("/chart/SCHD")) return json({ chart: { result: [{ events: { dividends: { a: { amount: 0.278, date: sec("2025-12-10T14:30:00Z") } } } }] } });
+    if (url.includes("stockanalysis.com/api/symbol/s/schd/")) return json({ status: 404 });
+    if (url.includes("stockanalysis.com/api/symbol/e/schd/")) return json({ status: 200, data: { history: [{ dt: "2025-12-10", amt: "$0.278", pay: "2025-12-15" }] } });
+    if (url.includes("stockanalysis.com/api/symbol/s/crwd/")) return json({ status: 200, data: { history: [] } });
+    if (url.includes("stockanalysis.com")) return { ok: false, status: 404, json: async () => ({ status: 404 }) };
+    if (url.includes("/chart/JNJ")) return json({ chart: { result: [{ events: { dividends: { a: { amount: 0.278, date: sec("2025-12-10T14:30:00Z") } } } }] } });
     if (url.includes("/chart/CRWD")) return json({ chart: { result: [{}] } });
     return { ok: false, status: 404, json: async () => ({}) };
   };
   const { GET } = await load("app/api/dividends/route.ts", "--external:next/server");
-  const res = await GET({ nextUrl: { searchParams: new URLSearchParams({ symbols: "MSFT,SCHD,CRWD,ZZZZ" }) } });
+  const res = await GET({ nextUrl: { searchParams: new URLSearchParams({ symbols: "MSFT,SCHD,CRWD,JNJ,ZZZZ" }) } });
   const j = await res.json();
   t("route: Nasdaq listing answered by Nasdaq, with payment date", j.results.MSFT?.[0]?.pay === "2026-09-10", JSON.stringify(j.results.MSFT));
-  t("route: Nasdaq has no table → Yahoo", near(j.results.SCHD?.[0]?.amount, 0.278) && calls.some(u => u.includes("/chart/SCHD")));
+  t("route: not on Nasdaq → stockanalysis (ETF path), with payment date", j.results.SCHD?.[0]?.pay === "2025-12-15" && j.results.SCHD[0].adj === true, JSON.stringify(j.results.SCHD));
+  t("route: stockanalysis answered, so Yahoo isn't asked", !calls.some(u => u.includes("/chart/SCHD")));
   t("route: pays no dividends → empty list, not an error", Array.isArray(j.results.CRWD) && j.results.CRWD.length === 0 && !j.errors.CRWD);
+  t("route: neither Nasdaq nor stockanalysis → Yahoo", near(j.results.JNJ?.[0]?.amount, 0.278) && j.results.JNJ[0].adj === undefined);
   t("route: nobody answers → error", !!j.errors.ZZZZ && !j.results.ZZZZ, JSON.stringify(j.errors));
   t("route: a failure isn't cached at the CDN", res.headers.get("Cache-Control") === "no-store");
-  t("route: Yahoo carries the crumb", calls.some(u => u.includes("/chart/SCHD") && u.includes("crumb=crumb1")));
+  t("route: Yahoo carries the crumb", calls.some(u => u.includes("/chart/JNJ") && u.includes("crumb=crumb1")));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
