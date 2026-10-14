@@ -15,6 +15,8 @@ import AiTab from "./components/AiTab";
 import LoginGate from "./components/LoginGate";
 import ToolsMenu from "./components/ToolsMenu";
 import PortfolioValueChart from "./components/PortfolioValueChart";
+import DividendsCard from "./components/DividendsCard";
+import type { DivSummary } from "./lib/dividends";
 import ChartsTab from "./components/ChartsTab";
 import HistoryTab from "./components/HistoryTab";
 
@@ -77,6 +79,8 @@ export default function App() {
   const portIdRef = useRef(currentPortId); portIdRef.current = currentPortId;
   // A portfolio whose device copy and Drive copy both changed — the user picks the side
   const [syncConflict, setSyncConflict] = useState<null | { portId: string; portName: string; local: any[]; drive: any[] }>(null);
+  // dividend totals from <DividendsCard>, for the hero summary (null = none / not loaded)
+  const [divSum, setDivSum] = useState<DivSummary | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [newPortName, setNewPortName] = useState("");
@@ -1375,6 +1379,12 @@ export default function App() {
                   <div style={{fontSize:10,color:"var(--faint)"}}>Realized</div>
                   <div style={{fontSize:13,fontWeight:700,color:pc(totalRealizedAll)}}>{totalRealizedAll>=0?"+":""}${totalRealizedAll.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
                 </div>
+                {divSum&&divSum.received>0&&(
+                <div>
+                  <div style={{fontSize:10,color:"var(--faint)"}}>ปันผลรับ</div>
+                  <div style={{fontSize:13,fontWeight:700,color:"var(--gain)"}}>+${divSum.received.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                </div>
+                )}
                 <div>
                   <div style={{fontSize:10,color:"var(--faint)"}}>ถืออยู่</div>
                   <div style={{fontSize:13,fontWeight:700,color:"var(--ink)"}}>{activeHoldings.length} ตัว{effectiveHoldings.length>activeHoldings.length?` · ขายหมด ${effectiveHoldings.length-activeHoldings.length}`:""}</div>
@@ -1417,6 +1427,8 @@ export default function App() {
             </div>
 
             <PortfolioValueChart holdings={holdings} token={token} onMsg={(m:string)=>msg(m)}/>
+
+            <DividendsCard holdings={holdings} tv={tv} onSummary={setDivSum}/>
 
             {!userEmail&&(
               <div style={{background:"var(--card)",border:"1px solid var(--brass)",borderRadius:8,padding:"10px 14px",marginBottom:12,fontSize:12,color:"var(--brass)"}}>

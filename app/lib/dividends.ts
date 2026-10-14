@@ -1,0 +1,170 @@
+// ── Dividends: pulled automatically, never typed in ───────────────────────────
+//
+// /api/dividends returns each symbol's dividend history as PAID PER SHARE AT THE TIME
+// (not split-adjusted), and the app works out what this portfolio received from its own
+// transactions: shares held going into each ex-date × the cash amount, less the US
+// withholding tax. Nothing is stored — it's re-derived from the history every time, so
+// editing a buy or a sell re-prices every dividend it touches.
+
+import { sharesAtDate } from "./pricehistory";
+
+export type DivEvent = { ex: string; pay: string | null; amount: number }; // dates "YYYY-MM-DD", amount $/share as paid
+export type DivMap = Record<string, DivEvent[]>;                             // symbol -> events, oldest first
+
+// US tax withheld at source on dividends paid to a Thai resident who has filed a W-8BEN
+// (US–Thailand treaty rate). Without the form it's 30% — the broker's statement is the
+// final word; this is an estimate.
+export const WITHHOLDING = 0.15;
+
+const usDate = (s: string) => { // "MM/DD/YYYY" -> "YYYY-MM-DD", else null
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(s || "").trim());
+  return m ? `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}` : null;
+};
+const isoDay = (sec: number) => new Date(sec * 1000).toISOString().slice(0, 10);
+const r6 = (v: number) => Math.round(v * 1e6) / 1e6;
+
+// Nasdaq /api/quote/{SYM}/dividends → rows of { exOrEffDate, amount:"$0.98", paymentDate, type }.
+// Amounts are as paid (NVDA's pre-split 2024 dividend reads $0.04, not $0.004). Returns null
+// when Nasdaq has no table for the symbol (non-Nasdaq listings), [] for "no dividends".
+export function parseNasdaqDividends(json: any): DivEvent[] | null {
+  const rows = json?.data?.dividends?.rows;
+  if (!Array.isArray(rows)) return null;
+  const out: DivEvent[] = [];
+  for (const r of rows) {
+    const ex = usDate(r?.exOrEffDate);
+    const amount = parseFloat(String(r?.amount || "").replace(/[$,]/g, ""));
+    if (!ex || !(amount > 0)) continue;
+    if (r?.type && !/cash/i.test(String(r.type))) continue; // stock dividends etc. aren't cash
+    out.push({ ex, pay: usDate(r?.paymentDate), amount: r6(amount) });
+  }
+  return out.sort((a, b) => a.ex.localeCompare(b.ex));
+}
+
+// Yahoo v8 chart with events=div|split → { dividends:{ts:{amount,date}}, splits:{ts:{date,numerator,denominator}} }.
+// Yahoo's dividend amounts are split-ADJUSTED to today's share count, but the app counts
+// shares as they were on each date, so undo every split that came after the ex-date
+// (NVDA: $0.004 × 10 = the $0.04 actually paid in March 2024). No payment dates.
+export function parseYahooDividends(json: any): DivEvent[] | null {
+  const r = json?.chart?.result?.[0];
+  if (!r) return null;
+  const divs = Object.values(r.events?.dividends || {}) as any[];
+  const splits = (Object.values(r.events?.splits || {}) as any[])
+    .map(s => ({ t: +s.date, f: (+s.numerator || 0) / (+s.denominator || 0) }))
+    .filter(s => Number.isFinite(s.t) && s.f > 0 && Number.isFinite(s.f));
+  const out: DivEvent[] = [];
+  for (const d of divs) {
+    const t = +d?.date, amount = +d?.amount;
+    if (!Number.isFinite(t) || !(amount > 0)) continue;
+    const later = splits.filter(s => s.t > t).reduce((p, s) => p * s.f, 1);
+    // Yahoo rounds the adjusted figure, so the multiplied-back one carries float noise
+    // (0.824001) — cash dividends are declared to 4 decimals at most in practice.
+    out.push({ ex: isoDay(t), pay: null, amount: later === 1 ? r6(amount) : Math.round(amount * later * 1e4) / 1e4 });
+  }
+  return out.sort((a, b) => a.ex.localeCompare(b.ex));
+}
+
+// Buying ON the ex-date doesn't earn the dividend; holding at the open does. Counting
+// shares at 08:00 UTC on the ex-date (4:00 New York time in summer, 3:00 in winter, before
+// pre-market) takes everything traded up to the previous US session — which is the day
+// before in Thai time too, since US sessions end at 03:00–04:00 Thai time.
+export const exCutoff = (ex: string) => Date.parse(ex + "T08:00:00Z");
+
+export type DivRow = {
+  symbol: string; ex: string; pay: string | null;
+  perShare: number; shares: number; gross: number; net: number;
+  status: "paid" | "pending" | "upcoming"; // paid · ex passed, payment still to come · announced, ex ahead
+};
+
+// Every dividend this portfolio earned (or has coming), newest first. `holdings` should
+// include hidden (deleted) positions — dividends they earned before being sold still count.
+export function dividendRows(holdings: any[], divs: DivMap, now = Date.now()): DivRow[] {
+  const today = new Date(now).toISOString().slice(0, 10);
+  const out: DivRow[] = [];
+  for (const h of holdings || []) {
+    const evs = divs[h.symbol];
+    if (!evs?.length) continue;
+    for (const e of evs) {
+      const upcoming = e.ex > today;
+      // announced but not yet ex: what the CURRENT holding would collect
+      const shares = upcoming ? sharesAtDate(h, now) : sharesAtDate(h, exCutoff(e.ex) - 1);
+      if (!(shares > 1e-9)) continue;
+      const gross = shares * e.amount;
+      out.push({
+        symbol: h.symbol, ex: e.ex, pay: e.pay, perShare: e.amount, shares, gross, net: gross * (1 - WITHHOLDING),
+        status: upcoming ? "upcoming" : e.pay && e.pay > today ? "pending" : "paid",
+      });
+    }
+  }
+  return out.sort((a, b) => b.ex.localeCompare(a.ex) || a.symbol.localeCompare(b.symbol));
+}
+
+export type DivSummary = {
+  received: number;   // net, everything paid so far
+  thisYear: number;   // net, paid in the current calendar year
+  last12m: number;    // net, paid in the last 365 days
+  coming: number;     // net, ex passed or announced but not paid yet
+  forward: number;    // net, next 12 months if the last 12 months' payouts repeat on today's shares
+  byYear: { year: string; net: number }[]; // newest first
+};
+
+// Totals for the card. "Paid in" uses the payment date when known, else the ex-date.
+export function dividendSummary(rows: DivRow[], holdings: any[], divs: DivMap, now = Date.now()): DivSummary {
+  const today = new Date(now).toISOString().slice(0, 10);
+  const year = today.slice(0, 4);
+  const yearAgo = new Date(now - 365 * 86400000).toISOString().slice(0, 10);
+  let received = 0, thisYear = 0, last12m = 0, coming = 0;
+  const byYear: Record<string, number> = {};
+  for (const r of rows) {
+    if (r.status !== "paid") { coming += r.net; continue; }
+    const d = r.pay || r.ex;
+    received += r.net;
+    byYear[d.slice(0, 4)] = (byYear[d.slice(0, 4)] || 0) + r.net;
+    if (d.startsWith(year)) thisYear += r.net;
+    if (d > yearAgo) last12m += r.net;
+  }
+  // Trailing-12-month payout per share × shares held now. Holdings are per symbol, but
+  // sum by symbol anyway so a duplicated row can't double the per-share rate.
+  let forward = 0;
+  const seen = new Set<string>();
+  for (const h of holdings || []) {
+    if (seen.has(h.symbol)) continue;
+    seen.add(h.symbol);
+    const shares = (holdings || []).filter((x: any) => x.symbol === h.symbol).reduce((s: number, x: any) => s + sharesAtDate(x, now), 0);
+    if (!(shares > 1e-9)) continue;
+    const ttm = (divs[h.symbol] || []).filter(e => e.ex > yearAgo && e.ex <= today).reduce((s, e) => s + e.amount, 0);
+    forward += shares * ttm * (1 - WITHHOLDING);
+  }
+  return {
+    received, thisYear, last12m, coming, forward,
+    byYear: Object.entries(byYear).sort((a, b) => b[0].localeCompare(a[0])).map(([year, net]) => ({ year, net })),
+  };
+}
+
+// Client cache: dividend histories change at most a few times a year, so each symbol is
+// kept for 12 hours in localStorage and only stale/new symbols hit /api/dividends.
+const CACHE_KEY = "div-cache-v1";
+const TTL = 12 * 3600 * 1000;
+
+export async function ensureDividends(symbols: string[], force = false): Promise<{ divs: DivMap; errors: Record<string, string> }> {
+  let cache: Record<string, { at: number; events: DivEvent[] }> = {};
+  try { cache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}") || {}; } catch {}
+  const now = Date.now();
+  const want = [...new Set(symbols.filter(Boolean))];
+  const stale = want.filter(s => force || !cache[s] || now - cache[s].at > TTL);
+  const errors: Record<string, string> = {};
+  for (let i = 0; i < stale.length; i += 15) {
+    const batch = stale.slice(i, i + 15);
+    try {
+      const res = await fetch(`/api/dividends?symbols=${batch.map(encodeURIComponent).join(",")}`, { cache: "no-store" });
+      const j = await res.json();
+      for (const s of batch) {
+        if (Array.isArray(j.results?.[s])) cache[s] = { at: now, events: j.results[s] };
+        else errors[s] = j.errors?.[s] || "no data";
+      }
+    } catch (e: any) { for (const s of batch) errors[s] = e?.message || "fetch failed"; }
+  }
+  try { localStorage.setItem(CACHE_KEY, JSON.stringify(cache)); } catch {}
+  const divs: DivMap = {};
+  for (const s of want) if (cache[s]) divs[s] = cache[s].events; // a failed refresh keeps the older copy
+  return { divs, errors };
+}

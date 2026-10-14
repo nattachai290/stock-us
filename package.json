@@ -14,7 +14,8 @@
     "test:parity": "node tests/parity-browser.mjs",
     "test:market": "node tests/market.test.mjs",
     "test:pricecache": "node tests/pricecache.test.mjs",
-    "test:sync": "node tests/sync.test.mjs"
+    "test:sync": "node tests/sync.test.mjs",
+    "test:dividends": "node tests/dividends.test.mjs"
   },
   "dependencies": {
     "@vercel/blob": "^2.8.0",
