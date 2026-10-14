@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { list, put } from "@vercel/blob";
+import { UA, yahooChart } from "../../lib/yahoo";
 
 // Historical daily CLOSE prices for a set of symbols over a date range.
 // Response: { results: { AAPL: { "2024-01-02": 185.64, ... } }, errors: { SYM: "reason" } }
@@ -9,8 +10,6 @@ import { list, put } from "@vercel/blob";
 // come from chart endpoints. These run on Vercel's IPs, not the browser, so which
 // hosts are reachable differs from a local machine — the multi-provider fallback keeps
 // the feature working if any one source blocks the datacenter range.
-
-const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 type DayMap = Record<string, number>; // "YYYY-MM-DD" -> close
 type SymResult = { symbol: string; days?: DayMap; error?: string };
@@ -64,29 +63,10 @@ async function fromNasdaq(symbol: string, p1: number, p2: number): Promise<SymRe
 }
 
 // ── Yahoo (fallback): crumb-authenticated v8 chart ────────────────────────────
-let crumbCache: { crumb: string; cookie: string; expires: number } | null = null;
-
-async function fetchCrumb(): Promise<{ crumb: string; cookie: string } | null> {
-  if (crumbCache && crumbCache.expires > Date.now()) return crumbCache;
-  try {
-    const home = await fetch("https://finance.yahoo.com/", { headers: { "User-Agent": UA }, cache: "no-store", redirect: "follow" });
-    const raw = home.headers.get("set-cookie") ?? "";
-    const cookie = raw.split(",").map(c => c.split(";")[0].trim()).filter(Boolean).join("; ");
-    const cr = await fetch("https://query1.finance.yahoo.com/v1/test/getcrumb", { headers: { "User-Agent": UA, Cookie: cookie }, cache: "no-store" });
-    const crumb = (await cr.text()).trim();
-    if (!crumb || crumb.length > 40) return null;
-    crumbCache = { crumb, cookie, expires: Date.now() + 25 * 60 * 1000 };
-    return crumbCache;
-  } catch { return null; }
-}
-
 async function fromYahoo(symbol: string, p1: number, p2: number): Promise<SymResult> {
-  const c = await fetchCrumb();
   const base = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?period1=${Math.floor(p1 / 1000)}&period2=${Math.floor(p2 / 1000)}&interval=1d`;
-  const url = c ? `${base}&crumb=${encodeURIComponent(c.crumb)}` : base;
-  const res = await fetch(url, { headers: { "User-Agent": UA, ...(c ? { Cookie: c.cookie } : {}) }, cache: "no-store" });
-  if (!res.ok) return { symbol, error: `yahoo ${res.status}` };
-  const json = await res.json().catch(() => null);
+  let json: any;
+  try { json = await yahooChart(base); } catch (e: any) { return { symbol, error: e?.message || "yahoo failed" }; }
   const r = json?.chart?.result?.[0];
   const ts: number[] = r?.timestamp ?? [];
   const closes: (number | null)[] = r?.indicators?.quote?.[0]?.close ?? [];

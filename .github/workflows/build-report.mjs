@@ -12,6 +12,7 @@ const CHECKS = [
   { key: "market", label: "Market-hours tests", cmd: "npm run test:market" },
   { key: "pcache", label: "Price-cache tests", cmd: "npm run test:pricecache" },
   { key: "sync", label: "Drive sync tests", cmd: "npm run test:sync" },
+  { key: "dividends", label: "Dividend tests", cmd: "npm run test:dividends" },
   { key: "ocr", label: "OCR pipeline tests", cmd: "npm run test:ocr" },
   { key: "parity", label: "Browser/CI pixel parity", cmd: "npm run test:parity" },
 ];
