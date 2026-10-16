@@ -19,6 +19,11 @@ type H = Record<string, any>;
 // so they are not "edits": compare everything except them.
 const VOLATILE = new Set(["currentPrice", "changePct", "priceTime"]);
 const HISTORY = ["buyHistory", "realizedHistory", "splitHistory"] as const;
+// Per-share dividend history the app fills in by itself (lib/dividends). It's synced like
+// anything else, but it's a cache of public facts, not an edit: it must not make one side
+// look "not behind" the other and raise a conflict card. Rows only one side has are
+// carried over when the other side is pushed (unionDivHistory).
+const DERIVED = new Set(["divHistory"]);
 
 const strip = (h: H) => Object.fromEntries(Object.entries(h).filter(([k]) => !VOLATILE.has(k)));
 // stable stringify: key order must not make two equal portfolios look different
@@ -48,7 +53,7 @@ function txSet(holdings: H[]): Set<string> {
 // Everything about a position that is not history or a price (targets, notes, hidden…)
 function metaOf(holdings: H[]): Map<string, string> {
   return new Map(holdings.map(h => [String(h.symbol), stable(Object.fromEntries(
-    Object.entries(h).filter(([k]) => !VOLATILE.has(k) && !(HISTORY as readonly string[]).includes(k))))]));
+    Object.entries(h).filter(([k]) => !VOLATILE.has(k) && !DERIVED.has(k) && !(HISTORY as readonly string[]).includes(k))))]));
 }
 const subset = (a: Set<string>, b: Set<string>) => [...a].every(x => b.has(x));
 // `older` is strictly behind `newer`: all its transactions are in `newer`, and every

@@ -1,9 +1,10 @@
 "use client";
-import { IconGrid, IconBars, IconClock, IconSpark } from "./icons";
+import { IconGrid, IconBars, IconClock, IconSpark, IconCoin } from "./icons";
 
 const NAV = [
   { key: "portfolio", label: "พอร์ต", Icon: IconGrid },
   { key: "chart", label: "กราฟ", Icon: IconBars },
+  { key: "dividends", label: "ปันผล", Icon: IconCoin },
   { key: "transactions", label: "ประวัติ", Icon: IconClock },
   { key: "ai", label: "AI", Icon: IconSpark },
 ] as const;
