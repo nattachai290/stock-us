@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import DateTimePicker24h from "./components/DateTimePicker24h";
 import { parseCSV, toCSV, copyToClipboard, fifoBasisForSale, computeFromHistory , trimSuggestion, addSuggestion, totalToTarget } from "./lib/portfolio";
 import { isMarketOpen } from "./lib/market";
@@ -15,8 +15,8 @@ import AiTab from "./components/AiTab";
 import LoginGate from "./components/LoginGate";
 import ToolsMenu from "./components/ToolsMenu";
 import PortfolioValueChart from "./components/PortfolioValueChart";
-import DividendsCard from "./components/DividendsCard";
-import type { DivSummary } from "./lib/dividends";
+import DividendsTab from "./components/DividendsTab";
+import { ensureDividends, dividendRows, dividendSummary, mergeDivHistory, unionDivHistory, type DivMap } from "./lib/dividends";
 import ChartsTab from "./components/ChartsTab";
 import HistoryTab from "./components/HistoryTab";
 
@@ -79,8 +79,14 @@ export default function App() {
   const portIdRef = useRef(currentPortId); portIdRef.current = currentPortId;
   // A portfolio whose device copy and Drive copy both changed — the user picks the side
   const [syncConflict, setSyncConflict] = useState<null | { portId: string; portName: string; local: any[]; drive: any[] }>(null);
-  // dividend totals from <DividendsCard>, for the hero summary (null = none / not loaded)
-  const [divSum, setDivSum] = useState<DivSummary | null>(null);
+  // Dividends (lib/dividends): per-symbol per-share history from /api/dividends
+  const [divs, setDivs] = useState<DivMap>({});
+  const [divErrors, setDivErrors] = useState<Record<string, string>>({});
+  const [divLoading, setDivLoading] = useState(false);
+  // The portfolio whose device copy was last confirmed in step with Drive (reconcile) —
+  // dividend rows are only written into a portfolio after that, so this automatic save
+  // can never race a pull from Drive and raise a conflict card of its own.
+  const [syncedPort, setSyncedPort] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [newPortName, setNewPortName] = useState("");
@@ -416,6 +422,38 @@ export default function App() {
 
   const setAndSave = (data: any[]) => { setHoldings(data); saveData(data); };
 
+  // ── Dividends ──
+  // Fetch per-share histories for every symbol with dated trades (hidden ones too — they
+  // earned dividends before being sold), then fold anything new into each holding's
+  // divHistory and save it, so Drive keeps dividends the providers stop returning.
+  const divSymKey = [...new Set(holdings.filter((h:any) => h.symbol && ((h.buyHistory||[]).length || (h.realizedHistory||[]).length))
+    .map((h:any) => h.symbol as string))].sort().join(",");
+  const loadDividends = useCallback(async (force = false) => {
+    if (!divSymKey) { setDivs({}); setDivErrors({}); return; }
+    setDivLoading(true);
+    const { divs, errors } = await ensureDividends(divSymKey.split(","), force);
+    setDivs(divs); setDivErrors(errors); setDivLoading(false);
+    if (force) msg(Object.keys(errors).length ? `ดึงปันผลไม่ได้ ${Object.keys(errors).length} ตัว` : "อัพเดทปันผลแล้ว ✓");
+  }, [divSymKey]);
+  useEffect(() => { if (loaded) loadDividends(false); }, [loaded, loadDividends]);
+
+  useEffect(() => {
+    if (!loaded || syncConflict || (token && syncedPort !== currentPortId)) return;
+    const cur = holdingsRef.current;
+    let changed = false;
+    const next = cur.map((h: any) => {
+      const m = mergeDivHistory(h, divs[h.symbol]);
+      if (!m) return h;
+      changed = true;
+      return { ...h, divHistory: m };
+    });
+    if (changed) { holdingsRef.current = next; setAndSave(next); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [divs, syncedPort, currentPortId, loaded, token, syncConflict]);
+
+  const divRows = useMemo(() => dividendRows(holdings, divs), [holdings, divs]);
+  const divSum = useMemo(() => divRows.length ? dividendSummary(divRows, holdings, divs) : null, [divRows, holdings, divs]);
+
   // Bring this device and Drive into agreement for one portfolio. Opening the app used to
   // show the device's own copy and never ask Drive (a second device kept showing days-old
   // data until the portfolio was switched), and login / switching wrote Drive over the
@@ -440,12 +478,14 @@ export default function App() {
       if (d === "same") { show(local!); markSynced(portId, drive); if (announce) msg(`โหลด "${portName}" แล้ว ✓`); }
       else if (d === "pull") { show(drive); markSynced(portId, drive); msg(`อัปเดต "${portName}" ล่าสุดจาก Drive แล้ว ✓`); }
       else if (d === "push") {
-        show(local!);
-        await savePortfolio(t, portId, portName, local!);
-        markSynced(portId, local!);
+        const up = unionDivHistory(local!, drive); // keep dividend rows only Drive had
+        show(up);
+        await savePortfolio(t, portId, portName, up);
+        markSynced(portId, up);
         msg(`ส่งข้อมูลที่ค้างอยู่ในเครื่องนี้ขึ้น Drive แล้ว ✓`);
       }
       else { show(local!); setSyncConflict({ portId, portName, local: local!, drive }); }
+      if (d !== "conflict") setSyncedPort(portId);
     } catch (e: any) {
       if (announce) msg("โหลดจาก Drive ไม่ได้: " + e.message);
     } finally { reconcilingRef.current = false; }
@@ -1380,8 +1420,8 @@ export default function App() {
                   <div style={{fontSize:13,fontWeight:700,color:pc(totalRealizedAll)}}>{totalRealizedAll>=0?"+":""}${totalRealizedAll.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
                 </div>
                 {divSum&&divSum.received>0&&(
-                <div>
-                  <div style={{fontSize:10,color:"var(--faint)"}}>ปันผลรับ</div>
+                <div onClick={()=>setTab("dividends")} style={{cursor:"pointer"}} title="ดูแท็บปันผล">
+                  <div style={{fontSize:10,color:"var(--faint)"}}>ปันผลรับ ›</div>
                   <div style={{fontSize:13,fontWeight:700,color:"var(--gain)"}}>+${divSum.received.toLocaleString("en",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
                 </div>
                 )}
@@ -1427,8 +1467,6 @@ export default function App() {
             </div>
 
             <PortfolioValueChart holdings={holdings} token={token} onMsg={(m:string)=>msg(m)}/>
-
-            <DividendsCard holdings={holdings} tv={tv} onSummary={setDivSum}/>
 
             {!userEmail&&(
               <div style={{background:"var(--card)",border:"1px solid var(--brass)",borderRadius:8,padding:"10px 14px",marginBottom:12,fontSize:12,color:"var(--brass)"}}>
@@ -1600,6 +1638,12 @@ export default function App() {
             onFilterSector={(sector)=>{ setQuery(sector); setTab("portfolio"); }}
             onOpenDetail={setDetailId}
           />
+        )}
+
+        {/* DIVIDENDS TAB */}
+        {tab==="dividends"&&(
+          <DividendsTab rows={divRows} sum={divSum} errors={divErrors} loading={divLoading}
+            hasSymbols={!!divSymKey} tv={tv} thb={thb} onRefresh={()=>loadDividends(true)}/>
         )}
 
         {/* TRANSACTIONS TAB */}
