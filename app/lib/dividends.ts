@@ -1,15 +1,19 @@
 // ── Dividends: pulled automatically, never typed in ───────────────────────────
 //
-// /api/dividends returns each symbol's dividend history as PAID PER SHARE AT THE TIME
-// (not split-adjusted), and the app works out what this portfolio received from its own
-// transactions: shares held going into each ex-date × the cash amount, less the US
-// withholding tax. Nothing is stored — it's re-derived from the history every time, so
-// editing a buy or a sell re-prices every dividend it touches.
+// /api/dividends returns each symbol's dividend history per share, and the app works out
+// what this portfolio received from its own transactions: shares held going into each
+// ex-date × the cash amount, less the US withholding tax. Editing a buy or a sell
+// re-prices every dividend it touches.
+//
+// The per-share history is also kept in the portfolio file (each holding's `divHistory`,
+// so it travels with Drive): the providers only reach back so far — stockanalysis.com
+// ~5 years — and a dividend must not drop out of "received" just because it got old or
+// a provider went away. Only the per-share facts are stored, never the computed totals.
 
 import { sharesAtDate } from "./pricehistory";
 
 // dates "YYYY-MM-DD"; amount $/share as paid — unless `adj`, when it's restated for every
-// split since (stockanalysis), and dividendRows undoes that from the holding's own splits
+// split since (stockanalysis), and asPaid() undoes that from the holding's own splits
 export type DivEvent = { ex: string; pay: string | null; amount: number; adj?: boolean };
 export type DivMap = Record<string, DivEvent[]>;                             // symbol -> events, oldest first
 
@@ -68,7 +72,7 @@ export function parseYahooDividends(json: any): DivEvent[] | null {
 // stockanalysis.com /api/symbol/{s|e}/{sym}/dividend → data.history[] of { dt, amt:"$0.2747", pay }.
 // Answers from datacenter IPs where Yahoo returns 429, and has payment dates, but covers the
 // last ~5 years only and its amounts are split-ADJUSTED with no split list alongside — so
-// the events are flagged `adj` and converted per holding in dividendRows.
+// the events are flagged `adj` and converted per holding (asPaid).
 export function parseStockAnalysisDividends(json: any): DivEvent[] | null {
   const rows = json?.data?.history;
   if (json?.status !== 200 || !Array.isArray(rows)) return null;
@@ -103,29 +107,75 @@ function splitFactorAfter(h: any, t: number): number {
 // before in Thai time too, since US sessions end at 03:00–04:00 Thai time.
 export const exCutoff = (ex: string) => Date.parse(ex + "T08:00:00Z");
 
+// The amount a holding was actually paid per share: split-adjusted figures are converted
+// back through the holding's own splits after the ex-date.
+const asPaid = (h: any, e: DivEvent): number => e.adj ? r6(e.amount * splitFactorAfter(h, exCutoff(e.ex))) : e.amount;
+
+// A fetched figure replaces a stored one only when it adds something: a payment date the
+// stored row lacked, or an amount that really differs (a correction) — not the rounding
+// wobble between two providers, which would otherwise rewrite Drive back and forth.
+const improves = (stored: DivEvent, fresh: DivEvent) =>
+  (!stored.pay && !!fresh.pay) || Math.abs(fresh.amount - stored.amount) > Math.max(1e-6, stored.amount * 0.005);
+
+// Every dividend event for one holding, as paid per share, oldest first: what's stored in
+// its divHistory, plus/updated by what was just fetched (announced future ones included).
+export function holdingEvents(h: any, fetched?: DivEvent[]): DivEvent[] {
+  const byEx = new Map<string, DivEvent>();
+  for (const e of h.divHistory || []) if (e?.ex && e.amount > 0) byEx.set(e.ex, { ex: e.ex, pay: e.pay ?? null, amount: +e.amount });
+  for (const f of fetched || []) {
+    const fresh: DivEvent = { ex: f.ex, pay: f.pay, amount: asPaid(h, f) };
+    const stored = byEx.get(f.ex);
+    if (!stored || improves(stored, fresh)) byEx.set(f.ex, fresh);
+  }
+  return [...byEx.values()].sort((a, b) => a.ex.localeCompare(b.ex));
+}
+
+// What the holding's divHistory should become after a fetch, or null when nothing changes
+// (so a save to Drive happens only when a dividend is actually new or corrected). Keeps
+// only dividends already past their ex-date that the holding was entitled to; stored rows
+// a provider no longer returns are kept — that is the point of storing them.
+export function mergeDivHistory(h: any, fetched: DivEvent[] | undefined, now = Date.now()): DivEvent[] | null {
+  if (!fetched) return null;
+  const today = new Date(now).toISOString().slice(0, 10);
+  const prevEx = new Set((h.divHistory || []).map((e: DivEvent) => e.ex));
+  const next = holdingEvents(h, fetched).filter(e => e.ex <= today &&
+    (prevEx.has(e.ex) || sharesAtDate(h, exCutoff(e.ex) - 1) > 1e-9));
+  const norm = (l: DivEvent[]) => JSON.stringify(l.map(e => [e.ex, e.pay ?? null, e.amount]));
+  const prev = [...(h.divHistory || [])].sort((a: DivEvent, b: DivEvent) => a.ex.localeCompare(b.ex));
+  return norm(next) === norm(prev) ? null : next;
+}
+
+// Union of stored dividend rows from another copy of the portfolio, so pushing this
+// device's copy over Drive's never drops rows only Drive had. Matched by holding id.
+export function unionDivHistory(base: any[], other: any[]): any[] {
+  const theirs = new Map((other || []).map((h: any) => [h.id, h.divHistory || []]));
+  return (base || []).map((h: any) => {
+    const extra = (theirs.get(h.id) || []).filter((e: DivEvent) => !(h.divHistory || []).some((m: DivEvent) => m.ex === e.ex));
+    return extra.length ? { ...h, divHistory: [...(h.divHistory || []), ...extra].sort((a, b) => a.ex.localeCompare(b.ex)) } : h;
+  });
+}
+
 export type DivRow = {
   symbol: string; ex: string; pay: string | null;
   perShare: number; shares: number; gross: number; net: number;
   status: "paid" | "pending" | "upcoming"; // paid · ex passed, payment still to come · announced, ex ahead
 };
 
-// Every dividend this portfolio earned (or has coming), newest first. `holdings` should
-// include hidden (deleted) positions — dividends they earned before being sold still count.
+// Every dividend this portfolio earned (or has coming), newest first: stored history plus
+// what was just fetched. `holdings` should include hidden (deleted) positions — dividends
+// they earned before being sold still count.
 export function dividendRows(holdings: any[], divs: DivMap, now = Date.now()): DivRow[] {
   const today = new Date(now).toISOString().slice(0, 10);
   const out: DivRow[] = [];
   for (const h of holdings || []) {
-    const evs = divs[h.symbol];
-    if (!evs?.length) continue;
-    for (const e of evs) {
+    for (const e of holdingEvents(h, divs[h.symbol])) {
       const upcoming = e.ex > today;
       // announced but not yet ex: what the CURRENT holding would collect
       const shares = upcoming ? sharesAtDate(h, now) : sharesAtDate(h, exCutoff(e.ex) - 1);
       if (!(shares > 1e-9)) continue;
-      const perShare = e.adj && !upcoming ? r6(e.amount * splitFactorAfter(h, exCutoff(e.ex))) : e.amount;
-      const gross = shares * perShare;
+      const gross = shares * e.amount;
       out.push({
-        symbol: h.symbol, ex: e.ex, pay: e.pay, perShare, shares, gross, net: gross * (1 - WITHHOLDING),
+        symbol: h.symbol, ex: e.ex, pay: e.pay, perShare: e.amount, shares, gross, net: gross * (1 - WITHHOLDING),
         status: upcoming ? "upcoming" : e.pay && e.pay > today ? "pending" : "paid",
       });
     }
@@ -166,7 +216,9 @@ export function dividendSummary(rows: DivRow[], holdings: any[], divs: DivMap, n
     seen.add(h.symbol);
     const shares = (holdings || []).filter((x: any) => x.symbol === h.symbol).reduce((s: number, x: any) => s + sharesAtDate(x, now), 0);
     if (!(shares > 1e-9)) continue;
-    const ttm = (divs[h.symbol] || []).filter(e => e.ex > yearAgo && e.ex <= today).reduce((s, e) => s + e.amount, 0);
+    // per share in TODAY's share terms: an as-paid amount from before a split is divided back
+    const ttm = holdingEvents(h, divs[h.symbol]).filter(e => e.ex > yearAgo && e.ex <= today)
+      .reduce((s, e) => s + e.amount / splitFactorAfter(h, exCutoff(e.ex)), 0);
     forward += shares * ttm * (1 - WITHHOLDING);
   }
   return {

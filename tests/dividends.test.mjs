@@ -11,7 +11,7 @@ const load = async (file, extra = "") => {
   const src = execSync(`npx esbuild ${file} --format=esm --bundle ${extra}`, { cwd: ROOT }).toString();
   return import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 };
-const { parseNasdaqDividends, parseStockAnalysisDividends, parseYahooDividends, dividendRows, dividendSummary, exCutoff, WITHHOLDING } = await load("app/lib/dividends.ts");
+const { parseNasdaqDividends, parseStockAnalysisDividends, parseYahooDividends, dividendRows, dividendSummary, exCutoff, WITHHOLDING, holdingEvents, mergeDivHistory, unionDivHistory } = await load("app/lib/dividends.ts");
 
 let pass = 0, fail = 0;
 const t = (name, cond, detail = "") => { cond ? pass++ : fail++; console.log((cond ? "✓ " : "✗ FAIL ") + name + (cond ? "" : "  — " + detail)); };
@@ -144,6 +144,50 @@ const NOW = Date.parse("2026-10-14T05:00:00Z");
   t("hidden (deleted) positions still count", dividendRows([{ symbol: "KO", hidden: true,
     buyHistory: [{ date: "2025-01-02T22:00:00", qty: 1, price: 60 }], realizedHistory: [{ date: "2025-06-01T22:00:00", qty: 1, sellPrice: 70 }] }],
     { KO: [{ ex: "2025-03-14", pay: "2025-04-01", amount: 0.51 }] }, NOW).length === 1);
+}
+
+// ── stored history (divHistory, kept in the Drive file) ───────────────────────────────
+{
+  const h = { id: 7, symbol: "SCHD", buyHistory: [{ date: "2019-05-01T22:00:00", qty: 20, price: 50 }], realizedHistory: [],
+    splitHistory: [{ date: "2024-10-11T08:00:00", ratio: "60" }] };
+  const fetched = [
+    { ex: "2024-06-26", pay: "2024-07-01", amount: 0.2747, adj: true },
+    { ex: "2026-09-23", pay: "2026-09-28", amount: 0.2665, adj: true },
+    { ex: "2026-12-09", pay: "2026-12-14", amount: 0.27, adj: true },   // announced, not ex yet
+    { ex: "2018-03-20", pay: "2018-03-26", amount: 0.1, adj: true },    // before the first buy
+  ];
+  const m = mergeDivHistory(h, fetched, NOW);
+  t("store: past dividends the holding was entitled to, as paid", m.length === 2 && near(m[0].amount, 0.8241) && m[0].ex === "2024-06-26", JSON.stringify(m));
+  t("store: nothing announced-only, nothing from before the position", !m.some(e => e.ex === "2026-12-09" || e.ex === "2018-03-20"));
+  t("store: no `adj` flag on stored rows (already converted)", m.every(e => e.adj === undefined));
+  const h2 = { ...h, divHistory: m };
+  t("nothing new → null (no save to Drive)", mergeDivHistory(h2, fetched, NOW) === null);
+  t("no fetch for the symbol → null", mergeDivHistory(h2, undefined, NOW) === null);
+
+  // years later the provider's window has moved on: the 2024 row is no longer returned
+  const later = mergeDivHistory(h2, [{ ex: "2026-09-23", pay: "2026-09-28", amount: 0.2665, adj: true }, { ex: "2027-03-24", pay: "2027-03-29", amount: 0.28, adj: true }],
+    Date.parse("2027-04-01T00:00:00Z"));
+  t("a dividend the provider stopped returning stays stored", later.some(e => e.ex === "2024-06-26" && near(e.amount, 0.8241)) && later.length === 3, JSON.stringify(later));
+  const rowsNoFetch = dividendRows([{ ...h2 }], {}, NOW);
+  t("rows come from storage when the fetch fails", rowsNoFetch.length === 2 && near(rowsNoFetch.find(r => r.ex === "2024-06-26").perShare, 0.8241));
+  t("stored + fetched: the announced one still shows as upcoming", dividendRows([h2], { SCHD: fetched }, NOW).some(r => r.status === "upcoming"));
+
+  // provider wobble doesn't rewrite Drive; a real correction or a new payment date does
+  t("rounding difference between providers → no change", mergeDivHistory(h2, [{ ex: "2024-06-26", pay: "2024-07-01", amount: 0.8240 }], NOW) === null);
+  const corrected = mergeDivHistory(h2, [{ ex: "2024-06-26", pay: "2024-07-01", amount: 0.90 }], NOW);
+  t("a real correction replaces the stored amount", corrected && near(corrected.find(e => e.ex === "2024-06-26").amount, 0.9));
+  const h3 = { ...h, divHistory: [{ ex: "2024-06-26", pay: null, amount: 0.8241 }] };
+  t("a payment date fills in a stored row that had none", mergeDivHistory(h3, [{ ex: "2024-06-26", pay: "2024-07-01", amount: 0.8241 }], NOW)?.[0]?.pay === "2024-07-01");
+
+  // forward estimate in today's share terms even when the stored amount is pre-split
+  const s = dividendSummary(dividendRows([h2], {}, NOW), [h2], {}, NOW);
+  t("forward uses today's per-share figure", near(s.forward, 60 * 0.2665 * 0.85), String(s.forward));
+
+  // pushing this device's copy never drops rows only Drive had
+  const u = unionDivHistory([{ id: 7, symbol: "SCHD", divHistory: [m[1]] }], [{ id: 7, symbol: "SCHD", divHistory: m }]);
+  t("union keeps Drive-only rows", u[0].divHistory.length === 2 && u[0].divHistory[0].ex === "2024-06-26");
+  t("union leaves holdings with nothing extra untouched", unionDivHistory([h2], [])[0] === h2);
+  t("holdingEvents dedupes by ex-date", holdingEvents(h2, fetched).filter(e => e.ex === "2024-06-26").length === 1);
 }
 
 // ── /api/dividends: Nasdaq first, then stockanalysis, then Yahoo ──────────────────────────

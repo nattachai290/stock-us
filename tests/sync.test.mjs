@@ -56,5 +56,16 @@ const newer = [pos("NVDA", [B1, B2])];
   t("summary positions exclude hidden", s.positions === 1, String(s.positions));
 }
 
+{
+  // dividend rows the app stores by itself (divHistory) are synced, but never a reason for a conflict card
+  const D = [{ ex: "2026-08-20", pay: "2026-09-10", amount: 0.91 }];
+  const withDiv = [pos("NVDA", [B1], { divHistory: D })];
+  t("divHistory is part of the content (it gets saved and synced)", contentKey(withDiv) !== contentKey(old));
+  t("Drive only gained dividend rows, no stamp → pull, not conflict", decide(old, withDiv, null) === "pull");
+  t("this device has a new trade, Drive has new dividend rows → push, not conflict",
+    decide(newer, withDiv, null) === "push");
+  t("summarize doesn't count dividend rows as transactions", summarize(withDiv).transactions === 1);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

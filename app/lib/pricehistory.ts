@@ -1,9 +1,9 @@
-// ── Historical closes: IndexedDB shard cache + /api/history (Vercel Blob) ──────
+// ── Historical closes: IndexedDB shard cache + /api/history (Supabase) ─────────
 //
 // Closes are sharded by (symbol, year). Past-year shards never change → cached forever
 // in IndexedDB, so repeat sessions read them instantly and never re-download. Only the
 // current year (and brand-new symbols) hit /api/history, which itself serves shared
-// shards from Vercel Blob and only calls Nasdaq for genuinely-missing (symbol, year).
+// shards from Supabase (price_shards) and only calls Nasdaq for genuinely-missing (symbol, year).
 
 import { getShards, putShards } from "./shardstore";
 

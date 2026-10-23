@@ -15,12 +15,12 @@
     "test:market": "node tests/market.test.mjs",
     "test:pricecache": "node tests/pricecache.test.mjs",
     "test:sync": "node tests/sync.test.mjs",
-    "test:dividends": "node tests/dividends.test.mjs"
+    "test:dividends": "node tests/dividends.test.mjs",
+    "test:shardcache": "node tests/shardcache.test.mjs"
   },
   "dependencies": {
-    "@vercel/blob": "^2.8.0",
     "jpeg-js": "^0.4.4",
-    "next": "16.4.0",
+    "next": "16.4.2",
     "pako": "^1.0.11",
     "react": "19.2.4",
     "react-dom": "19.2.4",
@@ -34,7 +34,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.4.0",
+    "eslint-config-next": "16.4.2",
     "jimp": "^1.6.1",
     "playwright-core": "^1.61.1",
     "tailwindcss": "^4",
