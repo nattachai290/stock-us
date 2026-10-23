@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
-import { list, put } from "@vercel/blob";
 import { UA, yahooChart } from "../../lib/yahoo";
+import { hasShardCache, readShards, writeShards } from "../../lib/shardcache";
 
 // Historical daily CLOSE prices for a set of symbols over a date range.
 // Response: { results: { AAPL: { "2024-01-02": 185.64, ... } }, errors: { SYM: "reason" } }
@@ -171,11 +171,9 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return out;
 }
 
-// ── Vercel Blob shard cache (px/{SYMBOL}/{YEAR}.json) ─────────────────────────
-// Closes for a past year never change, so each (symbol, year) is cached once and shared
-// by every user/device. Past-year shards are immutable (1-year CDN cache); the current
-// year is short-lived and refreshed when its tail goes stale.
-const hasBlob = () => !!process.env.BLOB_READ_WRITE_TOKEN;
+// ── Shared shard cache (Supabase price_shards, one row per symbol-year) ───────
+// Closes for a past year never change, so each (symbol, year) is fetched once and shared
+// by every user/device; the current year is refreshed when its tail goes stale.
 const curYear = () => new Date().getUTCFullYear();
 
 function splitByYear(days: DayMap): Record<string, DayMap> {
@@ -184,42 +182,19 @@ function splitByYear(days: DayMap): Record<string, DayMap> {
   return out;
 }
 
-async function listShards(sym: string): Promise<Record<string, string>> {
-  const out: Record<string, string> = {};
-  try {
-    const { blobs } = await list({ prefix: `px/${sym}/` });
-    for (const b of blobs) { const m = b.pathname.match(/\/(\d{4})\.json$/); if (m) out[m[1]] = b.url; }
-  } catch {}
-  return out;
-}
-
-async function readShard(url: string): Promise<DayMap> {
-  try { const r = await fetch(url, { cache: "no-store" }); return r.ok ? await r.json() : {}; } catch { return {}; }
-}
-
-async function writeShard(sym: string, year: number, days: DayMap) {
-  try {
-    await put(`px/${sym}/${year}.json`, JSON.stringify(days), {
-      access: "public", addRandomSuffix: false, allowOverwrite: true,
-      contentType: "application/json",
-      cacheControlMaxAge: year < curYear() ? 31536000 : 3600,
-    });
-  } catch {}
-}
-
-// Resolve one symbol over [p1,p2] from Blob shards, filling misses from the providers and
-// persisting new shards. Falls back to direct provider fetch when no Blob store is wired.
+// Resolve one symbol over [p1,p2] from cached shards, filling misses from the providers and
+// persisting new shards. Falls back to direct provider fetch when no cache is configured.
 async function resolveSymbol(sym: string, p1: number, p2: number): Promise<SymResult> {
-  if (!hasBlob()) return fetchSymbol(sym, p1, p2);
+  if (!hasShardCache()) return fetchSymbol(sym, p1, p2);
 
   const y1 = new Date(p1).getUTCFullYear(), y2 = new Date(p2).getUTCFullYear(), cur = curYear();
-  const shards = await listShards(sym);
+  const shards = await readShards(sym, y1, y2);
   const result: DayMap = {};
   const missing: number[] = [];
 
   for (let y = y1; y <= y2; y++) {
     if (shards[String(y)]) {
-      const dm = await readShard(shards[String(y)]);
+      const dm = shards[String(y)];
       Object.assign(result, dm);
       if (y === cur) { // current-year shard may be stale
         const last = Object.keys(dm).sort().pop();
@@ -235,12 +210,14 @@ async function resolveSymbol(sym: string, p1: number, p2: number): Promise<SymRe
     const nas = await fetchSymbol(sym, Date.parse(`${lo}-01-01T00:00:00Z`), Date.now());
     if (nas.days) {
       const byYear = splitByYear(nas.days);
+      const toWrite: Record<string, DayMap> = {};
       for (let y = lo; y <= cur; y++) {
         if (!missing.includes(y) && y !== cur) continue;
         const dm = byYear[String(y)] || {};
-        if (Object.keys(dm).length || y < cur) await writeShard(sym, y, dm); // empty past = known-no-data
+        if (Object.keys(dm).length || y < cur) toWrite[String(y)] = dm; // empty past = known-no-data
         if (y >= y1 && y <= y2) Object.assign(result, dm);
       }
+      await writeShards(sym, toWrite);
     } else if (!Object.keys(result).length) {
       return { symbol: sym, error: nas.error };
     }
@@ -269,5 +246,5 @@ export async function GET(request: NextRequest) {
     if (r.days) results[r.symbol] = r.days;
     else errors[r.symbol] = r.error || "no data";
   }
-  return Response.json({ results, errors, cached: hasBlob() });
+  return Response.json({ results, errors, cached: hasShardCache() });
 }

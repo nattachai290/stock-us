@@ -67,6 +67,7 @@ jobs:
           run pcache  "Price-cache tests (test:pricecache)" npm run test:pricecache
           run sync    "Drive sync tests (test:sync)" npm run test:sync
           run dividends "Dividend tests (test:dividends)" npm run test:dividends
+          run shardcache "Price-history cache tests (test:shardcache)" npm run test:shardcache
           run ocr     "OCR pipeline tests (test:ocr)"  npm run test:ocr
           run parity  "Browser/CI pixel parity (test:parity)" npm run test:parity
 

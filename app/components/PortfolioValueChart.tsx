@@ -6,7 +6,7 @@ import {
 
 // มูลค่าพอตย้อนหลัง = ผลรวมของ (จำนวนหุ้นที่ถือ ณ วันนั้น × ราคาปิดวันนั้น) ทุก symbol
 // ราคาปิด shard ต่อ symbol-year: cache ในเครื่อง (IndexedDB) + ดึงเฉพาะที่ขาด/ปีปัจจุบันผ่าน
-// /api/history (Vercel Blob) — ปีเก่าโหลดครั้งเดียวตลอด
+// /api/history (Supabase price_shards) — ปีเก่าโหลดครั้งเดียวตลอด
 // days: number = last N days · null = all · "ytd" = since Jan 1 this year
 type RangeVal = number | null | "ytd";
 const RANGES: { label: string; days: RangeVal }[] = [

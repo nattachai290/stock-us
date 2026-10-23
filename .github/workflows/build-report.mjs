@@ -13,6 +13,7 @@ const CHECKS = [
   { key: "pcache", label: "Price-cache tests", cmd: "npm run test:pricecache" },
   { key: "sync", label: "Drive sync tests", cmd: "npm run test:sync" },
   { key: "dividends", label: "Dividend tests", cmd: "npm run test:dividends" },
+  { key: "shardcache", label: "Price-history cache tests", cmd: "npm run test:shardcache" },
   { key: "ocr", label: "OCR pipeline tests", cmd: "npm run test:ocr" },
   { key: "parity", label: "Browser/CI pixel parity", cmd: "npm run test:parity" },
 ];
