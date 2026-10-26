@@ -11,7 +11,7 @@ const load = async (file, extra = "") => {
   const src = execSync(`npx esbuild ${file} --format=esm --bundle ${extra}`, { cwd: ROOT }).toString();
   return import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 };
-const { parseNasdaqDividends, parseStockAnalysisDividends, parseYahooDividends, dividendRows, dividendSummary, exCutoff, WITHHOLDING, holdingEvents, mergeDivHistory, unionDivHistory } = await load("app/lib/dividends.ts");
+const { parseNasdaqDividends, parseStockAnalysisDividends, parseYahooDividends, dividendRows, dividendSummary, exCutoff, WITHHOLDING, holdingEvents, mergeDivHistory, unionDivHistory, monthlyDividends } = await load("app/lib/dividends.ts");
 
 let pass = 0, fail = 0;
 const t = (name, cond, detail = "") => { cond ? pass++ : fail++; console.log((cond ? "✓ " : "✗ FAIL ") + name + (cond ? "" : "  — " + detail)); };
@@ -188,6 +188,26 @@ const NOW = Date.parse("2026-10-14T05:00:00Z");
   t("union keeps Drive-only rows", u[0].divHistory.length === 2 && u[0].divHistory[0].ex === "2024-06-26");
   t("union leaves holdings with nothing extra untouched", unionDivHistory([h2], [])[0] === h2);
   t("holdingEvents dedupes by ex-date", holdingEvents(h2, fetched).filter(e => e.ex === "2024-06-26").length === 1);
+}
+
+// ── monthly totals for the bar chart ──────────────────────────────────────────────────
+{
+  const R = (symbol, ex, pay, net, status = "paid") => ({ symbol, ex, pay, perShare: 0, shares: 0, gross: 0, net, status });
+  const rows = [
+    R("MSFT", "2026-08-20", "2026-09-10", 7.73),
+    R("SCHD", "2026-09-23", "2026-09-28", 13.59),
+    R("SCHD", "2026-09-01", null, 1.00),                     // no payment date → month of the ex-date
+    R("MSFT", "2026-11-19", "2026-12-10", 8.33, "upcoming"),
+    R("KO", "2026-09-30", "2026-10-20", 5, "pending"),
+    R("KO", "2026-06-13", "2026-07-01", 4),
+  ];
+  const m = monthlyDividends(rows, "2026-08", "2026-12");
+  t("monthly: one entry per month, empty months included", m.map(x => x.ym).join() === "2026-08,2026-09,2026-10,2026-11,2026-12" && m[0].paid === 0 && m[3].paid === 0);
+  t("monthly: grouped by payment date", near(m[1].paid, 7.73 + 13.59 + 1));
+  t("monthly: one entry per symbol, biggest first", m[1].items.map(i => i.symbol).join() === "SCHD,MSFT" && near(m[1].items[0].net, 14.59), JSON.stringify(m[1].items));
+  t("monthly: pending and announced count as coming, not paid", m[2].coming === 5 && m[2].paid === 0 && m[4].coming === 8.33);
+  t("monthly: rows outside the window are left out", m.every(x => !x.items.some(i => i.symbol === "KO" && i.paid)));
+  t("monthly: across a year end", monthlyDividends([], "2025-11", "2026-02").map(x => x.ym).join() === "2025-11,2025-12,2026-01,2026-02");
 }
 
 // ── /api/dividends: Nasdaq first, then stockanalysis, then Yahoo ──────────────────────────
