@@ -59,16 +59,20 @@ export default function DividendBars({ rows }: { rows: DivRow[] }) {
       </div>
 
       {/* readout for the selected month */}
-      <div style={{ minHeight: 40, marginBottom: 8 }}>
+      <div style={{ minHeight: 40, marginBottom: 10 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 12, color: "var(--mut)" }}>{monYear(shown.ym)}</span>
           <span style={{ fontSize: 16, fontWeight: 700, color: "var(--ink)" }}>{fmt$(shown.paid)}</span>
           {shown.coming > 0 && <span style={{ fontSize: 12, color: "var(--mut)" }}>+ รอรับ {fmt$(shown.coming)}</span>}
         </div>
-        <div style={{ fontSize: 11, color: "var(--faint)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-          {shown.items.length
-            ? shown.items.map(i => `${i.symbol} ${fmt$(i.net)}${i.paid ? "" : " (รอ)"}`).join(" · ")
-            : "ไม่มีปันผลเดือนนี้"}
+        {/* every symbol that paid that month, wrapping onto more lines — a long month must not
+            be cut off */}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 10px", marginTop: 4, fontSize: 11, color: "var(--mut)" }}>
+          {shown.items.length ? shown.items.map(i => (
+            <span key={i.symbol + i.paid} style={{ whiteSpace: "nowrap" }}>
+              <span style={{ color: "var(--ink)", fontWeight: 600 }}>{i.symbol}</span> {fmt$(i.net)}{i.paid ? "" : " (รอ)"}
+            </span>
+          )) : <span style={{ color: "var(--faint)" }}>ไม่มีปันผลเดือนนี้</span>}
         </div>
       </div>
 
@@ -98,7 +102,7 @@ export default function DividendBars({ rows }: { rows: DivRow[] }) {
                     style={{
                       flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end",
                       alignItems: "center", cursor: "pointer", borderRadius: 4,
-                      background: active ? "color-mix(in srgb, var(--ink) 6%, transparent)" : "transparent",
+                      background: active ? "color-mix(in srgb, var(--ink) 8%, transparent)" : "transparent",
                     }}>
                     {ch > 0 && (
                       <div style={{
@@ -111,7 +115,7 @@ export default function DividendBars({ rows }: { rows: DivRow[] }) {
                     {ph > 0 && (
                       <div style={{
                         width: "72%", maxWidth: 28, height: Math.max(ph, 2), background: "var(--gain)",
-                        borderRadius: ch > 0 ? 0 : "4px 4px 0 0", opacity: active || !sel ? 1 : 0.55,
+                        borderRadius: ch > 0 ? 0 : "4px 4px 0 0",
                       }} />
                     )}
                   </div>

@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import { IconClipboard, IconZap, IconTarget, IconPencil, IconLightbulb, IconPaste, IconGrid } from "./icons";
 import { btn } from "../lib/ui";
 
@@ -6,7 +7,7 @@ import { btn } from "../lib/ui";
 // same copy*() functions the old sidebar buttons called; no prompt text here.
 export default function AiTab({
   hasHoldings, moversCount, underCount,
-  onAnalyze, onMovers, onBuyDecision, onAllocation, onNewIdeas,
+  onAnalyze, onMovers, onBuyDecision, onAllocation, onNewIdeas, onSectorPrompt, onApplySectors, missingSectors,
   showAllocImport, onTogglePasteTarget, allocText, setAllocText, onApplyAllocation, onCancelPasteTarget,
 }: {
   hasHoldings: boolean;
@@ -17,6 +18,9 @@ export default function AiTab({
   onBuyDecision: () => void;
   onAllocation: () => void;
   onNewIdeas: () => void;
+  onSectorPrompt: () => void;
+  onApplySectors: (text: string) => boolean; // true = applied, close the paste box
+  missingSectors: number;                    // held positions with no กลุ่มธุรกิจ yet
   showAllocImport: boolean;
   onTogglePasteTarget: () => void;
   allocText: string;
@@ -24,6 +28,8 @@ export default function AiTab({
   onApplyAllocation: () => void;
   onCancelPasteTarget: () => void;
 }) {
+  const [showSectors, setShowSectors] = useState(false);
+  const [sectorText, setSectorText] = useState("");
   const cards = [
     { Icon: IconClipboard, title: "วิเคราะห์พอร์ต", desc: "ภาพรวม + หาตัวที่ควรขายจริงๆ ตามพื้นฐาน", onClick: onAnalyze, disabled: !hasHoldings },
     { Icon: IconZap, title: "ตัวผิดปกติวันนี้", desc: "หุ้นขยับ ±3% — ค้นข่าวแล้ววิเคราะห์ว่าพื้นฐานเปลี่ยนไหม", onClick: onMovers, disabled: moversCount === 0, badge: moversCount },
@@ -31,6 +37,8 @@ export default function AiTab({
     { Icon: IconPencil, title: "จัดทัพพอร์ต", desc: "แม่ทัพ / รองแม่ทัพ / ทหารเสริม → ได้ตาราง % พร้อมวางกลับ", onClick: onAllocation, disabled: !hasHoldings, highlight: true },
     { Icon: IconLightbulb, title: "แนะนำหุ้นใหม่", desc: "หาหุ้นพื้นฐานดีที่ยังไม่มีในพอร์ต 3–5 ตัว", onClick: onNewIdeas, disabled: !hasHoldings },
     { Icon: IconPaste, title: "วางผลจัดทัพ (Target %)", desc: "แปะตารางจาก Claude — ระบบตรวจรวม 100% ให้อัตโนมัติ", onClick: onTogglePasteTarget, disabled: !hasHoldings },
+    { Icon: IconGrid, title: "จัดกลุ่มธุรกิจ", desc: "ให้ Claude บอกว่าหุ้นแต่ละตัวอยู่กลุ่มไหน → copy prompt ไปถาม", onClick: onSectorPrompt, disabled: !hasHoldings, badge: missingSectors },
+    { Icon: IconPaste, title: "วางผลกลุ่มธุรกิจ", desc: "แปะ SYMBOL | กลุ่ม จาก Claude — ใส่กลุ่มให้ทุกตัวทีเดียว", onClick: () => setShowSectors(v => !v), disabled: !hasHoldings },
   ];
 
   return (
@@ -78,6 +86,20 @@ export default function AiTab({
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <button onClick={onApplyAllocation} disabled={!allocText.trim()} style={btn("var(--brass)", "var(--on-brass)", { opacity: !allocText.trim() ? 0.5 : 1 })}>ใส่ Target % ทั้งหมด</button>
             <button onClick={onCancelPasteTarget} style={btn("var(--line)", "var(--mut)")}>ยกเลิก</button>
+          </div>
+        </div>
+      )}
+
+      {showSectors && (
+        <div style={{ background: "var(--card)", borderRadius: 8, padding: 16, marginTop: 12, border: "1px solid var(--brass)" }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--brass)", marginBottom: 6 }}>วางผลกลุ่มธุรกิจจาก Claude</div>
+          <div style={{ fontSize: 12, color: "var(--mut)", marginBottom: 8 }}>รองรับ: <code style={{ color: "var(--brass)" }}>SYMBOL | กลุ่มธุรกิจ</code> บรรทัดละตัว — ตัวที่ไม่อยู่ในบล็อกจะคงกลุ่มเดิมไว้</div>
+          <textarea value={sectorText} onChange={e => setSectorText(e.target.value)} placeholder={"NVDA | Semiconductors\nMSFT | Software\nSCHD | Dividend ETF"}
+            style={{ width: "100%", minHeight: 160, background: "var(--bg)", color: "var(--ink)", border: "1px solid var(--brass)", borderRadius: 6, padding: 10, fontSize: 13, resize: "vertical", fontFamily: "monospace", boxSizing: "border-box" }} />
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button onClick={() => { if (onApplySectors(sectorText)) { setSectorText(""); setShowSectors(false); } }} disabled={!sectorText.trim()}
+              style={btn("var(--brass)", "var(--on-brass)", { opacity: !sectorText.trim() ? 0.5 : 1 })}>ใส่กลุ่มธุรกิจทั้งหมด</button>
+            <button onClick={() => { setShowSectors(false); setSectorText(""); }} style={btn("var(--line)", "var(--mut)")}>ยกเลิก</button>
           </div>
         </div>
       )}
