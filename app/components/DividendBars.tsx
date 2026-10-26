@@ -3,23 +3,15 @@ import { useMemo, useState } from "react";
 import { monthlyDividends, type DivRow } from "../lib/dividends";
 
 // ปันผลรายเดือน — กราฟแท่งยอดสุทธิ (หลังภาษี) ต่อเดือนตามวันจ่าย: ส่วนทึบ = รับแล้ว,
-// ส่วนโปร่งด้านบน = รอรับ (ผ่าน XD แล้วรอจ่าย / ประกาศแล้ว). แตะหรือชี้แท่งเพื่อดูรายละเอียด
+// ส่วนโปร่งด้านบน = รอรับ (ผ่าน XD แล้วรอจ่าย / ประกาศแล้ว). ทีละปี (ม.ค.–ธ.ค.) เลือกปีจาก dropdown
+// เริ่มที่ปีล่าสุด. แตะหรือชี้แท่งเพื่อดูรายละเอียด
 
-type Range = 12 | 24 | 0; // months back, 0 = since the first dividend
-const RANGES: { label: string; v: Range }[] = [
-  { label: "12 เดือน", v: 12 }, { label: "24 เดือน", v: 24 }, { label: "ทั้งหมด", v: 0 },
-];
 const H = 140; // plot height, px
 
 const fmt$ = (v: number) => "$" + v.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const ymDate = (ym: string) => new Date(ym + "-15T12:00:00Z");
 const monLabel = (ym: string) => ymDate(ym).toLocaleDateString("th-TH", { month: "short" });
 const monYear = (ym: string) => ymDate(ym).toLocaleDateString("th-TH", { month: "short", year: "2-digit" });
-const shiftYm = (ym: string, n: number) => {
-  const [y, m] = ym.split("-").map(Number);
-  const t = y * 12 + (m - 1) + n;
-  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`;
-};
 // round the axis top up to 1 / 2 / 2.5 / 5 × 10^k so gridline labels stay readable
 const niceMax = (v: number) => {
   if (!(v > 0)) return 1;
@@ -28,27 +20,19 @@ const niceMax = (v: number) => {
 };
 
 export default function DividendBars({ rows }: { rows: DivRow[] }) {
-  const [range, setRange] = useState<Range>(12);
+  const thisYm = new Date().toISOString().slice(0, 7);
+  // every year with a dividend (by payment month), newest first; the chart starts on the newest
+  const years = useMemo(() => [...new Set(rows.map(r => (r.pay || r.ex).slice(0, 4)))].sort().reverse(), [rows]);
+  const [pick, setPick] = useState<string | null>(null);
+  const year = pick && years.includes(pick) ? pick : years[0];
   const [sel, setSel] = useState<string | null>(null);
 
-  const thisYm = new Date().toISOString().slice(0, 7);
-  const months = useMemo(() => {
-    if (!rows.length) return [];
-    const yms = rows.map(r => (r.pay || r.ex).slice(0, 7));
-    const first = yms.reduce((a, b) => (a < b ? a : b));
-    const last = yms.reduce((a, b) => (a > b ? a : b));
-    const to = last > thisYm ? last : thisYm;           // keep months with money still to come
-    const from = range === 0 ? first : shiftYm(thisYm, -(range - 1));
-    return monthlyDividends(rows, from < to ? from : to, to);
-  }, [rows, range, thisYm]);
+  const months = useMemo(() => year ? monthlyDividends(rows, `${year}-01`, `${year}-12`) : [], [rows, year]);
 
   if (!months.length) return null;
 
   const top = niceMax(Math.max(...months.map(m => m.paid + m.coming)));
   const hasComing = months.some(m => m.coming > 0);
-  // label every Nth month: at most ~7 labels, which still fit at phone width with a year on one
-  const every = months.length <= 8 ? 1 : months.length <= 16 ? 2 : Math.ceil(months.length / 6);
-  const firstLabel = (months.length - 1) % every;       // first labelled month carries the year
   // readout: the hovered/tapped month, else this month if it has money, else the latest
   // month already paid, else whatever is still to come
   const shown = months.find(m => m.ym === sel)
@@ -57,23 +41,21 @@ export default function DividendBars({ rows }: { rows: DivRow[] }) {
     ?? months.find(m => m.paid + m.coming > 0)
     ?? months[months.length - 1];
   const total = months.reduce((s, m) => s + m.paid, 0);
-  const withMoney = months.filter(m => m.paid > 0).length;
+  const comingTotal = months.reduce((s, m) => s + m.coming, 0);
+  // average over the months of the year that have happened (all 12 for a past year)
+  const elapsed = months.filter(m => m.ym <= thisYm).length;
 
   return (
     <div style={{ background: "var(--card)", border: "1px solid var(--line)", borderRadius: "var(--r-md)", padding: 16 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>ปันผลรายเดือน</div>
-        <div style={{ display: "flex", gap: 4 }}>
-          {RANGES.map(r => (
-            <button key={r.v} onClick={() => { setRange(r.v); setSel(null); }}
-              style={{
-                fontSize: 11, padding: "3px 9px", borderRadius: 999, cursor: "pointer",
-                border: "1px solid " + (range === r.v ? "var(--brass)" : "var(--line)"),
-                background: range === r.v ? "var(--card2)" : "none",
-                color: range === r.v ? "var(--brass)" : "var(--mut)",
-              }}>{r.label}</button>
-          ))}
-        </div>
+        <select value={year} onChange={e => { setPick(e.target.value); setSel(null); }} aria-label="เลือกปี"
+          style={{
+            fontSize: 12, padding: "4px 8px", borderRadius: 8, cursor: "pointer",
+            border: "1px solid var(--line)", background: "var(--card2)", color: "var(--ink)",
+          }}>
+          {years.map(y => <option key={y} value={y}>ปี {+y + 543}</option>)}
+        </select>
       </div>
 
       {/* readout for the selected month */}
@@ -104,7 +86,7 @@ export default function DividendBars({ rows }: { rows: DivRow[] }) {
             {[0, 0.5, 1].map(f => (
               <div key={f} style={{ position: "absolute", left: 0, right: 0, top: f * H, borderTop: `1px ${f === 1 ? "solid" : "dashed"} var(--line)` }} />
             ))}
-            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "flex-end", gap: months.length > 30 ? 1 : 3 }}>
+            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "flex-end", gap: 3 }}>
               {months.map(m => {
                 const ph = (m.paid / top) * H, ch = (m.coming / top) * H;
                 const active = m.ym === shown.ym;
@@ -137,14 +119,13 @@ export default function DividendBars({ rows }: { rows: DivRow[] }) {
               })}
             </div>
           </div>
-          <div style={{ display: "flex", gap: months.length > 30 ? 1 : 3, marginTop: 4 }}>
-            {months.map((m, i) => (
+          <div style={{ display: "flex", gap: 3, marginTop: 4 }}>
+            {months.map(m => (
               <span key={m.ym} style={{
-                flex: 1, minWidth: 0, textAlign: "center", fontSize: 9.5, whiteSpace: "nowrap", overflow: "visible",
+                flex: 1, minWidth: 0, textAlign: "center", fontSize: 9.5, whiteSpace: "nowrap", overflow: "hidden",
                 color: m.ym === shown.ym ? "var(--ink)" : "var(--faint)",
               }}>
-                {(months.length - 1 - i) % every !== 0 ? ""
-                  : m.ym.endsWith("-01") || i === firstLabel ? monYear(m.ym) : monLabel(m.ym)}
+                {monLabel(m.ym)}
               </span>
             ))}
           </div>
@@ -153,7 +134,7 @@ export default function DividendBars({ rows }: { rows: DivRow[] }) {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
         <span style={{ fontSize: 11, color: "var(--faint)" }}>
-          รวม {fmt$(total)} · เฉลี่ย {fmt$(withMoney ? total / months.filter(m => m.ym <= thisYm).length : 0)}/เดือน
+          รับแล้วปี {+year + 543} {fmt$(total)}{comingTotal > 0 ? ` · รอรับ ${fmt$(comingTotal)}` : ""}{elapsed ? ` · เฉลี่ย ${fmt$(total / elapsed)}/เดือน` : ""}
         </span>
         {hasComing && (
           <span style={{ display: "flex", gap: 10, fontSize: 11, color: "var(--mut)" }}>
