@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import DateTimePicker24h from "./components/DateTimePicker24h";
-import { parseCSV, toCSV, copyToClipboard, fifoBasisForSale, computeFromHistory , trimSuggestion, addSuggestion, totalToTarget } from "./lib/portfolio";
+import { parseCSV, toCSV, copyToClipboard, fifoBasisForSale, computeFromHistory , trimSuggestion, addSuggestion, totalToTarget, parseSectorLines } from "./lib/portfolio";
 import { isMarketOpen } from "./lib/market";
 import { decide, contentKey, summarize } from "./lib/syncstate";
 import { setOnDriveAuthExpired, listPortfolios, loadPortfolio, savePortfolio, deletePortfolio, renamePortfolio } from "./lib/drive";
@@ -1147,6 +1147,33 @@ export default function App() {
     copyToClipboard(p); msg("Copy prompt จัดทัพแล้ว — เปิด Web Search แล้ววางใน Claude ✓");
   };
 
+  // กลุ่มธุรกิจ: ask the AI which business group each held stock belongs to, then paste the
+  // "SYMBOL | กลุ่ม" block back (applySectors) — same round trip as the target-% one.
+  const copySectorPrompt = () => {
+    const tv=activeHoldings.reduce((s:number,h:any)=>s+h.shares*h.currentPrice,0);
+    const list=[...activeHoldings].sort((a,b)=>(b.shares*b.currentPrice)-(a.shares*a.currentPrice))
+      .map((h:any)=>`${h.symbol}${tv>0?` (${(h.shares*h.currentPrice/tv*100).toFixed(1)}%)`:""}${h.sector?` — ตอนนี้: ${h.sector}`:""}`).join("\n");
+    const p=`จัดกลุ่มธุรกิจให้หุ้น/ETF ทั้ง ${activeHoldings.length} ตัวในพอร์ตนี้ (ค้นข้อมูลถ้าไม่แน่ใจว่าบริษัททำธุรกิจอะไร)\n\n## กติกา\n- จัดตาม "ธุรกิจหลักที่ทำเงินจริง" ไม่ใช่แค่ป้าย sector กว้างๆ — เช่น Semiconductors, Software, Internet & E-commerce, Healthcare, Biotech, Banks & Financials, Payments, Energy, Utilities, REIT, Industrials, Consumer, Telecom, Materials\n- ETF ให้จัดตามสิ่งที่ถือข้างใน: Broad-market ETF (VOO/SPY/QQQ/VTI ฯลฯ), Dividend ETF (SCHD/VYM ฯลฯ), Sector ETF (ระบุกลุ่ม เช่น Semiconductor ETF), Bond ETF, International ETF\n- ใช้ชื่อกลุ่มภาษาอังกฤษสั้นๆ 1–3 คำ และใช้ชื่อเดียวกันทุกครั้งสำหรับกลุ่มเดียวกัน (สะกดตรงกันเป๊ะ) เพื่อให้แอปรวม % ต่อกลุ่มได้\n- รวมแล้วไม่เกิน ~12 กลุ่ม — ตัวที่เข้ากลุ่มไหนไม่ได้จริงๆ ค่อยตั้งกลุ่มใหม่\n- ถ้ามี "ตอนนี้: ..." อยู่แล้วและถูกต้อง ให้ใช้ชื่อเดิม\n\n## ผลลัพธ์ — วางกลับในแอปเมนู "วางผลกลุ่มธุรกิจ" ได้ทันที\nตอบเป็นโค้ดบล็อกเดียว 1 บรรทัดต่อ 1 ตัว รูปแบบ SYMBOL | กลุ่มธุรกิจ ครบทั้ง ${activeHoldings.length} บรรทัด ห้ามมีหัวตาราง ห้ามมีข้อความอื่นในบล็อก เช่น\n\`\`\`\nNVDA | Semiconductors\nMSFT | Software\nSCHD | Dividend ETF\n\`\`\`\nหลังบล็อก สรุปสั้นๆ ว่าแต่ละกลุ่มรวมกี่ % ของพอร์ต (จากน้ำหนักในวงเล็บ)\n\n---\n${list}`;
+    copyToClipboard(p); msg(`Copy prompt จัดกลุ่มธุรกิจ ${activeHoldings.length} ตัวแล้ว — วางใน Claude แล้วนำผลกลับมาวาง ✓`);
+  };
+
+  const applySectors = (text: string): boolean => {
+    const groups = parseSectorLines(text);
+    const syms = Object.keys(groups);
+    if (!syms.length) { msg("ไม่พบบรรทัดรูปแบบ SYMBOL | กลุ่ม", 4000); return false; }
+    const held = new Set(holdings.map((h:any)=>h.symbol));
+    const applied = syms.filter(s => held.has(s));
+    const notFound = syms.filter(s => !held.has(s));
+    if (!applied.length) { msg(`ไม่ตรงกับหุ้นในพอร์ตเลย (${notFound.slice(0,5).join(",")})`, 5000); return false; }
+    makeBackup("วางกลุ่มธุรกิจ");
+    // every row of a symbol, sold/hidden ones too, so the group follows it everywhere
+    const updated = holdings.map((h:any) => groups[h.symbol] ? { ...h, sector: groups[h.symbol] } : h);
+    setAndSave(updated);
+    const missing = activeHoldings.filter((h:any) => !groups[h.symbol] && !h.sector).map((h:any)=>h.symbol);
+    msg(`ใส่กลุ่มธุรกิจ ${applied.length} ตัวแล้ว ✓${notFound.length?` (ไม่มีในพอร์ต: ${notFound.join(",")})`:""}${missing.length?` · ยังไม่มีกลุ่ม: ${missing.join(",")}`:""}`, 6000);
+    return true;
+  };
+
   const copyNewIdeas = () => {
     const tv=activeHoldings.reduce((s:number,h:any)=>s+h.shares*h.currentPrice,0); const lastUpdate=new Date().toLocaleDateString("th-TH",{year:"numeric",month:"long",day:"numeric"});
     const currentSymbols=activeHoldings.map((h:any)=>h.symbol).join(", ");
@@ -1680,6 +1707,9 @@ export default function App() {
             onBuyDecision={copyBuyDecision}
             onAllocation={copyAllocationAnalysis}
             onNewIdeas={copyNewIdeas}
+            onSectorPrompt={copySectorPrompt}
+            onApplySectors={applySectors}
+            missingSectors={activeHoldings.filter((h:any)=>!h.sector).length}
             showAllocImport={showAllocImport}
             onTogglePasteTarget={()=>setShowAllocImport(v=>!v)}
             allocText={allocText}

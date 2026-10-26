@@ -7,7 +7,7 @@ import path from "path";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = execSync("npx esbuild app/lib/portfolio.ts --format=esm", { cwd: ROOT }).toString();
-const { addSuggestion, totalToTarget, historyToCSV } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
+const { addSuggestion, totalToTarget, historyToCSV, parseSectorLines } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 
 let pass = 0, fail = 0;
 const t = (name, cond, detail = "") => { cond ? pass++ : fail++; console.log((cond ? "✓ " : "✗ FAIL ") + name + (cond ? "" : "  — " + detail)); };
@@ -97,6 +97,19 @@ const H = (value, targetPct, avgCost = 1) => ({ shares: value, currentPrice: 1, 
   t("history export: '-' leg carries the shares held just before the split", csv[2] === "02/07/2026 15:05,-,CRWD,0.1327803", csv[2]);
   t("history export: '+' leg carries the new total with price 0", csv[3] === "02/07/2026 15:05,+,CRWD,0.5311212,0", csv[3]);
   t("history export: sells as S at the sell price", csv[4] === "01/08/2026 21:30,S,CRWD,0.05,120", csv[4]);
+}
+
+{
+  // parseSectorLines — "SYMBOL | กลุ่มธุรกิจ" pasted back from the AI
+  const p = parseSectorLines("```\nSYMBOL | กลุ่มธุรกิจ\nNVDA | Semiconductors\nmsft | Software\n- O | REIT\n|BRK-B| Financials |\n| --- | --- |\nSCHD: Dividend ETF\nLLY\tHealthcare\nJPM — Banks\nNVDA | Something else\n**AMZN** | E-commerce\n```");
+  t("sectors: plain pipe line", p.NVDA === "Semiconductors", JSON.stringify(p));
+  t("sectors: lowercase symbol upper-cased", p.MSFT === "Software");
+  t("sectors: bullet and one-letter ticker", p.O === "REIT");
+  t("sectors: markdown table row, class share", p["BRK-B"] === "Financials");
+  t("sectors: colon, tab and dash separators", p.SCHD === "Dividend ETF" && p.LLY === "Healthcare" && p.JPM === "Banks");
+  t("sectors: header and table rule skipped", !("SYMBOL" in p) && Object.keys(p).every(k => /^[A-Z]/.test(k)));
+  t("sectors: first line for a symbol wins", p.NVDA === "Semiconductors");
+  t("sectors: nothing usable → {}", Object.keys(parseSectorLines("ok here you go\n\nthanks")).length === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

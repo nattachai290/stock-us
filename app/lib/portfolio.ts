@@ -185,3 +185,20 @@ export function historyToCSV(holdings: any[]): string {
   rows.sort((a, b) => a.iso < b.iso ? -1 : a.iso > b.iso ? 1 : 0);
   return rows.map(r => r.line).join("\n");
 }
+
+// Sector lines pasted back from the AI ("SYMBOL | กลุ่มธุรกิจ"), as { SYMBOL: group }.
+// Tolerates what chat answers wrap them in: a code fence, bullets, markdown table pipes,
+// a header row, "-", ":" or a tab as the separator. The first line for a symbol wins.
+export function parseSectorLines(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const raw of (text || "").split(/\r?\n/)) {
+    const line = raw.trim().replace(/^[-*•>\d.)\s]+(?=[A-Za-z])/, "").replace(/^\|\s*/, "").replace(/\s*\|\s*$/, "");
+    const m = /^([A-Za-z][A-Za-z0-9.]{0,7}(?:-[A-Za-z])?)\s*(?:\||:|\t|\s[-–—]\s)\s*(.+)$/.exec(line);
+    if (!m) continue;
+    const sym = m[1].toUpperCase();
+    const group = m[2].split("|")[0].replace(/[*_`]/g, "").trim();
+    if (!group || /^(symbol|ticker|หุ้น)$/i.test(sym) || /^[-: ]+$/.test(group)) continue;
+    if (!(sym in out)) out[sym] = group.slice(0, 40);
+  }
+  return out;
+}
