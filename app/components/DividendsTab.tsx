@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { WITHHOLDING, type DivRow, type DivSummary } from "../lib/dividends";
 import { IconCoin } from "./icons";
+import DividendBars from "./DividendBars";
 
 // แท็บปันผล — ข้อมูลทั้งหมดคำนวณใน page.tsx (lib/dividends): ปันผลต่อหุ้นดึงอัตโนมัติ
 // แล้วเก็บประวัติลงไฟล์พอร์ตบน Drive (divHistory) ส่วนยอดที่ได้คิดจากประวัติซื้อขายทุกครั้ง
@@ -90,6 +91,8 @@ export default function DividendsTab({ rows, sum, errors, loading, hasSymbols, t
           ประมาณการ หลังหักภาษีสหรัฐ {WITHHOLDING * 100}% · จำนวนหุ้นที่ถือก่อนวัน XD × ปันผลต่อหุ้น · ประวัติปันผลเก็บใน Drive พร้อมพอร์ต — ยอดจริงดูใน statement ของโบรกเกอร์
         </div>
       </div>
+
+      {rows.length > 0 && <DividendBars rows={rows} />}
 
       {coming.length > 0 && sum && (
         <div style={card}>

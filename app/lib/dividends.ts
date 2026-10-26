@@ -227,6 +227,39 @@ export function dividendSummary(rows: DivRow[], holdings: any[], divs: DivMap, n
   };
 }
 
+export type DivMonth = {
+  ym: string;                 // "YYYY-MM"
+  paid: number;               // net received that month
+  coming: number;             // net still to come that month (pending + announced)
+  items: { symbol: string; net: number; paid: boolean }[]; // per symbol, biggest first
+};
+
+// Net dividends per calendar month, by payment date (ex-date when no payment date is known),
+// for every month from `fromYm` to `toYm` inclusive — empty months included, so a bar chart
+// shows the gaps. Within a month each symbol is summed once per status.
+export function monthlyDividends(rows: DivRow[], fromYm: string, toYm: string): DivMonth[] {
+  const out: DivMonth[] = [];
+  const idx = new Map<string, DivMonth>();
+  let [y, m] = fromYm.split("-").map(Number);
+  for (let guard = 0; guard < 1200; guard++) {
+    const ym = `${y}-${String(m).padStart(2, "0")}`;
+    if (ym > toYm) break;
+    const mo: DivMonth = { ym, paid: 0, coming: 0, items: [] };
+    out.push(mo); idx.set(ym, mo);
+    if (++m > 12) { m = 1; y++; }
+  }
+  for (const r of rows) {
+    const mo = idx.get((r.pay || r.ex).slice(0, 7));
+    if (!mo) continue;
+    const paid = r.status === "paid";
+    if (paid) mo.paid += r.net; else mo.coming += r.net;
+    const it = mo.items.find(i => i.symbol === r.symbol && i.paid === paid);
+    if (it) it.net += r.net; else mo.items.push({ symbol: r.symbol, net: r.net, paid });
+  }
+  for (const mo of out) mo.items.sort((a, b) => b.net - a.net);
+  return out;
+}
+
 // Client cache: dividend histories change at most a few times a year, so each symbol is
 // kept for 12 hours in localStorage and only stale/new symbols hit /api/dividends.
 const CACHE_KEY = "div-cache-v2"; // v2: events may carry `adj`
