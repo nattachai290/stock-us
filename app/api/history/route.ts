@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { UA, yahooChart } from "../../lib/yahoo";
 import { hasShardCache, readShards, writeShards } from "../../lib/shardcache";
+import { isGoldSymbol, spotFromGld } from "../../lib/goldprice";
 
 // Historical daily CLOSE prices for a set of symbols over a date range.
 // Response: { results: { AAPL: { "2024-01-02": 185.64, ... } }, errors: { SYM: "reason" } }
@@ -147,6 +148,11 @@ async function fromCnbc(symbol: string, p1: number, _p2: number): Promise<SymRes
 }
 
 async function fetchSymbol(symbol: string, p1: number, p2: number): Promise<SymResult> {
+  // Spot gold (XAUUSD/XAU) has no history any provider serves to Vercel — derive it from GLD.
+  if (isGoldSymbol(symbol)) {
+    const gld = await fetchSymbol("GLD", p1, p2);
+    return gld.days ? { symbol, days: spotFromGld(gld.days) } : { symbol, error: `via GLD: ${gld.error}` };
+  }
   // Nasdaq first (official historical API, datacenter-friendly); others as fallback.
   const providers = [fromNasdaq, fromCnbc, fromYahoo, fromStooq];
   const errs: string[] = [];

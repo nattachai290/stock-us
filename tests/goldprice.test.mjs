@@ -9,7 +9,7 @@ import path from "path";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = execSync("npx esbuild app/lib/goldprice.ts --format=esm", { cwd: ROOT }).toString();
-const { parseGoldpriceOrg, parseGoldApiCom, isGoldSymbol, GOLD_ALIASES } =
+const { parseGoldpriceOrg, parseGoldApiCom, isGoldSymbol, GOLD_ALIASES, gldOuncesPerShare, spotFromGld } =
   await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 
 let pass = 0, fail = 0;
@@ -53,6 +53,18 @@ t("gold-api: no price → null", parseGoldApiCom({ name: "Gold" }, "XAU") === nu
   // bad updatedAt → marketTime still a number (falls back to now)
   const q = parseGoldApiCom({ price: 4000, updatedAt: "not-a-date" }, "XAU");
   t("gold-api: bad date → numeric marketTime", typeof q?.marketTime === "number" && q.marketTime > 0);
+}
+
+{
+  // spot gold history derived from GLD closes (the only daily series Vercel can reach)
+  const ok = (name, cond, detail = "") => { cond ? pass++ : fail++; console.log((cond ? "✓ " : "✗ FAIL ") + name + (cond ? "" : "  — " + detail)); };
+  ok("GLD: 0.1 oz per share at launch", Math.abs(gldOuncesPerShare("2004-11-18") - 0.1) < 1e-12);
+  ok("GLD: ounces shrink 0.40% a year", Math.abs(gldOuncesPerShare("2005-11-18") / gldOuncesPerShare("2004-11-18") - 0.996) < 1e-4);
+  // 2024-12-31: GLD closed $241.53, LBMA gold ~$2,624
+  const s = spotFromGld({ "2024-12-31": 241.53, "2025-01-02": 0, "2026-10-26": 367.82 });
+  ok("GLD → spot within 0.5% of the LBMA price", Math.abs(s["2024-12-31"] / 2624 - 1) < 0.005, String(s["2024-12-31"]));
+  ok("GLD → spot: a zero close is dropped", !("2025-01-02" in s));
+  ok("GLD → spot: recent close lands in today's range", s["2026-10-26"] > 3900 && s["2026-10-26"] < 4150, String(s["2026-10-26"]));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

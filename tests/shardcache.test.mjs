@@ -103,5 +103,18 @@ process.env.SUPABASE_SECRET_KEY = "sb_secret_test";
   t("no cache configured: Supabase never called", calls.sb.length === 0);
 }
 
+{
+  // spot gold: no provider has XAUUSD history from Vercel, so it is derived from GLD
+  reset();
+  const asked = [];
+  const prev = globalThis.fetch;
+  globalThis.fetch = async (url, init) => { if (String(url).includes("api.nasdaq.com")) asked.push(String(url)); return prev(url, init); };
+  const j = await call({ symbols: "XAUUSD", from: "2024-01-01" });
+  globalThis.fetch = prev;
+  t("gold: XAUUSD history comes back", j.results.XAUUSD && Object.keys(j.results.XAUUSD).length > 0, JSON.stringify(j));
+  t("gold: built from GLD, never asks for XAUUSD itself", asked.length > 0 && asked.every(u => u.includes("/quote/GLD/")), asked.join(" "));
+  t("gold: GLD $101 on 2024-01-02 → ~$1,096 an ounce", Math.abs(j.results.XAUUSD["2024-01-02"] - 101 / (0.1 * Math.pow(0.996, (Date.parse("2024-01-02") - Date.parse("2004-11-18")) / (365.25 * 86400000)))) < 0.01);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

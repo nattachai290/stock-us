@@ -57,3 +57,23 @@ export async function fetchGold(symbol: string): Promise<GoldQuote> {
 
   return { symbol, error: "gold price unavailable" };
 }
+
+// ── Daily spot-gold history, derived from GLD ─────────────────────────────────
+// No free spot-gold history answers from Vercel (Yahoo 429, Stooq/CNBC 403, gold-api's
+// history wants a key), but Nasdaq serves GLD's daily closes. Each GLD share holds a
+// known, shrinking amount of gold: 0.1 oz at launch (2004-11-18), less the 0.40%/yr
+// sponsor fee paid in gold. So spot ≈ GLD close ÷ ounces per share on that day — within
+// a few tenths of a percent of the LBMA price (2024-12-31: $241.53 → $2,618 vs ~$2,624).
+const GLD_LAUNCH = Date.parse("2004-11-18T00:00:00Z");
+const GLD_FEE = 0.004;
+export const gldOuncesPerShare = (day: string) =>
+  0.1 * Math.pow(1 - GLD_FEE, (Date.parse(day + "T00:00:00Z") - GLD_LAUNCH) / (365.25 * 86400000));
+
+export function spotFromGld(gldCloses: Record<string, number>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const d in gldCloses) {
+    const c = gldCloses[d];
+    if (c > 0) out[d] = Math.round(c / gldOuncesPerShare(d) * 100) / 100;
+  }
+  return out;
+}

@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { UA, yahooChart } from "../../lib/yahoo";
+import { isGoldSymbol } from "../../lib/goldprice";
 import { parseNasdaqDividends, parseStockAnalysisDividends, parseYahooDividends, type DivEvent } from "../../lib/dividends";
 
 // Dividend history per symbol, as paid per share at the time (not split-adjusted).
@@ -52,6 +53,7 @@ async function fromYahoo(symbol: string): Promise<DivEvent[] | null> {
 }
 
 async function resolve(symbol: string): Promise<{ symbol: string; events?: DivEvent[]; error?: string }> {
+  if (isGoldSymbol(symbol)) return { symbol, events: [] }; // physical gold pays nothing
   const errs: string[] = [];
   for (const [name, p] of [["nasdaq", fromNasdaq], ["stockanalysis", fromStockAnalysis], ["yahoo", fromYahoo]] as const) {
     try {
