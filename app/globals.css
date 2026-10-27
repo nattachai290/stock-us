@@ -28,6 +28,35 @@
   --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 32px rgba(0,0,0,.35);
 }
 
+/* The same palette again under prefers-color-scheme: dark. Samsung Internet's "dark mode
+   for websites" kept darkening the page — chart bars near-black — despite color-scheme in
+   CSS and the meta tag; a stylesheet that declares its own dark theme this way is the
+   signal it's documented to respect. Keep in sync with :root above. */
+@media (prefers-color-scheme: dark){
+  :root{
+    color-scheme: dark;
+    --bg:#0C1014;
+    --card:#151C23;
+    --card2:#1C252E;
+    --line:#242F39;
+    --ink:#EAEFF4;
+    --mut:#90A2B0;
+    --faint:#5F6E7A;
+    --brass:#D2AE6C;
+    --on-brass:#161006;
+    --gain:#4CC38A;
+    --loss:#E5655E;
+    --warn:#E2A33C;
+    --c1:#3987e5;
+    --c2:#c98500;
+    --c3:#d55181;
+    --c4:#9085e9;
+    --c5:#199e70;
+    --c6:#5F6E7A;
+  }
+}
+
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html { background: var(--bg); overflow-x: hidden; }
 body {
