@@ -7,7 +7,7 @@ import path from "path";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const src = execSync("npx esbuild app/lib/portfolio.ts --format=esm", { cwd: ROOT }).toString();
-const { addSuggestion, totalToTarget, historyToCSV, parseSectorLines } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
+const { addSuggestion, totalToTarget, historyToCSV, parseSectorLines, sectorBreakdown } = await import("data:text/javascript;base64," + Buffer.from(src).toString("base64"));
 
 let pass = 0, fail = 0;
 const t = (name, cond, detail = "") => { cond ? pass++ : fail++; console.log((cond ? "✓ " : "✗ FAIL ") + name + (cond ? "" : "  — " + detail)); };
@@ -110,6 +110,19 @@ const H = (value, targetPct, avgCost = 1) => ({ shares: value, currentPrice: 1, 
   t("sectors: header and table rule skipped", !("SYMBOL" in p) && Object.keys(p).every(k => /^[A-Z]/.test(k)));
   t("sectors: first line for a symbol wins", p.NVDA === "Semiconductors");
   t("sectors: nothing usable → {}", Object.keys(parseSectorLines("ok here you go\n\nthanks")).length === 0);
+}
+
+{
+  // sectorBreakdown — value and unrealised P&L per group, every group kept
+  const S = (symbol, sector, shares, avgCost, currentPrice) => ({ symbol, sector, shares, avgCost, currentPrice });
+  const b = sectorBreakdown([
+    S("NVDA", "Semiconductors", 2, 100, 150), S("AMD", "Semiconductors", 1, 200, 180),
+    S("LLY", "Healthcare", 1, 400, 350), S("X", "", 1, 10, 12), S("SOLD", "Software", 0, 50, 60),
+  ]);
+  t("sectors: biggest first, sold-out positions left out", b.map(x => x.name).join() === "Semiconductors,Healthcare,ไม่ระบุ", JSON.stringify(b));
+  t("sectors: value, cost and P&L summed per group", b[0].value === 480 && b[0].cost === 400 && b[0].pnl === 80 && near(b[0].pnlPct, 20) && b[0].count === 2);
+  t("sectors: a losing group is negative", b[1].pnl === -50 && near(b[1].pnlPct, -12.5));
+  t("sectors: no group → ไม่ระบุ", b[2].name === "ไม่ระบุ" && b[2].pnl === 2);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
