@@ -1,11 +1,10 @@
 "use client";
 import { IconBars } from "./icons";
+import { sectorBreakdown } from "../lib/portfolio";
 
 // Charts tab rewrite (§5.6) — 3 cards replacing the old recharts pie charts.
 // All data comes from activeHoldings only; math is the same per-row math used
 // elsewhere (value = shares*currentPrice, weight = value/tv), just aggregated.
-const SEGMENT_COLORS = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)"];
-const OTHER_COLOR = "var(--c6)";
 
 export default function ChartsTab({ activeHoldings, tv, onFilterSector, onOpenDetail }: {
   activeHoldings: any[];
@@ -31,20 +30,10 @@ export default function ChartsTab({ activeHoldings, tv, onFilterSector, onOpenDe
     );
   }
 
-  // 1. Sector breakdown
-  const sectorMap: Record<string, number> = {};
-  activeHoldings.forEach((h: any) => {
-    const val = h.shares * h.currentPrice;
-    const s = h.sector || "ไม่ระบุ";
-    sectorMap[s] = (sectorMap[s] || 0) + val;
-  });
-  const sectorSorted = Object.entries(sectorMap).sort((a, b) => b[1] - a[1]);
-  const topSectors = sectorSorted.slice(0, 5);
-  const otherSectorsTotal = sectorSorted.slice(5).reduce((s, [, v]) => s + v, 0);
-  const sectorSegments = [
-    ...topSectors.map(([name, value], i) => ({ name, value, color: SEGMENT_COLORS[i] })),
-    ...(otherSectorsTotal > 0 ? [{ name: "อื่นๆ", value: otherSectorsTotal, color: OTHER_COLOR }] : []),
-  ];
+  // 1. Sector breakdown — every group (no "อื่นๆ" fold), with its unrealised P&L
+  const sectors = sectorBreakdown(activeHoldings);
+  const sectorMax = sectors.length ? sectors[0].value : 0;
+  const money = (v: number) => "$" + Math.abs(v).toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // 2. Top 10 by weight
   const top10 = [...activeHoldings].sort((a: any, b: any) => (b.shares * b.currentPrice) - (a.shares * a.currentPrice)).slice(0, 10);
@@ -58,27 +47,35 @@ export default function ChartsTab({ activeHoldings, tv, onFilterSector, onOpenDe
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Sector breakdown */}
+      {/* Sector breakdown: one row per group — weight bar, value, share, and P&L on what's held */}
       <div style={{ background: "var(--card)", borderRadius: "var(--r-md)", padding: 16, border: "1px solid var(--line)" }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)", marginBottom: 12 }}>สัดส่วนตาม Sector</div>
-        <div style={{ display: "flex", height: 14, borderRadius: 5, overflow: "hidden", gap: 2 }}>
-          {sectorSegments.map(seg => (
-            <div key={seg.name} style={{ width: `${seg.value / tv * 100}%`, background: seg.color, minWidth: 2 }} title={seg.name} />
-          ))}
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "var(--ink)" }}>สัดส่วนตาม Sector</div>
+          <div style={{ fontSize: 10.5, color: "var(--faint)" }}>{sectors.length} กลุ่ม · กำไร/ขาดทุนที่ยังไม่ขาย</div>
         </div>
-        <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
-          {sectorSegments.map(seg => {
-            // "อื่นๆ" is an aggregate and "ไม่ระบุ" holdings have sector:"" — neither
-            // matches the portfolio-tab query filter, so don't offer tap-to-filter
-            const filterable = seg.name !== "อื่นๆ" && seg.name !== "ไม่ระบุ";
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {sectors.map(s => {
+            // "ไม่ระบุ" holdings have sector:"" — it doesn't match the portfolio-tab filter
+            const filterable = s.name !== "ไม่ระบุ";
+            const pc = s.pnl >= 0 ? "var(--gain)" : "var(--loss)";
             return (
-            <div key={seg.name} onClick={() => filterable && onFilterSector(seg.name)}
-              style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, cursor: filterable ? "pointer" : "default" }}>
-              <span style={{ width: 9, height: 9, borderRadius: 2, background: seg.color, flexShrink: 0 }} />
-              <span style={{ flex: 1, color: "var(--ink)" }}>{seg.name}</span>
-              <span style={{ color: "var(--mut)" }}>${seg.value.toLocaleString("en", { maximumFractionDigits: 0 })}</span>
-              <span style={{ color: "var(--faint)", width: 44, textAlign: "right" }}>{(seg.value / tv * 100).toFixed(1)}%</span>
-            </div>
+              <div key={s.name} onClick={() => filterable && onFilterSector(s.name)} style={{ cursor: filterable ? "pointer" : "default" }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 12.5 }}>
+                  <span style={{ flex: 1, minWidth: 0, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {s.name} <span style={{ fontSize: 10.5, color: "var(--faint)" }}>{s.count} ตัว</span>
+                  </span>
+                  <span style={{ color: "var(--mut)" }}>${s.value.toLocaleString("en", { maximumFractionDigits: 0 })}</span>
+                  <span style={{ color: "var(--ink)", fontWeight: 600, width: 46, textAlign: "right" }}>{(s.value / tv * 100).toFixed(1)}%</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
+                  <span style={{ flex: 1, background: "var(--line)", borderRadius: 3, height: 6, overflow: "hidden" }}>
+                    <span style={{ display: "block", width: `${sectorMax > 0 ? s.value / sectorMax * 100 : 0}%`, height: "100%", background: "var(--brass)", borderRadius: 3 }} />
+                  </span>
+                  <span style={{ fontSize: 11.5, fontWeight: 600, color: pc, whiteSpace: "nowrap", flexShrink: 0 }}>
+                    {s.pnl >= 0 ? "+" : "−"}{money(s.pnl)} · {s.pnl >= 0 ? "+" : "−"}{Math.abs(s.pnlPct).toFixed(1)}%
+                  </span>
+                </div>
+              </div>
             );
           })}
         </div>

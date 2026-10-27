@@ -202,3 +202,21 @@ export function parseSectorLines(text: string): Record<string, string> {
   }
   return out;
 }
+
+// Value and unrealised P&L per กลุ่มธุรกิจ (sector) over the positions held now, biggest
+// first. Positions without a group fall under "ไม่ระบุ". P&L % is against that group's cost.
+export function sectorBreakdown(holdings: any[]): { name: string; value: number; cost: number; pnl: number; pnlPct: number; count: number }[] {
+  const m = new Map<string, { value: number; cost: number; count: number }>();
+  for (const h of holdings || []) {
+    if (!(h.shares > 0)) continue;
+    const name = (h.sector || "").trim() || "ไม่ระบุ";
+    const x = m.get(name) || { value: 0, cost: 0, count: 0 };
+    x.value += h.shares * (h.currentPrice || 0);
+    x.cost += h.shares * (h.avgCost || 0);
+    x.count++;
+    m.set(name, x);
+  }
+  return [...m.entries()]
+    .map(([name, x]) => ({ name, ...x, pnl: x.value - x.cost, pnlPct: x.cost > 0 ? (x.value - x.cost) / x.cost * 100 : 0 }))
+    .sort((a, b) => b.value - a.value);
+}
